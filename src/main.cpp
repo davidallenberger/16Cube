@@ -26,7 +26,7 @@ void setup()
   initCube();
 
   // Configuration of our state machine container
-    CubeSystem::setup();
+  CubeSystem::setup();
     
   Serial.println("setup done");
 }
@@ -39,6 +39,14 @@ boolean runOnce = true;
 
 void loop() 
 { 
+
+Streamers::animateColorTwinkles(10000);
+return;
+// 1. THE VOLUMETRIC CORE
+// 10 Seconds. Medium speed. Graceful architectural sweeping.
+Streamers::animateColoredBursts(10000, 96);
+
+return;
 // 1. THE LASSOED SERPENTINE (The 3D Matrix Scanner)
 // 10 Seconds. Gap size locked down to 32 as requested. 
 // Tightly groups the flock so they scan through the literal rows 
@@ -51,22 +59,7 @@ Streamers::animateChunchunVolumetric(10000, PartyColors_p, 128, 32, CHUNCHUN_SER
 // that sweeps the dead center of the room and banks off the walls.
 Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
 
-// 3. THE BREATHING SWARM (The Cloud)
-// 10 Seconds. Gap size 80, Speed 90 (Slightly slower).
-// The cloud expands massively to fill the ambient volume in the center 
-// of the cube, then violently collapses into a single dot at the corners.
-Streamers::animateChunchunVolumetric(10000, LavaColors_p, 128, 128, CHUNCHUN_SWARM);
 
-// 4. THE BILLIARD SNAKE (The Kinetic Pile-Up)
-// 10 Seconds. Gap size 100.
-// Watch the lead bird hit the glass and bounce, causing all the trailing 
-// birds to fly straight into the wall and smash together before restringing.
-Streamers::animateChunchunVolumetric(10000, OceanColors_p, 128, 128, CHUNCHUN_BILLIARD);
-
-
-
-
-return;
   // 1. THE CHECKERBOARD PISTON
 // 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
 Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
@@ -85,8 +78,6 @@ Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
 // 10 Seconds. A solid spiral staircase of light threading up and down the Z-axis.
 // Uses LavaColors_p at default speed (64) for a twisting thermal vortex.
 Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
-
-return;
 
 
 // 1. THE CLASSIC JUGGLER (Rainbow Default)
