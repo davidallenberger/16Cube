@@ -39,30 +39,77 @@ boolean runOnce = true;
 
 void loop() 
 { 
-    // 1. THE SATURN RING (Sync)
+
+  // 1. THE CHECKERBOARD PISTON
+// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
+Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD);
+
+// 2. THE SPHERICAL HEARTBEAT
+// 10 Seconds. 3D shells of light spawn at the core and push out to the glass.
+// Uses PartyColors_p and a slightly faster speed (90).
+Streamers::animateBpmVolumetric(10000, PartyColors_p, 90, BPM_SPHERE);
+
+// 3. THE DIAGONAL SLICER
+// 10 Seconds. Solid, 45-degree angled planes washing through the cube.
+// Uses OceanColors_p and a slow speed (40) for a sweeping sonar feel.
+Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
+
+// 4. THE TWISTING HELIX
+// 10 Seconds. A solid spiral staircase of light threading up and down the Z-axis.
+// Uses LavaColors_p at default speed (64) for a twisting thermal vortex.
+Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
+
+return;
+
+
+// 1. THE CLASSIC JUGGLER (Rainbow Default)
+// 10 Seconds. 128 Gravity, 128 Count. Every column behaves like a popcorn 
+// popper full of tracking, independent neon balls jumping and crossing paths.
+Streamers::animateBouncingBalls(10000);
+
+// 2. THE DEEP SEA POPPER (Ocean Palette)
+// 10 Seconds. Beautiful, cool-toned tracking. Because colors are fixed to 
+// the balls, you can perfectly track the teal ball passing through the blue ball.
+Streamers::animateBouncingBalls(10000, OceanColors_p);
+
+// 4. THE MANIC PARTY (Party Palette)
+// 10 Seconds. Cranks the ball count to 220 and the gravity/speed to 200. 
+// Nearly maximizes the memory arena for a frantic, high-density kinetic explosion.
+Streamers::animateBouncingBalls(10000, PartyColors_p, 200, 220);
+
+  //xxx choose from one of these with random colors palette
+// 1. THE CLASSIC LAVA LAMP
+// 15 seconds. Uses default LavaColors_p. Smooth, warm red/orange 
+// blobs that squish against the glass and seamlessly mix colors when they merge.
+Streamers::animateLavaLamp(10000);// <--workable
+
+// 2. THE ALIEN INCUBATOR (Acid Colors)
+// 15 seconds. Fills 20% of the cube. Uses PartyColors_p for high-contrast neon 
+// blobs (Cyan, Magenta, Yellow) that dynamically blend into wild secondary 
+// colors (e.g. Purple, Green) as their energy fields intersect mid-air.
+Streamers::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
+
+// 3. RAPID BOILING (Fast Physics)
+// 15 seconds. Runs at 2.5x speed multiplier and drops the volume to 10% 
+// to create small, highly kinetic droplets that shoot up, bounce off 
+// the ceiling, and violently merge on the way down.
+Streamers::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this and kill the bouncing ball
+
+// 4. THE DEEP FREEZE
+// 15 seconds. Very slow movement (0.3x speed). Massive volume (20%).
+// Creates huge, sluggish clouds of deep oceanic blues and greens that barely 
+// separate from each other, simulating extreme viscosity.
+Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
+
+
+
+// 1. THE SATURN RING (Sync)
 // Runs for 10 seconds. All stars are locked to the exact same tumbling 
 // 3D plane, creating a majestic, unified ring system. 
 // Uses the default Rainbow palette and Linear Flow.
 Streamers::animateBlackHole(10000);
 
-// 2. THE DUAL GYROSCOPE (Split)
-// Runs for 10 seconds. The inner stars and outer stars rotate on completely 
-// independent tumbling axes. Painted with shifting Ocean colors.
-Streamers::animateBlackHole(10000, 15, OceanColors_p, MODE_LINEAR_FLOW, ORBIT_SPLIT);
-
-// 4. THE BOILING CORE (Split + Noise)
-// Runs for 10 seconds. The dual-gyroscope orbits are painted by a 3D Lava noise 
-// field. As the rings tumble through the space, their comet tails boil in 
-// reds, oranges, and yellows.
-Streamers::animateBlackHole(10000, 15, LavaColors_p, MODE_NOISE_FIELD, ORBIT_SPLIT);
-
-// 5. THE CYBERPUNK ATOM (Chaos + Dynamic Contrast)
-// Runs for 10 seconds. Passing CRGB::Gray invokes the dynamic contrast hook. 
-// You get a chaotic, multi-axis swarm painted in complementary neon pairings 
-// (e.g., Pink/Cyan or Green/Purple) that changes every time it runs.
-Streamers::animateBlackHole(10000, 15, ForestColors_p, MODE_SCATTER, ORBIT_CHAOTIC);
   
-return;
   CubeSystem::loop();
     return;
   

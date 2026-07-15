@@ -8,6 +8,16 @@ enum BlackHoleOrbit {
     ORBIT_SPLIT = 1,   // Dual-axis gyroscope (Inner ring and Outer ring tumble independently)
     ORBIT_CHAOTIC = 2  // Quantum swarm (Every single star gets a unique, randomized trajectory)
 };
+    // ==========================================
+    // 3D BPM ENGINE (Volumetric Density Waves)
+    // ==========================================
+    enum BpmSpatialMode {
+        BPM_CHECKERBOARD = 0, // 2D serpentine scatter extruded to columns
+        BPM_SPHERE = 1,       // 3D radial expansion from the core
+        BPM_DIAGONAL = 2,     // 3D angled slicing planes
+        BPM_HELIX = 3         // 3D twisting spiral staircase
+    };
+
 class Streamers {
   private:
   static float getThicknessFromVolume(float volPercent) {
@@ -544,8 +554,8 @@ class Streamers {
             yield(); // Smooth hardware yield, NO artificial delays
         }
     }
-// ==========================================
-    // LAVA LAMP (Fixed Volume Partitioning)
+    // ==========================================
+    // LAVA LAMP (True Metaballs + Soft Body Physics)
     // ==========================================
     struct LavaBlob {
         float x, y, z;
@@ -553,15 +563,17 @@ class Streamers {
         float targetX, targetY; 
         bool isRising;          
         float baseRadius; 
+        float currentRadius; // Active pulsation
+        float pulsePhase;    // Active pulsation
+        float pulseSpeed;    // Active pulsation
         float speedFactor;      
+        float hue;           // Independent thermal color
     };
 
-    static void animateLavaLamp(uint32_t durationMs, float speedMultiplier = 1.0f, float volumePercent = 0.15f) {
-        
+    static void animateLavaLamp(uint32_t durationMs, float speedMultiplier = 1.0f, float volumePercent = 0.15f, CRGBPalette16 pal = LavaColors_p) {
         uint32_t startTime = millis();
         uint32_t lastFrameTime = millis();
 
-        // 1. EXACT VOLUME PARTITIONING
         float totalCubeVolume = (float)(RNDR_X * RNDR_Y * RNDR_Z);
         float targetFluidVolume = totalCubeVolume * volumePercent; 
         
@@ -577,13 +589,14 @@ class Streamers {
 
         float glassPadding = max(1.0f, RNDR_X * 0.125f); 
 
-        // 2. INITIALIZATION
+        // INITIALIZATION
         for (int i = 0; i < NUM_BLOBS; i++) {
             float blobVolume = targetFluidVolume * (weights[i] / sumWeights);
-            
-            // THE FIX 1: Apply a 0.65f empirical dampener. 
-            // This counteracts the volume bloat caused by overlapping metaball fields inside a narrow bounding box.
             blobs[i].baseRadius = powf(blobVolume * 0.238732f, 0.333333f) * 0.65f;
+            blobs[i].currentRadius = blobs[i].baseRadius;
+            
+            blobs[i].pulsePhase = random16(0, 6283) / 1000.0f; // 0 to 2PI
+            blobs[i].pulseSpeed = 1.5f + (random8() / 255.0f) * 2.0f; 
 
             blobs[i].x = glassPadding + ((float)random8() / 255.0f) * (RNDR_X - glassPadding * 2.0f);
             blobs[i].y = glassPadding + ((float)random8() / 255.0f) * (RNDR_Y - glassPadding * 2.0f);
@@ -593,9 +606,10 @@ class Streamers {
             blobs[i].targetY = glassPadding + ((float)random8() / 255.0f) * (RNDR_Y - glassPadding * 2.0f);
             
             blobs[i].vx = 0; blobs[i].vy = 0; blobs[i].vz = 0;
-            
             blobs[i].isRising = (random8(2) == 0); 
             blobs[i].speedFactor = 0.5f + ((float)random8() / 255.0f); 
+            
+            blobs[i].hue = random8(); // Stagger initial thermal colors
         }
 
         while (millis() - startTime < durationMs) {
@@ -609,10 +623,20 @@ class Streamers {
             float dt = ((float)deltaMs / 16.0f) * speedMultiplier; 
 
             // ==========================================
-            // PHYSICS LOOP
+            // SOFT-BODY PHYSICS LOOP
             // ==========================================
             for (int i = 0; i < NUM_BLOBS; i++) {
                 
+                // 1. Independent Breathing (Radius Pulsation)
+                blobs[i].pulsePhase += blobs[i].pulseSpeed * (deltaMs / 1000.0f);
+                // Pulse size between 80% and 120% of base mass
+                blobs[i].currentRadius = blobs[i].baseRadius * (1.0f + 0.2f * sinf(blobs[i].pulsePhase));
+
+                // 2. Thermal Color Drift
+                blobs[i].hue += 5.0f * (deltaMs / 1000.0f) * speedMultiplier;
+                if (blobs[i].hue >= 255.0f) blobs[i].hue -= 255.0f;
+
+                // 3. X/Y Target Seeking
                 float dx = blobs[i].targetX - blobs[i].x;
                 float dy = blobs[i].targetY - blobs[i].y;
                 float dist = sqrtf(dx*dx + dy*dy);
@@ -625,8 +649,8 @@ class Streamers {
                     blobs[i].vy += (dy / dist) * 0.006f * dt;
                 }
 
+                // 4. Z-Axis Buoyancy
                 float buoyancyAccel = 0.025f * blobs[i].speedFactor * dt;
-                
                 if (blobs[i].isRising) {
                     blobs[i].vz += buoyancyAccel;
                     if (blobs[i].z >= RNDR_Z - 1.5f) blobs[i].isRising = false; 
@@ -635,6 +659,27 @@ class Streamers {
                     if (blobs[i].z <= 1.0f) blobs[i].isRising = true; 
                 }
 
+                // 5. The "Wall Squish" (Soft Deceleration)
+                float squishBoundaryX = glassPadding + blobs[i].currentRadius * 0.5f;
+                float squishBoundaryY = glassPadding + blobs[i].currentRadius * 0.5f;
+
+                if (blobs[i].x < squishBoundaryX) {
+                    blobs[i].vx += (squishBoundaryX - blobs[i].x) * 0.05f * dt; 
+                    blobs[i].vx *= 0.85f; // Viscous friction against the glass
+                } else if (blobs[i].x > RNDR_X - squishBoundaryX) {
+                    blobs[i].vx -= (blobs[i].x - (RNDR_X - squishBoundaryX)) * 0.05f * dt;
+                    blobs[i].vx *= 0.85f;
+                }
+
+                if (blobs[i].y < squishBoundaryY) {
+                    blobs[i].vy += (squishBoundaryY - blobs[i].y) * 0.05f * dt;
+                    blobs[i].vy *= 0.85f;
+                } else if (blobs[i].y > RNDR_Y - squishBoundaryY) {
+                    blobs[i].vy -= (blobs[i].y - (RNDR_Y - squishBoundaryY)) * 0.05f * dt;
+                    blobs[i].vy *= 0.85f;
+                }
+
+                // Apply general drag and commit velocity
                 float drag = powf(0.88f, dt); 
                 blobs[i].vx *= drag;
                 blobs[i].vy *= drag;
@@ -643,46 +688,34 @@ class Streamers {
                 blobs[i].x += blobs[i].vx * dt;
                 blobs[i].y += blobs[i].vy * dt;
                 blobs[i].z += blobs[i].vz * dt;
-
-                if (blobs[i].x < glassPadding) { blobs[i].x = glassPadding; blobs[i].vx *= -0.5f; }
-                if (blobs[i].x > RNDR_X - glassPadding) { blobs[i].x = RNDR_X - glassPadding; blobs[i].vx *= -0.5f; }
-                if (blobs[i].y < glassPadding) { blobs[i].y = glassPadding; blobs[i].vy *= -0.5f; }
-                if (blobs[i].y > RNDR_Y - glassPadding) { blobs[i].y = RNDR_Y - glassPadding; blobs[i].vy *= -0.5f; }
                 
-                if (blobs[i].z < 0.0f) { blobs[i].z = 0.0f; blobs[i].vz = 0.0f; }
-                if (blobs[i].z > RNDR_Z - 1.0f) { blobs[i].z = RNDR_Z - 1.0f; blobs[i].vz = 0.0f; }
+                // Floor/Ceiling physical locks
+                if (blobs[i].z < 0.0f) { blobs[i].z = 0.0f; blobs[i].vz *= 0.5f; }
+                if (blobs[i].z > RNDR_Z - 1.0f) { blobs[i].z = RNDR_Z - 1.0f; blobs[i].vz *= 0.5f; }
             }
 
             // ==========================================
-            // RENDER LOOP (The Dimming Trick)
+            // ENERGY-WEIGHTED RENDER LOOP
             // ==========================================
-            
-            // THE FIX 2: Raise the skin threshold drastically from 0.70 to 0.85 
-            // This cuts away the ambient overlapping field energy so the tube doesn't fill with "fuzz"
             float skinThreshold = (RNDR_X <= 8) ? 0.85f : 0.75f;
             float coreThreshold = skinThreshold + 0.30f; 
             
             float r2[NUM_BLOBS];
             float stretchZ[NUM_BLOBS];
+            CRGB blobColors[NUM_BLOBS];
             
             for (int i = 0; i < NUM_BLOBS; i++) {
-                r2[i] = blobs[i].baseRadius * blobs[i].baseRadius;
-                
-                // THE FIX 3: Severely restrict the Z-stretch modifier (cut from 0.45 max down to 0.25 max). 
-                // Previously, fast moving blobs were accidentally doubling their rendered volume.
+                r2[i] = blobs[i].currentRadius * blobs[i].currentRadius;
                 stretchZ[i] = 1.0f - constrain(fabsf(blobs[i].vz) * 1.5f, 0.0f, 0.25f);
+                blobColors[i] = ColorFromPalette(pal, (uint8_t)blobs[i].hue, 255, LINEARBLEND);
             }
 
             for (uint8_t z = 0; z < RNDR_Z; z++) {
-                //uint8_t colorIndex = 64 + (uint8_t)(((float)z / (float)(RNDR_Z - 1)) * 191.0f);
-                //CRGB layerColor = ColorFromPalette(pal, colorIndex);
-                uint8_t blendFactor = (uint8_t)(((float)z / (float)(RNDR_Z > 1 ? RNDR_Z - 1 : 1)) * 255.0f);
-                CRGB layerColor = blend(CRGB::OrangeRed, CRGB::Orange, blendFactor);
-
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
                     for (uint8_t x = 0; x < RNDR_X; x++) {
                         
-                        float energy = 0.0f;
+                        float totalEnergy = 0.0f;
+                        float rSum = 0.0f, gSum = 0.0f, bSum = 0.0f;
                         
                         for (int i = 0; i < NUM_BLOBS; i++) {
                             float dx = (float)x - blobs[i].x;
@@ -690,20 +723,30 @@ class Streamers {
                             float dz = ((float)z - blobs[i].z) * stretchZ[i]; 
                             
                             float d2 = (dx*dx) + (dy*dy) + (dz*dz);
-                            energy += r2[i] / (d2 + 0.1f);
+                            float energy = r2[i] / (d2 + 0.1f);
+                            
+                            totalEnergy += energy;
+                            
+                            // Accumulate RGB payload weighted by this blob's specific energy pull
+                            rSum += blobColors[i].r * energy;
+                            gSum += blobColors[i].g * energy;
+                            bSum += blobColors[i].b * energy;
                         }
 
-                        if (energy >= skinThreshold) {
-                            if (energy >= coreThreshold) {
-                                setVoxel(x, y, z, layerColor);
+                        if (totalEnergy >= skinThreshold) {
+                            CRGB finalColor;
+                            // Divide accumulated RGB by total energy to get the true blended liquid color
+                            finalColor.r = constrain((int)(rSum / totalEnergy), 0, 255);
+                            finalColor.g = constrain((int)(gSum / totalEnergy), 0, 255);
+                            finalColor.b = constrain((int)(bSum / totalEnergy), 0, 255);
+
+                            if (totalEnergy >= coreThreshold) {
+                                setVoxel(x, y, z, finalColor);
                             } else {
-                                float depth = (energy - skinThreshold) / (coreThreshold - skinThreshold);
+                                float depth = (totalEnergy - skinThreshold) / (coreThreshold - skinThreshold);
                                 uint8_t dimFactor = 40 + (uint8_t)(depth * 160.0f);
-                                
-                                CRGB skinColor = layerColor;
-                                skinColor.nscale8(dimFactor); 
-                                
-                                setVoxel(x, y, z, skinColor);
+                                finalColor.nscale8(dimFactor); 
+                                setVoxel(x, y, z, finalColor);
                             }
                         }
                     }
@@ -714,9 +757,6 @@ class Streamers {
             yield();
         }
     }
-    // ==========================================
-    // PURE OVERLOADS (Intent Inference)
-    // ==========================================
     // ==========================================
     // VERTICAL STREAMER (Internal Engine)
     // ==========================================
@@ -1075,5 +1115,181 @@ class Streamers {
     // Overload: The Ultimate Default (Rainbow + Linear Flow + Synchronized)
     static void animateBlackHole(uint32_t durationMs, uint32_t speedMs = 15) { 
         animateBlackHole(durationMs, speedMs, RainbowColors_p, MODE_LINEAR_FLOW, ORBIT_SYNC); 
+    }
+
+    // ==========================================
+    // 3D BOUNCING BALLS (Juggler's Matrix)
+    // ==========================================
+    struct BouncingBall {
+        uint32_t lastBounceTime;
+        float impactVelocity;
+        float height;
+    };
+
+    static void animateBouncingBalls(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t gravityParam = 128, uint8_t numBallsParam = 128) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+
+        // 1. DYNAMIC MEMORY SCALING
+        // SharedAppMemory allows 8192 bytes (8x8x16) or 29000 bytes (16^3).
+        // Each ball struct is 12 bytes. 
+        // 8x8 requires 64 columns. Max balls = 8192 / (64 * 12) = 10 balls per col.
+        // 16x16 requires 256 columns. Max balls = 29000 / (256 * 12) = 9 balls per col.
+        const int MAX_BALLS_PER_COL = (RNDR_X > 8) ? 9 : 10; 
+        const int TOTAL_COLS = RNDR_X * RNDR_Y;
+        
+        // Cast the global arena
+        BouncingBall* balls = (BouncingBall*)SharedAppMemory;
+
+        // Map the 0-255 parameter to actual ball counts based on memory limits
+        unsigned numBalls = (numBallsParam * (MAX_BALLS_PER_COL - 1)) / 255 + 1;
+
+        // 2. WLED PHYSICS TRANSLATION
+        // WLED alters gravity by dividing the time delta. 128 = half speed.
+        float timeDivisor = ((255 - gravityParam) / 64.0f) + 1.0f;
+        const float gravity = -9.81f; 
+
+        // INITIALIZATION
+        for (int c = 0; c < TOTAL_COLS; c++) {
+            for (unsigned i = 0; i < numBalls; i++) {
+                int idx = c * MAX_BALLS_PER_COL + i;
+                balls[idx].lastBounceTime = startTime;
+                
+                // Randomize initial kick velocity so they immediately decouple
+                float impactVelocityStart = sqrtf(-2.0f * gravity) * (random8(5, 11) / 10.0f);
+                balls[idx].impactVelocity = impactVelocityStart;
+                balls[idx].height = 0.0f;
+            }
+        }
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; }
+            lastFrame = now;
+
+            clearAll();
+
+            for (int x = 0; x < RNDR_X; x++) {
+                for (int y = 0; y < RNDR_Y; y++) {
+                    int c = x + y * RNDR_X;
+
+                    for (unsigned i = 0; i < numBalls; i++) {
+                        int idx = c * MAX_BALLS_PER_COL + i;
+                        
+                        float timeSinceLastBounce = (now - balls[idx].lastBounceTime) / timeDivisor;
+                        float timeSec = timeSinceLastBounce / 1000.0f;
+                        
+                        // Physics: Height = 1/2 * a * t^2 + v * t
+                        balls[idx].height = (0.5f * gravity * timeSec + balls[idx].impactVelocity) * timeSec;
+
+                        // Floor Collision
+                        if (balls[idx].height <= 0.0f) {
+                            balls[idx].height = 0.0f;
+                            
+                            // WLED Dampening: Balls lose energy at different rates based on their ID
+                            float dampening = 0.9f - (float)i / (float)(numBalls * numBalls);
+                            balls[idx].impactVelocity *= dampening;
+                            balls[idx].lastBounceTime = now;
+
+                            // If it rests on the floor, give it a new random kick to keep it alive
+                            if (balls[idx].impactVelocity < 0.015f) {
+                                balls[idx].impactVelocity = sqrtf(-2.0f * gravity) * (random8(5, 11) / 10.0f);
+                            }
+                        } else if (balls[idx].height > 1.0f) {
+                            continue; // Prevent clipping outside the top glass
+                        }
+
+                        // 3. PHYSICAL Z-MAPPING
+                        int z = constrain((int)roundf(balls[idx].height * (RNDR_Z - 1)), 0, RNDR_Z - 1);
+
+                        // 4. COLOR ASSIGNMENT (WLED Independence Logic)
+                        // Binds a specific palette color strictly to the ball's ID
+                        uint8_t colorIndex = i * (256 / max((int)numBalls, 8));
+                        CRGB color = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
+
+                        // Additive blending allows colors to mix beautifully when passing through each other
+                        CRGB existing = getVoxel(x, y, z);
+                        setVoxel(x, y, z, existing + color);
+                    }
+                }
+            }
+            showCube();
+            delay(15); 
+        }
+    }
+    
+    static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        // Map the 0-255 speed parameter to a usable FastLED BPM range (10 to 120 BPM)
+        uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
+        
+        // Pre-calculate physical constants so we don't do it 4,096 times per frame
+        float cx = RNDR_CX;
+        float cy = RNDR_CY;
+        float cz = RNDR_CZ;
+        float maxDist = sqrtf(cx*cx + cy*cy + cz*cz);
+        if (maxDist < 1.0f) maxDist = 1.0f; // Prevent divide-by-zero on tiny matrices
+        
+        uint8_t zStep = 256 / RNDR_Z;
+        uint8_t diagStep = 256 / (RNDR_X + RNDR_Y + RNDR_Z);
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame == 0) { yield(); continue; }
+            lastFrame = now;
+
+            // 1. THE TIME ENGINE
+            uint8_t beat = beatsin8(bpm, 64, 255);
+            uint8_t timeBase = now / 15; 
+
+            for (uint8_t z = 0; z < RNDR_Z; z++) {
+                for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    for (uint8_t x = 0; x < RNDR_X; x++) {
+                        
+                        // 2. THE GEOMETRIC PHASE MAPPER
+                        uint8_t spatialPhase = 0;
+                        
+                        if (mode == BPM_CHECKERBOARD) {
+                            bool isEven = ((x + y) % 2 == 0);
+                            spatialPhase = isEven ? (z * zStep) : (256 - (z * zStep));
+                        } 
+                        else if (mode == BPM_SPHERE) {
+                            float dx = (float)x - cx; 
+                            float dy = (float)y - cy; 
+                            float dz = (float)z - cz;
+                            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+                            spatialPhase = (uint8_t)((dist / maxDist) * 255.0f);
+                        }
+                        else if (mode == BPM_DIAGONAL) {
+                            spatialPhase = (uint8_t)((x + y + z) * diagStep);
+                        }
+                        else if (mode == BPM_HELIX) {
+                            // atan2f returns -PI to PI. We shift it to 0->2PI, then map to 0-255.
+                            float angle = atan2f((float)y - cy, (float)x - cx);
+                            uint8_t anglePhase = (uint8_t)((angle + 3.14159f) * 40.74f); 
+                            spatialPhase = anglePhase + (z * zStep);
+                        }
+
+                        // 3. TRUE FASTLED BPM MATH
+                        uint8_t brightness = beat - timeBase + spatialPhase;
+                        
+                        // Deepen the voids and sharpen the peaks
+                        brightness = qsub8(brightness, 32);     
+                        brightness = qadd8(brightness, brightness); 
+                        
+                        // Map the palette color (offsetting the spatial phase so colors twist/expand)
+                        uint8_t colorIndex = timeBase + (spatialPhase / 2);
+                        
+                        CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
+                        setVoxel(x, y, z, finalColor);
+                    }
+                }
+            }
+            showCube();
+            yield();
+        }
     }
 };
