@@ -39,7 +39,36 @@ boolean runOnce = true;
 
 void loop() 
 { 
+// 1. THE DISTORTED SOLID BOX
+// 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
+// remains completely still while the mathematical Distortion Waves 
+// ripple through its ambient volume, making the box look alive.
+Shapes::animateStatic(
+    SHAPE_BOX,              // Physical geometry
+    10000,                  // Duration (10 seconds)
+    RENDER_SOLID,           // Solid structural fill
+    RainbowColors_p,          // Palette for the interference mapping
+    MODE_DISTORTION_WAVES,  // The new 3D shader brush
+    25,                     // Speed (Irrelevant for static motion)
+    false                   // No bounds stretching
+);
 
+// 2. THE LIQUID SINE WAVE
+// 10 Seconds. Layering the undulating physical geometry of the sine wave 
+// with the secondary flowing math of the Distortion Waves shader creates 
+// an intensely complex, hyper-fluid visual.
+/*
+Surfaces::animateSineWaveSplit2026(
+    10000, 
+    360, 
+    (SplitWaveMode2026)0, 
+    RainbowColors_p, 
+    MODE_DISTORTION_WAVES, 
+    0.48f
+);*/
+
+
+return;
 Streamers::animateColorTwinkles(10000);
 return;
 // 1. THE VOLUMETRIC CORE

@@ -12,7 +12,8 @@ enum ShaderMode {
     MODE_NOISE_FIELD,     // 3D Perlin Clouds (Blends)
     MODE_SCATTER,         // Digital Hash Glitter (Random)
     MODE_DISTANCE_FIELD,  // 3D Lava Lamp Cores (Metaballs) - moving texture
-    MODE_HIPHOTIC         // Self-contained generative math - moving texture
+    MODE_HIPHOTIC,         // Self-contained generative math - moving texture
+    MODE_DISTORTION_WAVES // 3D Euclidean Interference Patterns
 };
 
 // ==========================================
@@ -167,6 +168,10 @@ struct TextureState {
     uint8_t hX[16], hY[16], hZ[16];
     float mbX[3], mbY[3], mbZ[3];
 
+    // --- ADD THE DISTORTION WAVE CACHE ---
+    uint32_t dwA, dwA2, dwA3;
+    int32_t dwX[3], dwY[3], dwZ[3];
+
     // ------------------------------------------
     // THE PAINT + BRUSH CONSTRUCTOR
     // ------------------------------------------
@@ -212,6 +217,31 @@ struct TextureState {
                 hY[i] = sin8((i * scale >> 4) + p4);
                 hZ[i] = cos8((i * scale >> 4) + p5);
             }
+        }
+        else if (mode == MODE_DISTORTION_WAVES) {
+            // 1. Tame the time variable (WLED used millis/32, phase moves much faster)
+            dwA = phase / 8;
+            dwA2 = dwA / 2;
+            dwA3 = dwA / 3;
+
+            // 2. Tame the scale (TextureState defaults to 128, WLED expects 1-8)
+            uint8_t dwScale = max((int)1, (int)(scale / 16));
+            int32_t xMax = RNDR_X * dwScale;
+            int32_t yMax = RNDR_Y * dwScale;
+            int32_t zMax = RNDR_Z * dwScale;
+
+            // 3. Orbiting centers (Multiplying phase gives graceful, independent sweep speeds)
+            dwX[0] = ((uint32_t)(sin16((uint16_t)(phase * 15)) + 32768) * xMax) >> 16;
+            dwY[0] = ((uint32_t)(sin16((uint16_t)(phase * 18)) + 32768) * yMax) >> 16;
+            dwZ[0] = ((uint32_t)(sin16((uint16_t)(phase * 16)) + 32768) * zMax) >> 16;
+
+            dwX[1] = ((uint32_t)(sin16((uint16_t)(phase * 19)) + 32768) * xMax) >> 16;
+            dwY[1] = ((uint32_t)(sin16((uint16_t)(phase * 22)) + 32768) * yMax) >> 16;
+            dwZ[1] = ((uint32_t)(sin16((uint16_t)(phase * 21)) + 32768) * zMax) >> 16;
+
+            dwX[2] = ((uint32_t)(sin16((uint16_t)(phase * 25)) + 32768) * xMax) >> 16;
+            dwY[2] = ((uint32_t)(sin16((uint16_t)(phase * 21)) + 32768) * yMax) >> 16;
+            dwZ[2] = ((uint32_t)(sin16((uint16_t)(phase * 24)) + 32768) * zMax) >> 16;
         }
         else if (mode == MODE_DISTANCE_FIELD) {
             float cx = RNDR_CX, cy = RNDR_CY, cz = RNDR_CZ;
@@ -266,6 +296,33 @@ struct TextureState {
             if (isCore) return CRGB::White;
             return ColorFromPalette(palette, min(255, (int)(sum * 64)) + (phase / 2), 255, LINEARBLEND);
         }
+        if (mode == MODE_DISTORTION_WAVES) {
+            // Apply the same taming scale to the voxel coordinates
+            uint8_t dwScale = max((int)1, (int)(scale / 16));
+            int32_t sx = (x + 1) * dwScale;
+            int32_t sy = (y + 1) * dwScale;
+            int32_t sz = (z + 1) * dwScale;
+
+            // 1. Warped Cosine Grid Math (3D)
+            uint8_t rdistort = cos8((cos8(((x<<3)+dwA)&255) + cos8(((y<<3)-dwA2)&255) + cos8(((z<<3)+dwA3)&255)) & 255) >> 1;
+            uint8_t gdistort = cos8((cos8(((x<<3)-dwA2)&255) + cos8(((y<<3)+dwA3)&255) + cos8(((z<<3)+dwA+32)&255)) & 255) >> 1;
+            uint8_t bdistort = cos8((cos8(((x<<3)+dwA3)&255) + cos8(((y<<3)-dwA)&255)  + cos8(((z<<3)+dwA2+64)&255)) & 255) >> 1;
+
+            // 2. Interference Distance Math
+            int32_t dx = sx - dwX[0], dy = sy - dwY[0], dz = sz - dwZ[0];
+            uint8_t valueR = cos8(rdistort + ((dwA - ((dx*dx + dy*dy + dz*dz) >> 7)) << 1));
+
+            int32_t dx1 = sx - dwX[1], dy1 = sy - dwY[1], dz1 = sz - dwZ[1];
+            uint8_t valueG = cos8(gdistort + ((dwA2 - ((dx1*dx1 + dy1*dy1 + dz1*dz1) >> 7)) << 1));
+
+            int32_t dx2 = sx - dwX[2], dy2 = sy - dwY[2], dz2 = sz - dwZ[2];
+            uint8_t valueB = cos8(bdistort + ((dwA3 - ((dx2*dx2 + dy2*dy2 + dz2*dz2) >> 7)) << 1));
+
+            // Map combined intensity to the currently active palette
+            uint8_t brightness = (valueR + valueG + valueB) / 3;
+            return ColorFromPalette(palette, brightness, 255, LINEARBLEND);
+        }
+        
         return CRGB::Black;
     }
 };
