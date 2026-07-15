@@ -39,6 +39,15 @@ boolean runOnce = true;
 
 void loop() 
 { 
+// 1. THE CLASSIC SEQUENCE
+// 10 Seconds. 1.0x Speed.
+// The SDF math guarantees the helix fills the maximum volume and 
+// uses anti-aliasing to look like a perfectly smooth, physical pipe.
+Streamers::animateDNASpiral(10000, RainbowColors_p, .75f);
+Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
+Streamers::animateDNASpiral(10000, RainbowColors_p, 1.0f);
+
+return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
 // remains completely still while the mathematical Distortion Waves 

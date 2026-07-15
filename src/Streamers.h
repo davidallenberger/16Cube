@@ -1541,4 +1541,105 @@ class Streamers {
             showCube();
         }
     }
+// ==========================================
+    // VOLUMETRIC DNA SPIRAL (SDF Anti-Aliased)
+    // ==========================================
+    static void animateDNASpiral(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, float speedMultiplier = 1.0f) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        // 1. AUTO-FILL VOLUME METRICS (No more arbitrary WLED knobs)
+        float radius = (RNDR_X / 2.0f) - 0.5f; 
+        if (radius < 1.0f) radius = 1.0f;
+        
+        // Scale the mathematical thickness of the structures based on the hardware
+        float backboneThickness = (RNDR_X > 8) ? 1.5f : 0.9f; 
+        float rungThickness     = (RNDR_X > 8) ? 1.0f : 0.6f;
+
+        // Auto-calculate frequency so it always performs exactly 1 full 
+        // graceful twist across 80% of the hardware's height.
+        float zFreq = TWO_PI / (RNDR_Z * 0.8f);
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; } 
+            lastFrame = now;
+
+            // Clear the frame natively—no more muddy, expensive WLED trails
+            clearAll(); 
+
+            float timePhase = (now * 0.002f * speedMultiplier);
+
+            // 2. THE VOLUMETRIC SDF EVALUATOR
+            for (int z = 0; z < RNDR_Z; z++) {
+                
+                float phase = (z * zFreq) + timePhase;
+                
+                // Calculate the true floating-point centers of the backbones
+                float bx1 = RNDR_CX + (sinf(phase) * radius);
+                float by1 = RNDR_CY + (cosf(phase) * radius);
+                float bx2 = RNDR_CX + (sinf(phase + PI) * radius);
+                float by2 = RNDR_CY + (cosf(phase + PI) * radius);
+
+                // Gap logic climbs the Z-axis
+                bool hasRung = (((z + (now / 200)) % 4) != 0);
+
+                uint8_t hue = (z * 255 / RNDR_Z) + (now / 20);
+                CRGB baseColor = ColorFromPalette(pal, hue, 255, LINEARBLEND);
+
+                for (int x = 0; x < RNDR_X; x++) {
+                    for (int y = 0; y < RNDR_Y; y++) {
+                        float fx = (float)x;
+                        float fy = (float)y;
+
+                        // SDF: Distance to Backbone 1 & 2
+                        float dx1 = fx - bx1, dy1 = fy - by1;
+                        float dist1 = sqrtf(dx1*dx1 + dy1*dy1);
+
+                        float dx2 = fx - bx2, dy2 = fy - by2;
+                        float dist2 = sqrtf(dx2*dx2 + dy2*dy2);
+
+                        float minDist = min(dist1, dist2);
+                        float intensity = 0.0f;
+
+                        // 3. MERKABA DIFFERENTIAL BRIGHTNESS (Anti-Aliasing)
+                        if (minDist <= backboneThickness) {
+                            intensity = 1.0f - (minDist / backboneThickness);
+                        }
+
+                        // SDF: Distance to the Rung (Mathematical Line Segment)
+                        if (hasRung && intensity < 1.0f) {
+                            float l2 = (bx2 - bx1)*(bx2 - bx1) + (by2 - by1)*(by2 - by1);
+                            if (l2 > 0.001f) {
+                                float t = max(0.0f, min(1.0f, ((fx - bx1)*(bx2 - bx1) + (fy - by1)*(by2 - by1)) / l2));
+                                float projX = bx1 + t * (bx2 - bx1);
+                                float projY = by1 + t * (by2 - by1);
+                                float distRung = sqrtf((fx - projX)*(fx - projX) + (fy - projY)*(fy - projY));
+
+                                if (distRung <= rungThickness) {
+                                    float rungIntensity = 1.0f - (distRung / rungThickness);
+                                    if (rungIntensity > intensity) intensity = rungIntensity;
+                                }
+                            }
+                        }
+
+                        // 4. APPLY PIXEL COVERAGE
+                        if (intensity > 0.01f) {
+                            // Map the SDF intensity directly to an 8-bit scale
+                            uint8_t brightness = (uint8_t)(intensity * 255.0f);
+                            
+                            CRGB color = baseColor;
+                            color.nscale8(brightness); 
+                            
+                            // Additive blend gracefully handles structural overlaps
+                            CRGB existing = getVoxel(x, y, z);
+                            setVoxel(x, y, z, existing + color);
+                        }
+                    }
+                }
+            }
+            showCube();
+        }
+    }
 };

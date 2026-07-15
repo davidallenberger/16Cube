@@ -12,8 +12,8 @@ enum ShaderMode {
     MODE_NOISE_FIELD,     // 3D Perlin Clouds (Blends)
     MODE_SCATTER,         // Digital Hash Glitter (Random)
     MODE_DISTANCE_FIELD,  // 3D Lava Lamp Cores (Metaballs) - moving texture
-    MODE_HIPHOTIC,         // Self-contained generative math - moving texture
-    MODE_DISTORTION_WAVES // 3D Euclidean Interference Patterns
+    MODE_HIPHOTIC,         // Self-contained generative math - moving texture: Use Hiphotic when you want a smooth, highly structured, full-color mathematical gradient washing across a shape. 
+    MODE_DISTORTION_WAVES // 3D Euclidean Interference Patterns: Use Distortion Waves when you want an organic, liquid-like, palette-specific texture where expanding rings collide and warp against each other.
 };
 
 // ==========================================
@@ -322,7 +322,7 @@ struct TextureState {
             uint8_t brightness = (valueR + valueG + valueB) / 3;
             return ColorFromPalette(palette, brightness, 255, LINEARBLEND);
         }
-        
+
         return CRGB::Black;
     }
 };
