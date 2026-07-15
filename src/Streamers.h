@@ -18,6 +18,13 @@ enum BlackHoleOrbit {
         BPM_HELIX = 3         // 3D twisting spiral staircase
     };
 
+enum ChunchunMode {
+        CHUNCHUN_SERPENTINE = 0, // Literal 1D raster sweep extruded to 3D columns
+        CHUNCHUN_LISSAJOUS = 1,  // Continuous multi-axis figure-8 weave
+        CHUNCHUN_SWARM = 2,      // Expanding/contracting breathing 3D cloud
+        CHUNCHUN_BILLIARD = 3    // Straight-line kinetic wall-bouncing
+    };
+
 class Streamers {
   private:
   static float getThicknessFromVolume(float volPercent) {
@@ -1219,6 +1226,7 @@ class Streamers {
         }
     }
     
+    //This is an intensity sign wave that is spatially mapped to the 3D volume of the cube. It is a true FastLED BPM effect, but with a spatial twist. The effect can be configured to use different spatial modes, such as checkerboard, sphere, diagonal, or helix. The speed of the effect can be adjusted using the effectSpeed parameter, which maps to a BPM range of 10 to 120. The palette can also be customized to create different color effects.
     static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
@@ -1290,6 +1298,127 @@ class Streamers {
             }
             showCube();
             yield();
+        }
+    }
+
+   // ==========================================
+    // 3D CHUNCHUN (Volumetric Swarms)
+    // ==========================================
+    
+    static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        const unsigned numBirds = (RNDR_X > 8) ? 30 : 12;
+        const uint32_t totalVoxels = RNDR_X * RNDR_Y * RNDR_Z;
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame == 0) { yield(); continue; }
+            lastFrame = now;
+
+            // 1. WLED TRAIL (Fade to create comets)
+            for (uint8_t x = 0; x < RNDR_X; x++) {
+                for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    for (uint8_t z = 0; z < RNDR_Z; z++) {
+                        CRGB c = getVoxel(x, y, z);
+                        if (c) { 
+                            c.nscale8(180); 
+                            setVoxel(x, y, z, c); 
+                        }
+                    }
+                }
+            }
+
+            // 2. THE WLED TIMELINE MATH
+            uint32_t baseCounter = now * (6 + (effectSpeed >> 4));
+            unsigned span = (gapSizeParam << 8) / numBirds;
+
+            for (unsigned i = 0; i < numBirds; i++) {
+                
+                // Shift the time counter based on the bird's position in the flock
+                uint32_t birdCounter = baseCounter - (i * span);
+
+                // WLED's pendulum wave (0 to 65535)
+                uint16_t megumin = sin16((uint16_t)birdCounter) + 0x8000;
+                
+                int px = 0, py = 0, pz = 0;
+
+                // 3. THE 3D ARCHITECTURES
+                if (mode == CHUNCHUN_SERPENTINE) {
+                    uint32_t voxelIndex = (uint32_t(megumin) * totalVoxels) >> 16;
+                    voxelIndex = constrain(voxelIndex, 0, totalVoxels - 1);
+
+                    pz = voxelIndex / (RNDR_X * RNDR_Y);
+                    int floorIndex = voxelIndex % (RNDR_X * RNDR_Y);
+                    py = floorIndex / RNDR_X;
+                    px = floorIndex % RNDR_X;
+
+                    if (py % 2 != 0) px = (RNDR_X - 1) - px;
+                    if (pz % 2 != 0) py = (RNDR_Y - 1) - py;
+
+                } 
+                else if (mode == CHUNCHUN_LISSAJOUS) {
+                    // Mismatched frequencies (3, 4, 5) create a chaotic but perfect looping weave
+                    uint16_t xPhase = (uint16_t)(birdCounter * 3);
+                    uint16_t yPhase = (uint16_t)(birdCounter * 4);
+                    uint16_t zPhase = (uint16_t)(birdCounter * 5);
+                    
+                    px = constrain((int)roundf(RNDR_CX + (sin16(xPhase) / 32768.0f) * RNDR_CX), 0, RNDR_X - 1);
+                    py = constrain((int)roundf(RNDR_CY + (sin16(yPhase) / 32768.0f) * RNDR_CY), 0, RNDR_Y - 1);
+                    pz = constrain((int)roundf(RNDR_CZ + (sin16(zPhase) / 32768.0f) * RNDR_CZ), 0, RNDR_Z - 1);
+                }
+                else if (mode == CHUNCHUN_SWARM) {
+                    // Base pendulum trajectory (bottom-left to top-right)
+                    float progress = megumin / 65535.0f;
+                    float centerX = progress * (RNDR_X - 1);
+                    float centerY = progress * (RNDR_Y - 1);
+                    float centerZ = progress * (RNDR_Z - 1);
+
+                    // Dynamic spread: 1.0 in the center of the cube, 0.0 at the extreme corners
+                    float spread = sinf(progress * 3.14159f); 
+
+                    // Permanent, unique spatial offset for this specific bird
+                    float ox = cosf(i * 2.4f) * (RNDR_X * 0.45f) * spread;
+                    float oy = sinf(i * 2.4f) * (RNDR_Y * 0.45f) * spread;
+                    float oz = cosf(i * 3.1f) * (RNDR_Z * 0.45f) * spread;
+
+                    px = constrain((int)roundf(centerX + ox), 0, RNDR_X - 1);
+                    py = constrain((int)roundf(centerY + oy), 0, RNDR_Y - 1);
+                    pz = constrain((int)roundf(centerZ + oz), 0, RNDR_Z - 1);
+                }
+                else if (mode == CHUNCHUN_BILLIARD) {
+                    // Convert time to a smooth float driver
+                    float t = (float)birdCounter / 10000.0f;
+                    
+                    // Prime number multipliers to ensure the bounce angles never repeat
+                    float vx = t * 11.0f;
+                    float vy = t * 13.0f;
+                    float vz = t * 17.0f;
+
+                    // Inline lambda for a perfect continuous triangle wave (bouncing)
+                    auto bounce = [](float val, float maxVal) -> int {
+                        float m = fmod(val, maxVal * 2.0f);
+                        if (m < 0) m += maxVal * 2.0f; 
+                        float pos = (m > maxVal) ? (maxVal * 2.0f) - m : m;
+                        return constrain((int)roundf(pos), 0, (int)maxVal);
+                    };
+
+                    px = bounce(vx, RNDR_X - 1);
+                    py = bounce(vy, RNDR_Y - 1);
+                    pz = bounce(vz, RNDR_Z - 1);
+                }
+
+                // 4. WLED COLOR MAPPING
+                uint8_t colorIndex = (i * 255) / numBirds;
+                CRGB birdColor = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
+
+                CRGB existing = getVoxel(px, py, pz);
+                setVoxel(px, py, pz, existing + birdColor);
+            }
+
+            showCube();
+            delay(15); 
         }
     }
 };
