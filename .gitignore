@@ -1,3 +1,5 @@
+# --- Standard C++ ---
+
 # Prerequisites
 *.d
 
@@ -30,3 +32,30 @@
 *.exe
 *.out
 *.app
+
+
+# --- Custom Additions for Environment & Microcontrollers ---
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Visual Studio Code settings
+.vscode/
+*.code-workspace
+
+# PlatformIO build directories 
+.pio/
+.pioenvs/
+.piolibdeps/
+.gcc-flags.json
+
+# Build artifacts (Generated when compiling for the board)
+build/
+*.elf
+*.hex
+*.bin
+
+# Crash logs
+*.log

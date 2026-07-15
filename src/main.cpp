@@ -39,9 +39,35 @@ boolean runOnce = true;
 
 void loop() 
 { 
-    CubeSystem::loop();
+    // 1. THE SATURN RING (Sync)
+// Runs for 10 seconds. All stars are locked to the exact same tumbling 
+// 3D plane, creating a majestic, unified ring system. 
+// Uses the default Rainbow palette and Linear Flow.
+Streamers::animateBlackHole(10000);
+
+// 2. THE DUAL GYROSCOPE (Split)
+// Runs for 10 seconds. The inner stars and outer stars rotate on completely 
+// independent tumbling axes. Painted with shifting Ocean colors.
+Streamers::animateBlackHole(10000, 15, OceanColors_p, MODE_LINEAR_FLOW, ORBIT_SPLIT);
+
+// 4. THE BOILING CORE (Split + Noise)
+// Runs for 10 seconds. The dual-gyroscope orbits are painted by a 3D Lava noise 
+// field. As the rings tumble through the space, their comet tails boil in 
+// reds, oranges, and yellows.
+Streamers::animateBlackHole(10000, 15, LavaColors_p, MODE_NOISE_FIELD, ORBIT_SPLIT);
+
+// 5. THE CYBERPUNK ATOM (Chaos + Dynamic Contrast)
+// Runs for 10 seconds. Passing CRGB::Gray invokes the dynamic contrast hook. 
+// You get a chaotic, multi-axis swarm painted in complementary neon pairings 
+// (e.g., Pink/Cyan or Green/Purple) that changes every time it runs.
+Streamers::animateBlackHole(10000, 15, ForestColors_p, MODE_SCATTER, ORBIT_CHAOTIC);
+  
+return;
+  CubeSystem::loop();
     return;
   
+    //bukkake edit
+
   /*
     For each shape, you must have motion: either the texture or an expandcollapse, tumble or spin.  
     Not all combinations will be interesting for the given shape.

@@ -3,6 +3,11 @@
 #include "TextureEngine.h"
 #include "AppMemory.h"
 
+enum BlackHoleOrbit {
+    ORBIT_SYNC = 0,    // One majestic Saturn ring (All stars share the exact same 3D plane)
+    ORBIT_SPLIT = 1,   // Dual-axis gyroscope (Inner ring and Outer ring tumble independently)
+    ORBIT_CHAOTIC = 2  // Quantum swarm (Every single star gets a unique, randomized trajectory)
+};
 class Streamers {
   private:
   static float getThicknessFromVolume(float volPercent) {
@@ -961,5 +966,114 @@ class Streamers {
             showCube(); 
             if (speedMs > 0) delay(speedMs); else yield();
         }
+    }
+
+    // ==========================================
+    // BLACK HOLE (Lissajous Orbits)
+    // ==========================================
+    // Master Director
+    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs, CRGBPalette16 pal, ShaderMode sMode, BlackHoleOrbit orbitStyle = ORBIT_SYNC) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        // Dynamically scale the star count so it looks dense on both 8x8x16 and 16^3
+        const int numOuter = (RNDR_X > 8) ? 12 : 6;
+        const int numInner = (RNDR_X > 8) ? 6 : 3;
+        
+        // Construct the 3D paint brush based on user arguments
+        TextureState tex(sMode, pal, 1.0f);
+        
+        float tBase = 0.0f;
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; }
+            lastFrame = now;
+            
+            tBase += (deltaMs / 1000.0f) * 1.5f; // Global orbit speed scalar
+
+            // 1. VOLUMETRIC FADE (The Comet Trails)
+            // Replaces clearAll() to allow persistent motion blurring
+            for (uint8_t x = 0; x < RNDR_X; x++) {
+                for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    for (uint8_t z = 0; z < RNDR_Z; z++) {
+                        CRGB c = getVoxel(x, y, z);
+                        // Only scale active pixels to save cycles
+                        if (c) { 
+                            c.nscale8(200); // 200 = majestic, slow-decaying tails
+                            setVoxel(x, y, z, c); 
+                        }
+                    }
+                }
+            }
+
+            // 2. THE SINGULARITY
+            // A persistent, crisp white dot at the dead center of the array
+            int cx = (int)RNDR_CX;
+            int cy = (int)RNDR_CY;
+            int cz = (int)RNDR_CZ;
+            setVoxel(cx, cy, cz, CRGB::White);
+
+            // 3. DRAW ORBITS
+            auto drawOrbit = [&](int count, float radiusMultiplier, int tier) {
+                for (int i = 0; i < count; i++) {
+                    uint16_t phaseX, phaseY, phaseZ;
+                    
+                    if (orbitStyle == ORBIT_SYNC) {
+                        // All stars share the same frequency multipliers. 
+                        // The (i * 8192) evenly spaces them around the single ring.
+                        phaseX = (uint16_t)(tBase * 11000) + (i * 8192);
+                        phaseY = (uint16_t)(tBase * 13000) + (i * 8192);
+                        phaseZ = (uint16_t)(tBase * 9000)  + (i * 8192);
+                    } 
+                    else if (orbitStyle == ORBIT_SPLIT) {
+                        // Frequencies are aggressively shifted based on the 'tier' (0 or 1).
+                        phaseX = (uint16_t)(tBase * (11000 + tier * 4500)) + (i * 8192);
+                        phaseY = (uint16_t)(tBase * (13000 + tier * 3500)) + (i * 8192);
+                        phaseZ = (uint16_t)(tBase * (9000  + tier * 5500)) + (i * 8192);
+                    } 
+                    else { // ORBIT_CHAOTIC
+                        // Generate a globally unique ID for each star to decouple every plane
+                        int uniqueId = (tier * 10) + i; 
+                        phaseX = (uint16_t)(tBase * (11000 + uniqueId * 1500)) + (i * 8192);
+                        phaseY = (uint16_t)(tBase * (13000 - uniqueId * 1100)) + (i * 8192);
+                        phaseZ = (uint16_t)(tBase * (9000  + uniqueId * 1800)) + (i * 8192);
+                    }
+
+                    // Map the sine waves (-32767 to 32767) to the physical rendering limits
+                    float xPos = RNDR_CX + (sin16(phaseX) / 32768.0f) * (RNDR_CX * radiusMultiplier);
+                    float yPos = RNDR_CY + (sin16(phaseY) / 32768.0f) * (RNDR_CY * radiusMultiplier);
+                    float zPos = RNDR_CZ + (sin16(phaseZ) / 32768.0f) * (RNDR_CZ * radiusMultiplier);
+
+                    int px = constrain((int)roundf(xPos), 0, RNDR_X - 1);
+                    int py = constrain((int)roundf(yPos), 0, RNDR_Y - 1);
+                    int pz = constrain((int)roundf(zPos), 0, RNDR_Z - 1);
+
+                    CRGB starColor = tex.getColor(px, py, pz);
+                    CRGB existing = getVoxel(px, py, pz);
+                    setVoxel(px, py, pz, existing + starColor);
+                }
+            };
+
+            // Outer stars: Tier 0
+            drawOrbit(numOuter, 1.0f, 0);
+
+            // Inner stars: Tier 1
+            drawOrbit(numInner, 0.45f, 1);
+
+            showCube();
+            tex.advance(deltaMs); // Push the internal texture clock forward
+            if (speedMs > 0) delay(speedMs); else yield();
+        }
+    }
+    // Overload: Shader Mode + Custom Orbit (Defaults to Rainbow Palette)
+    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs, ShaderMode sMode, BlackHoleOrbit orbitStyle = ORBIT_SYNC) { 
+        animateBlackHole(durationMs, speedMs, RainbowColors_p, sMode, orbitStyle); 
+    }
+    
+    // Overload: The Ultimate Default (Rainbow + Linear Flow + Synchronized)
+    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs = 15) { 
+        animateBlackHole(durationMs, speedMs, RainbowColors_p, MODE_LINEAR_FLOW, ORBIT_SYNC); 
     }
 };
