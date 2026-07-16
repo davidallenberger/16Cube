@@ -94,6 +94,30 @@ public:
         return plan;
     }
 
+    static TexturePlan getRandomTexturePlan() {
+        TexturePlan plan;
+        uint8_t r = random8(99);
+        if (r < 33) { 
+            plan.sMode = MODE_SOLID; 
+            plan.palette = CRGBPalette16(CHSV(random8(), 255, 255)); 
+        } 
+        else if (r < 66) { 
+            uint8_t m = random8(3); 
+            plan.sMode = (m == 0) ? MODE_SPATIAL_GRADIENT : ((m == 1) ? MODE_LINEAR_FLOW : MODE_HIPHOTIC); 
+            plan.palette = PartyColors_p; 
+        } 
+        else { 
+            if (random8(2) == 0) { 
+                plan.sMode = MODE_NOISE_FIELD; 
+                plan.palette = PaletteUtils::getRandomOrganicPalette(); 
+            } else { 
+                plan.sMode = MODE_SCATTER; 
+                plan.palette = PartyColors_p;
+            }
+        }
+        return plan;
+    }
+
     static CRGBPalette16 getDynamicContrastPalette(CRGB sentinel) {
         CRGBPalette16 pal;
         pal[0] = sentinel; // Keep the sentinel at Index 0 so GeometryEngine knows it's a hack
@@ -129,30 +153,6 @@ public:
         
         return CRGBPalette16(sentinel);
     }
-    
-    static TexturePlan getRandomTexturePlan() {
-        TexturePlan plan;
-        uint8_t r = random8(99);
-        if (r < 33) { 
-            plan.sMode = MODE_SOLID; 
-            plan.palette = CRGBPalette16(CHSV(random8(), 255, 255)); 
-        } 
-        else if (r < 66) { 
-            uint8_t m = random8(3); 
-            plan.sMode = (m == 0) ? MODE_SPATIAL_GRADIENT : ((m == 1) ? MODE_LINEAR_FLOW : MODE_HIPHOTIC); 
-            plan.palette = PartyColors_p; 
-        } 
-        else { 
-            if (random8(2) == 0) { 
-                plan.sMode = MODE_NOISE_FIELD; 
-                plan.palette = PaletteUtils::getRandomOrganicPalette(); 
-            } else { 
-                plan.sMode = MODE_SCATTER; 
-                plan.palette = PartyColors_p;
-            }
-        }
-        return plan;
-    }
 };
 
 struct TextureState {
@@ -168,9 +168,6 @@ struct TextureState {
     uint8_t hX[16], hY[16], hZ[16];
     float mbX[3], mbY[3], mbZ[3];
 
-    // --- ADD THE DISTORTION WAVE CACHE ---
-    //uint32_t dwA, dwA2, dwA3;
-    //int32_t dwX[3], dwY[3], dwZ[3];
     // --- ADD THE DISTORTION WAVE CACHE ---
     uint32_t dwA, dwA2, dwA3;
     
@@ -222,37 +219,6 @@ struct TextureState {
                 hZ[i] = cos8((i * scale >> 4) + p5);
             }
         }
-
-       /*else if (mode == MODE_DISTORTION_WAVES) {
-            // EXACT WLED 2D TRANSLATION
-            // WLED speed = SEGMENT.speed/32. If speedMultiplier = 1.0, we use 4 (128/32).
-            uint8_t wledSpeed = (uint8_t)(4.0f * speedMultiplier);
-            
-            // WLED scale = SEGMENT.intensity/32.
-            uint8_t wledScale = max((int)1, (int)(scale / 32));
-
-            // WLED a = strip.now/32. We map our phase to match this clock speed.
-            dwA = (uint32_t)(internalPhase / 6.0f); 
-            dwA2 = dwA / 2;
-            dwA3 = dwA / 3;
-
-            uint32_t xMax = RNDR_X * wledScale;
-            uint32_t yMax = RNDR_Y * wledScale;
-            uint32_t zMax = RNDR_Z * wledScale;
-
-            // Uses FastLED's built-in beatsin16 to exactly match WLED's wandering focal points
-            dwX[0] = beatsin16(10 - wledSpeed, 0, xMax);
-            dwY[0] = beatsin16(12 - wledSpeed, 0, yMax);
-            dwZ[0] = beatsin16(11 - wledSpeed, 0, zMax);
-
-            dwX[1] = beatsin16(13 - wledSpeed, 0, xMax);
-            dwY[1] = beatsin16(15 - wledSpeed, 0, yMax);
-            dwZ[1] = beatsin16(14 - wledSpeed, 0, zMax);
-
-            dwX[2] = beatsin16(17 - wledSpeed, 0, xMax);
-            dwY[2] = beatsin16(14 - wledSpeed, 0, yMax);
-            dwZ[2] = beatsin16(16 - wledSpeed, 0, zMax);
-        }*/
        else if (mode == MODE_DISTORTION_WAVES) {
             // EXACT WLED 2D TRANSLATION
             // SEGMENT.speed/32. If speedMultiplier = 1.0, wledSpeed = 4.
@@ -351,39 +317,6 @@ struct TextureState {
             if (isCore) return CRGB::White;
             return ColorFromPalette(palette, min(255, (int)(sum * 64)) + (phase / 2), 255, LINEARBLEND);
         }
-    
-       /*if (mode == MODE_DISTORTION_WAVES) {
-            // WLED scale = SEGMENT.intensity/32
-            uint8_t wledScale = max((int)1, (int)(scale / 32));
-            
-            int32_t sx = (x + 1) * wledScale;
-            int32_t sy = (y + 1) * wledScale;
-            int32_t sz = (z + 1) * wledScale;
-
-            // EXACT WLED 3D WARP 
-            // Original: cos8((cos8(((x<<3)+a)&255)+cos8(((y<<3)-a2)&255)+a3)&255)>>1
-            uint8_t rdistort = cos8( (cos8(((x<<3)+dwA)&255) + cos8(((y<<3)-dwA2)&255) + cos8(((z<<3)+dwA3)&255) ) & 255) >> 1;
-            uint8_t gdistort = cos8( (cos8(((x<<3)-dwA2)&255) + cos8(((y<<3)+dwA3)&255) + cos8(((z<<3)+dwA+32)&255) ) & 255) >> 1;
-            uint8_t bdistort = cos8( (cos8(((x<<3)+dwA3)&255) + cos8(((y<<3)-dwA)&255)  + cos8(((z<<3)+dwA2+64)&255) ) & 255) >> 1;
-
-            // EXACT WLED INTERFERENCE MATH (Squared distances)
-            // Original: valueR = rdistort + ((a- ( ((xoffs - cx)^2 + (yoffs - cy)^2)>>7 ))<<1)
-            int32_t dx0 = sx - dwX[0], dy0 = sy - dwY[0], dz0 = sz - dwZ[0];
-            uint32_t dSq0 = (dx0*dx0 + dy0*dy0 + dz0*dz0) >> 7;
-            uint8_t valueR = cos8(rdistort + ((dwA - dSq0) << 1));
-
-            int32_t dx1 = sx - dwX[1], dy1 = sy - dwY[1], dz1 = sz - dwZ[1];
-            uint32_t dSq1 = (dx1*dx1 + dy1*dy1 + dz1*dz1) >> 7;
-            uint8_t valueG = cos8(gdistort + ((dwA2 - dSq1) << 1));
-
-            int32_t dx2 = sx - dwX[2], dy2 = sy - dwY[2], dz2 = sz - dwZ[2];
-            uint32_t dSq2 = (dx2*dx2 + dy2*dy2 + dz2*dz2) >> 7;
-            uint8_t valueB = cos8(bdistort + ((dwA3 - dSq2) << 1));
-
-            // WLED's exact blend: average the 3 RGB values, map to palette
-            uint8_t brightness = ((uint16_t)valueR + valueG + valueB) / 3;
-            return ColorFromPalette(palette, brightness, 255, LINEARBLEND);
-        }*/
        if (mode == MODE_DISTORTION_WAVES) {
             
             // 1. Fetch and sum the pre-calculated 3D grid warps
