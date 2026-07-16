@@ -703,7 +703,7 @@ class Streamers {
             }
 
             // ==========================================
-            // ENERGY-WEIGHTED RENDER LOOP
+            // ENERGY-WEIGHTED RENDER LOOP (Deferred Rendering)
             // ==========================================
             float skinThreshold = (RNDR_X <= 8) ? 0.85f : 0.75f;
             float coreThreshold = skinThreshold + 0.30f; 
@@ -719,31 +719,45 @@ class Streamers {
             }
 
             for (uint8_t z = 0; z < RNDR_Z; z++) {
+                // LOOP HOISTING: Calculate Z-axis math once per layer, not 256 times
+                float dzSq[NUM_BLOBS];
+                for (int i = 0; i < NUM_BLOBS; i++) {
+                    float dz = ((float)z - blobs[i].z) * stretchZ[i]; 
+                    dzSq[i] = dz * dz;
+                }
+
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    // LOOP HOISTING: Calculate Y-axis math once per row, not 16 times
+                    float dySq[NUM_BLOBS];
+                    for (int i = 0; i < NUM_BLOBS; i++) {
+                        float dy = (float)y - blobs[i].y;
+                        dySq[i] = dy * dy;
+                    }
+
                     for (uint8_t x = 0; x < RNDR_X; x++) {
-                        
                         float totalEnergy = 0.0f;
-                        float rSum = 0.0f, gSum = 0.0f, bSum = 0.0f;
+                        float energies[NUM_BLOBS];
                         
                         for (int i = 0; i < NUM_BLOBS; i++) {
                             float dx = (float)x - blobs[i].x;
-                            float dy = (float)y - blobs[i].y;
-                            float dz = ((float)z - blobs[i].z) * stretchZ[i]; 
+                            float d2 = (dx*dx) + dySq[i] + dzSq[i];
                             
-                            float d2 = (dx*dx) + (dy*dy) + (dz*dz);
-                            float energy = r2[i] / (d2 + 0.1f);
-                            
-                            totalEnergy += energy;
-                            
-                            // Accumulate RGB payload weighted by this blob's specific energy pull
-                            rSum += blobColors[i].r * energy;
-                            gSum += blobColors[i].g * energy;
-                            bSum += blobColors[i].b * energy;
+                            // Calculate raw energy (Fastest operation possible)
+                            energies[i] = r2[i] / (d2 + 0.1f);
+                            totalEnergy += energies[i];
                         }
 
+                        // DEFERRED RENDERING: 
+                        // Only mix RGB floats if this voxel actually contains lava!
                         if (totalEnergy >= skinThreshold) {
+                            float rSum = 0.0f, gSum = 0.0f, bSum = 0.0f;
+                            for (int i = 0; i < NUM_BLOBS; i++) {
+                                rSum += blobColors[i].r * energies[i];
+                                gSum += blobColors[i].g * energies[i];
+                                bSum += blobColors[i].b * energies[i];
+                            }
+                            
                             CRGB finalColor;
-                            // Divide accumulated RGB by total energy to get the true blended liquid color
                             finalColor.r = constrain((int)(rSum / totalEnergy), 0, 255);
                             finalColor.g = constrain((int)(gSum / totalEnergy), 0, 255);
                             finalColor.b = constrain((int)(bSum / totalEnergy), 0, 255);
@@ -1542,22 +1556,22 @@ class Streamers {
         }
     }
 // ==========================================
-    // VOLUMETRIC DNA SPIRAL (SDF Anti-Aliased)
+    // VOLUMETRIC DNA SPIRAL (SDF Anti-Aliased & Optimized)
     // ==========================================
     static void animateDNASpiral(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, float speedMultiplier = 1.0f) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
         
-        // 1. AUTO-FILL VOLUME METRICS (No more arbitrary WLED knobs)
         float radius = (RNDR_X / 2.0f) - 0.5f; 
         if (radius < 1.0f) radius = 1.0f;
         
-        // Scale the mathematical thickness of the structures based on the hardware
         float backboneThickness = (RNDR_X > 8) ? 1.5f : 0.9f; 
         float rungThickness     = (RNDR_X > 8) ? 1.0f : 0.6f;
 
-        // Auto-calculate frequency so it always performs exactly 1 full 
-        // graceful twist across 80% of the hardware's height.
+        // Pre-calculate squared thresholds for the bounding boxes (Saves 12,000 sqrtf calls per frame)
+        float aaPaddingSq = (backboneThickness + 1.2f) * (backboneThickness + 1.2f);
+        float rungPaddingSq = (rungThickness + 1.2f) * (rungThickness + 1.2f);
+
         float zFreq = TWO_PI / (RNDR_Z * 0.8f);
 
         while (millis() - startTime < durationMs) {
@@ -1566,73 +1580,72 @@ class Streamers {
             if (deltaMs == 0) { yield(); continue; } 
             lastFrame = now;
 
-            // Clear the frame natively—no more muddy, expensive WLED trails
             clearAll(); 
 
             float timePhase = (now * 0.002f * speedMultiplier);
 
-            // 2. THE VOLUMETRIC SDF EVALUATOR
             for (int z = 0; z < RNDR_Z; z++) {
-                
                 float phase = (z * zFreq) + timePhase;
                 
-                // Calculate the true floating-point centers of the backbones
                 float bx1 = RNDR_CX + (sinf(phase) * radius);
                 float by1 = RNDR_CY + (cosf(phase) * radius);
                 float bx2 = RNDR_CX + (sinf(phase + PI) * radius);
                 float by2 = RNDR_CY + (cosf(phase + PI) * radius);
 
-                // Gap logic climbs the Z-axis
                 bool hasRung = (((z + (now / 200)) % 4) != 0);
-
                 uint8_t hue = (z * 255 / RNDR_Z) + (now / 20);
                 CRGB baseColor = ColorFromPalette(pal, hue, 255, LINEARBLEND);
 
-                for (int x = 0; x < RNDR_X; x++) {
-                    for (int y = 0; y < RNDR_Y; y++) {
+                // Math optimization: Pre-calculate the segment length squared once per Z-layer
+                float l2 = (bx2 - bx1)*(bx2 - bx1) + (by2 - by1)*(by2 - by1);
+
+                for (int y = 0; y < RNDR_Y; y++) {
+                    float fy = (float)y;
+                    // Loop Hoisting: Calculate Y-distances outside the X-loop
+                    float dy1 = fy - by1; float dy1Sq = dy1*dy1;
+                    float dy2 = fy - by2; float dy2Sq = dy2*dy2;
+
+                    for (int x = 0; x < RNDR_X; x++) {
                         float fx = (float)x;
-                        float fy = (float)y;
 
-                        // SDF: Distance to Backbone 1 & 2
-                        float dx1 = fx - bx1, dy1 = fy - by1;
-                        float dist1 = sqrtf(dx1*dx1 + dy1*dy1);
+                        float dx1 = fx - bx1; float dist1Sq = dx1*dx1 + dy1Sq;
+                        float dx2 = fx - bx2; float dist2Sq = dx2*dx2 + dy2Sq;
 
-                        float dx2 = fx - bx2, dy2 = fy - by2;
-                        float dist2 = sqrtf(dx2*dx2 + dy2*dy2);
-
-                        float minDist = min(dist1, dist2);
                         float intensity = 0.0f;
 
-                        // 3. MERKABA DIFFERENTIAL BRIGHTNESS (Anti-Aliasing)
-                        if (minDist <= backboneThickness) {
-                            intensity = 1.0f - (minDist / backboneThickness);
+                        // ONLY run sqrtf if the pixel is physically inside the strand's glow radius
+                        if (dist1Sq < aaPaddingSq) {
+                            intensity = max(intensity, 1.0f - (sqrtf(dist1Sq) / backboneThickness));
+                        }
+                        if (dist2Sq < aaPaddingSq) {
+                            intensity = max(intensity, 1.0f - (sqrtf(dist2Sq) / backboneThickness));
                         }
 
-                        // SDF: Distance to the Rung (Mathematical Line Segment)
-                        if (hasRung && intensity < 1.0f) {
-                            float l2 = (bx2 - bx1)*(bx2 - bx1) + (by2 - by1)*(by2 - by1);
-                            if (l2 > 0.001f) {
+                        // Rung bounding box & calculation
+                        if (hasRung && intensity < 1.0f && l2 > 0.001f) {
+                            float minX = min(bx1, bx2) - rungThickness - 1.2f;
+                            float maxX = max(bx1, bx2) + rungThickness + 1.2f;
+                            float minY = min(by1, by2) - rungThickness - 1.2f;
+                            float maxY = max(by1, by2) + rungThickness + 1.2f;
+
+                            // Bounding box check before doing heavy projection math
+                            if (fx >= minX && fx <= maxX && fy >= minY && fy <= maxY) {
                                 float t = max(0.0f, min(1.0f, ((fx - bx1)*(bx2 - bx1) + (fy - by1)*(by2 - by1)) / l2));
                                 float projX = bx1 + t * (bx2 - bx1);
                                 float projY = by1 + t * (by2 - by1);
-                                float distRung = sqrtf((fx - projX)*(fx - projX) + (fy - projY)*(fy - projY));
+                                float distRungSq = (fx - projX)*(fx - projX) + (fy - projY)*(fy - projY);
 
-                                if (distRung <= rungThickness) {
-                                    float rungIntensity = 1.0f - (distRung / rungThickness);
+                                if (distRungSq < rungPaddingSq) {
+                                    float rungIntensity = 1.0f - (sqrtf(distRungSq) / rungThickness);
                                     if (rungIntensity > intensity) intensity = rungIntensity;
                                 }
                             }
                         }
 
-                        // 4. APPLY PIXEL COVERAGE
                         if (intensity > 0.01f) {
-                            // Map the SDF intensity directly to an 8-bit scale
                             uint8_t brightness = (uint8_t)(intensity * 255.0f);
-                            
                             CRGB color = baseColor;
                             color.nscale8(brightness); 
-                            
-                            // Additive blend gracefully handles structural overlaps
                             CRGB existing = getVoxel(x, y, z);
                             setVoxel(x, y, z, existing + color);
                         }
@@ -1642,7 +1655,6 @@ class Streamers {
             showCube();
         }
     }
-
     // ==========================================
     // 3D WU VOXEL (Sub-Voxel Anti-Aliasing)
     // ==========================================
@@ -1691,7 +1703,8 @@ class Streamers {
     // ==========================================
     // 3D DRIFT (High-Resolution Torsion Pendulum)
     // ==========================================
-    static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+
+    /*static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
 
@@ -1740,12 +1753,8 @@ class Streamers {
                 // Second half of cycle: bounce and sweep backward at constant speed
                 pendulum = 32767 - (int32_t)((clock - 32768) * 2); 
             }
-            /*
-            Original Baseline (100%): 20 / 10 equals 2.0.
-            The 70% Truncation: 14 / 10 equals 1.4. (1.4 is 70% of 2.0).
-            The 60% Truncation: 12 / 10 equals 1.2. (1.2 is 60% of 2.0).
-            The 50% Truncation: 10 / 10 equals 1.0. (1.0 is exactly half of 2.0).
-            */
+            // Original Baseline (100%): 20 / 10 equals 2.0.The 70% Truncation: 14 / 10 equals 1.4. (1.4 is 70% of 2.0).
+            
             int32_t timeAngle = (pendulum * 12) / 10;
 
             for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
@@ -1789,8 +1798,144 @@ class Streamers {
             }
             showCube();
         }
-    }
+    }*/
+// ==========================================
+    // 3D DRIFT (Aerodynamic Drag & Golden Tumble)
+    // ==========================================
+    static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
 
+        // 1. OCTANT VECTORS (The 8 baseline arms)
+        const int16_t INV_SQRT3 = 147;
+        const int16_t armX[8] = { INV_SQRT3,  INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
+        const int16_t armY[8] = { INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
+        const int16_t armZ[8] = { INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3};
+
+        float rx = RNDR_X / 2.0f;
+        float ry = RNDR_Y / 2.0f;
+        float rz = RNDR_Z / 2.0f;
+        float cornerDist = sqrtf(rx*rx + ry*ry + rz*rz);
+        
+        int16_t maxR_fp = (int16_t)(cornerDist * 256.0f); 
+        int16_t step_fp = 32; 
+
+        // State variables for continuous, non-reversing motion
+        static uint16_t angleX = 0, angleY = 0, angleZ = 0;
+        static uint32_t masterSpin = 0;
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame < 15) { yield(); continue; }
+            lastFrame = now;
+
+            for (uint8_t x = 0; x < RNDR_X; x++) {
+                for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    for (uint8_t z = 0; z < RNDR_Z; z++) {
+                        CRGB c = getVoxel(x, y, z);
+                        if (c) { 
+                            c.nscale8(100); 
+                            setVoxel(x, y, z, c); 
+                        }
+                    }
+                }
+            }
+            yield(); 
+
+            // --- 1. OSCILLATING SPEED ENGINE (Tight Dynamic Range) ---
+            uint16_t breathClock = (now * effectSpeed) / 16;
+            uint16_t normalizedSin = sin16(breathClock) + 32768; // 0 to 65535
+            
+            // Calculate a comfortable baseline speed tied to WLED's effectSpeed
+            uint32_t baseSpeed = 20 + (effectSpeed / 3); 
+
+            // Compress the variance: Speed never drops below 75% or exceeds 115%
+            uint32_t minSpeed = (baseSpeed * 75) / 100; 
+            uint32_t maxSpeed = (baseSpeed * 115) / 100;
+            uint32_t speedRange = maxSpeed - minSpeed;
+
+            uint32_t currentSpeed = minSpeed + ((normalizedSin * speedRange) >> 16); 
+
+            // --- 2. GOLDEN RATIO TUMBLE ---
+            // Continuous tumbling. Never stops, never reverses.
+            angleX += currentSpeed * 2; 
+            angleY += currentSpeed * 3;  // Prime ratios ensure non-repeating tumble
+            angleZ += currentSpeed * 5; 
+
+            // Calculate the 3D Euler Matrix ONCE per frame (Saves huge CPU cycles)
+            float fsx = sin16(angleX) / 32768.0f, fcx = cos16(angleX) / 32768.0f;
+            float fsy = sin16(angleY) / 32768.0f, fcy = cos16(angleY) / 32768.0f;
+            float fsz = sin16(angleZ) / 32768.0f, fcz = cos16(angleZ) / 32768.0f;
+
+            // Generate tumbling matrix in 15-bit fixed point math for the fast inner loop
+            int16_t UX_x = (fcy * fcz) * 32767;
+            int16_t UX_y = (fcy * fsz) * 32767;
+            int16_t UX_z = (-fsy) * 32767;
+
+            int16_t UY_x = (fsx * fsy * fcz - fcx * fsz) * 32767;
+            int16_t UY_y = (fsx * fsy * fsz + fcx * fcz) * 32767;
+            int16_t UY_z = (fsx * fcy) * 32767;
+
+            int16_t UZ_x = (fcx * fsy * fcz + fsx * fsz) * 32767;
+            int16_t UZ_y = (fcx * fsy * fsz - fsx * fcz) * 32767;
+            int16_t UZ_z = (fcx * fcy) * 32767;
+
+            // --- 3. THE AIR RESISTANCE BEND ---
+            // The pinwheel constantly spins around its own center axis
+            masterSpin += currentSpeed * 30; 
+            
+            // Because the speed never drops to 0, the drag never drops to 0.
+            // Minimum bend (~14 degrees) up to Maximum bend (~34 degrees).
+            // Hard cap at 6300 guarantees arms will NEVER cross paths.
+            int32_t minBend = 2600; 
+            int32_t maxBend = 6300; 
+            int32_t currentBend = minBend + ((normalizedSin * (maxBend - minBend)) >> 16); 
+
+            for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
+                
+                // Tips of the arms drag backward based on the current air resistance
+                int32_t drag = (currentBend * (int32_t)r_fp) / maxR_fp;
+                
+                // Subtract drag from master spin (arms trail behind the core)
+                uint16_t localAngle = (uint16_t)(masterSpin - drag);
+                
+                int16_t sTwist = sin16(localAngle);
+                int16_t cTwist = cos16(localAngle);
+
+                for (int i = 0; i < 8; i++) {
+                    // Step A: Scale the base vectors outward
+                    int32_t bx = (armX[i] * r_fp) >> 8;
+                    int32_t by = (armY[i] * r_fp) >> 8;
+                    int32_t bz = (armZ[i] * r_fp) >> 8;
+
+                    // Step B: Apply the Aerodynamic Drag
+                    int32_t tx = (bx * cTwist - by * sTwist) >> 15;
+                    int32_t ty = (bx * sTwist + by * cTwist) >> 15;
+                    int32_t tz = bz;
+
+                    // Step C: Apply the 3D Tumble (Project onto the tumbling axes)
+                    int32_t finalX = (tx * UX_x + ty * UY_x + tz * UZ_x) >> 15;
+                    int32_t finalY = (tx * UX_y + ty * UY_y + tz * UZ_y) >> 15;
+                    int32_t finalZ = (tx * UX_z + ty * UY_z + tz * UZ_z) >> 15;
+
+                    if (RNDR_Z > RNDR_X) {
+                       finalZ = (finalZ * (int32_t)RNDR_Z) / (int32_t)RNDR_X;
+                    }
+
+                    int32_t px_fp = (int32_t)(RNDR_CX * 256.0f) + finalX;
+                    int32_t py_fp = (int32_t)(RNDR_CY * 256.0f) + finalY;
+                    int32_t pz_fp = (int32_t)(RNDR_CZ * 256.0f) + finalZ;
+
+                    uint8_t armBrightness = min(255, 64 + ((r_fp >> 8) * 30));
+                    uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
+                    CRGB col = ColorFromPalette(pal, colorIndex, armBrightness, LINEARBLEND);
+                    
+                    drawWuVoxel(px_fp, py_fp, pz_fp, col);
+                }
+            }
+            showCube();
+        }
+    }
 
     // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)

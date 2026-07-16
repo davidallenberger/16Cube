@@ -39,11 +39,12 @@ boolean runOnce = true;
 
 void loop() 
 { 
-// 1. THE CLASSIC SEQUENCE
-// 10 Seconds. 1.0x Speed.
-// The SDF math guarantees the helix fills the maximum volume and 
-// uses anti-aliasing to look like a perfectly smooth, physical pipe.
-Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
+// 2. THE PARTY VORTEX
+// 10 Seconds. Maximum speed (255). PartyColors.
+// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
+Streamers::animateDrift3D(120000, RainbowColors_p, 32);
+
+return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
 // remains completely still while the mathematical Distortion Waves 
@@ -57,8 +58,11 @@ Shapes::animateStatic(
     25,                     // Speed (Irrelevant for static motion)
     false                   // No bounds stretching
 );
-
-
+// 1. THE CLASSIC SEQUENCE
+// 10 Seconds. 1.0x Speed.
+// The SDF math guarantees the helix fills the maximum volume and 
+// uses anti-aliasing to look like a perfectly smooth, physical pipe.
+Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
   //xxx choose from one of these with random colors palette
 // 1. THE CLASSIC LAVA LAMP
 // 15 seconds. Uses default LavaColors_p. Smooth, warm red/orange 
@@ -71,7 +75,6 @@ Streamers::animateLavaLamp(10000);// <--workable
 // colors (e.g. Purple, Green) as their energy fields intersect mid-air.
 Streamers::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
 
-return;
 // 3. RAPID BOILING (Fast Physics)
 // 15 seconds. Runs at 2.5x speed multiplier and drops the volume to 10% 
 // to create small, highly kinetic droplets that shoot up, bounce off 
@@ -83,12 +86,6 @@ Streamers::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this a
 // Creates huge, sluggish clouds of deep oceanic blues and greens that barely 
 // separate from each other, simulating extreme viscosity.
 Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
-
-
-// 2. THE PARTY VORTEX
-// 10 Seconds. Maximum speed (255). PartyColors.
-// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
-Streamers::animateDrift3D(10000, RainbowColors_p, 32);
 
 // 3. THE DRIFT ROSE MANDALA
 // 10 Seconds. Default WLED speed (128). Rainbow default.
