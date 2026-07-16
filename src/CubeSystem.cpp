@@ -78,8 +78,8 @@ static const int TOTAL_APPS = sizeof(appRegistry) / sizeof(appRegistry[0]);
 void CubeSystem::setup() {
     Serial.println("Booting Cube OS...");
 
-    TestDemo::runHardwareWiringTest();
-    delay(500); 
+    //TestDemo::runHardwareWiringTest();
+    //delay(500); 
     initAppMemory();
 
 #ifdef DISABLE_BLUETOOTH

@@ -39,13 +39,23 @@ boolean runOnce = true;
 
 void loop() 
 { 
+// 2. THE PARTY VORTEX
+// 10 Seconds. Maximum speed (255). PartyColors.
+// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
+Streamers::animateDrift3D(10000, RainbowColors_p, 32);
+
+// 3. THE DRIFT ROSE MANDALA
+// 10 Seconds. Default WLED speed (128). Rainbow default.
+// A symmetrical 3D sea urchin that continuously blooms outward from its 
+// core as the harmonic frequencies of the spokes intersect.
+Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
+return;
+
 // 1. THE CLASSIC SEQUENCE
 // 10 Seconds. 1.0x Speed.
 // The SDF math guarantees the helix fills the maximum volume and 
 // uses anti-aliasing to look like a perfectly smooth, physical pipe.
-Streamers::animateDNASpiral(10000, RainbowColors_p, .75f);
 Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
-Streamers::animateDNASpiral(10000, RainbowColors_p, 1.0f);
 
 return;
 // 1. THE DISTORTED SOLID BOX
