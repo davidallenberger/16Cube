@@ -39,25 +39,11 @@ boolean runOnce = true;
 
 void loop() 
 { 
-// 2. THE PARTY VORTEX
-// 10 Seconds. Maximum speed (255). PartyColors.
-// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
-Streamers::animateDrift3D(10000, RainbowColors_p, 32);
-
-// 3. THE DRIFT ROSE MANDALA
-// 10 Seconds. Default WLED speed (128). Rainbow default.
-// A symmetrical 3D sea urchin that continuously blooms outward from its 
-// core as the harmonic frequencies of the spokes intersect.
-Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
-return;
-
 // 1. THE CLASSIC SEQUENCE
 // 10 Seconds. 1.0x Speed.
 // The SDF math guarantees the helix fills the maximum volume and 
 // uses anti-aliasing to look like a perfectly smooth, physical pipe.
 Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
-
-return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
 // remains completely still while the mathematical Distortion Waves 
@@ -72,29 +58,49 @@ Shapes::animateStatic(
     false                   // No bounds stretching
 );
 
-// 2. THE LIQUID SINE WAVE
-// 10 Seconds. Layering the undulating physical geometry of the sine wave 
-// with the secondary flowing math of the Distortion Waves shader creates 
-// an intensely complex, hyper-fluid visual.
-/*
-Surfaces::animateSineWaveSplit2026(
-    10000, 
-    360, 
-    (SplitWaveMode2026)0, 
-    RainbowColors_p, 
-    MODE_DISTORTION_WAVES, 
-    0.48f
-);*/
 
+  //xxx choose from one of these with random colors palette
+// 1. THE CLASSIC LAVA LAMP
+// 15 seconds. Uses default LavaColors_p. Smooth, warm red/orange 
+// blobs that squish against the glass and seamlessly mix colors when they merge.
+Streamers::animateLavaLamp(10000);// <--workable
+
+// 2. THE ALIEN INCUBATOR (Acid Colors)
+// 15 seconds. Fills 20% of the cube. Uses PartyColors_p for high-contrast neon 
+// blobs (Cyan, Magenta, Yellow) that dynamically blend into wild secondary 
+// colors (e.g. Purple, Green) as their energy fields intersect mid-air.
+Streamers::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
 
 return;
+// 3. RAPID BOILING (Fast Physics)
+// 15 seconds. Runs at 2.5x speed multiplier and drops the volume to 10% 
+// to create small, highly kinetic droplets that shoot up, bounce off 
+// the ceiling, and violently merge on the way down.
+Streamers::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this and kill the bouncing ball
+
+// 4. THE DEEP FREEZE
+// 15 seconds. Very slow movement (0.3x speed). Massive volume (20%).
+// Creates huge, sluggish clouds of deep oceanic blues and greens that barely 
+// separate from each other, simulating extreme viscosity.
+Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
+
+
+// 2. THE PARTY VORTEX
+// 10 Seconds. Maximum speed (255). PartyColors.
+// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
+Streamers::animateDrift3D(10000, RainbowColors_p, 32);
+
+// 3. THE DRIFT ROSE MANDALA
+// 10 Seconds. Default WLED speed (128). Rainbow default.
+// A symmetrical 3D sea urchin that continuously blooms outward from its 
+// core as the harmonic frequencies of the spokes intersect.
+Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
+
+
 Streamers::animateColorTwinkles(10000);
-return;
 // 1. THE VOLUMETRIC CORE
 // 10 Seconds. Medium speed. Graceful architectural sweeping.
 Streamers::animateColoredBursts(10000, 96);
-
-return;
 // 1. THE LASSOED SERPENTINE (The 3D Matrix Scanner)
 // 10 Seconds. Gap size locked down to 32 as requested. 
 // Tightly groups the flock so they scan through the literal rows 
@@ -107,25 +113,9 @@ Streamers::animateChunchunVolumetric(10000, PartyColors_p, 128, 32, CHUNCHUN_SER
 // that sweeps the dead center of the room and banks off the walls.
 Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
 
-
   // 1. THE CHECKERBOARD PISTON
 // 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
 Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
-
-// 2. THE SPHERICAL HEARTBEAT
-// 10 Seconds. 3D shells of light spawn at the core and push out to the glass.
-// Uses PartyColors_p and a slightly faster speed (90).
-Streamers::animateBpmVolumetric(10000, PartyColors_p, 90, BPM_SPHERE);
-
-// 3. THE DIAGONAL SLICER
-// 10 Seconds. Solid, 45-degree angled planes washing through the cube.
-// Uses OceanColors_p and a slow speed (40) for a sweeping sonar feel.
-Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
-
-// 4. THE TWISTING HELIX
-// 10 Seconds. A solid spiral staircase of light threading up and down the Z-axis.
-// Uses LavaColors_p at default speed (64) for a twisting thermal vortex.
-Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
 
 
 // 1. THE CLASSIC JUGGLER (Rainbow Default)
@@ -143,39 +133,30 @@ Streamers::animateBouncingBalls(10000, OceanColors_p);
 // Nearly maximizes the memory arena for a frantic, high-density kinetic explosion.
 Streamers::animateBouncingBalls(10000, PartyColors_p, 200, 220);
 
-  //xxx choose from one of these with random colors palette
-// 1. THE CLASSIC LAVA LAMP
-// 15 seconds. Uses default LavaColors_p. Smooth, warm red/orange 
-// blobs that squish against the glass and seamlessly mix colors when they merge.
-Streamers::animateLavaLamp(10000);// <--workable
-
-// 2. THE ALIEN INCUBATOR (Acid Colors)
-// 15 seconds. Fills 20% of the cube. Uses PartyColors_p for high-contrast neon 
-// blobs (Cyan, Magenta, Yellow) that dynamically blend into wild secondary 
-// colors (e.g. Purple, Green) as their energy fields intersect mid-air.
-Streamers::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
-
-// 3. RAPID BOILING (Fast Physics)
-// 15 seconds. Runs at 2.5x speed multiplier and drops the volume to 10% 
-// to create small, highly kinetic droplets that shoot up, bounce off 
-// the ceiling, and violently merge on the way down.
-Streamers::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this and kill the bouncing ball
-
-// 4. THE DEEP FREEZE
-// 15 seconds. Very slow movement (0.3x speed). Massive volume (20%).
-// Creates huge, sluggish clouds of deep oceanic blues and greens that barely 
-// separate from each other, simulating extreme viscosity.
-Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
-
-
 
 // 1. THE SATURN RING (Sync)
 // Runs for 10 seconds. All stars are locked to the exact same tumbling 
 // 3D plane, creating a majestic, unified ring system. 
 // Uses the default Rainbow palette and Linear Flow.
 Streamers::animateBlackHole(10000);
+return;
+  /*
+// 2. THE SPHERICAL HEARTBEAT
+// 10 Seconds. 3D shells of light spawn at the core and push out to the glass.
+// Uses PartyColors_p and a slightly faster speed (90).
+Streamers::animateBpmVolumetric(10000, PartyColors_p, 90, BPM_SPHERE);
 
-  
+// 3. THE DIAGONAL SLICER
+// 10 Seconds. Solid, 45-degree angled planes washing through the cube.
+// Uses OceanColors_p and a slow speed (40) for a sweeping sonar feel.
+Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
+
+// 4. THE TWISTING HELIX
+// 10 Seconds. A solid spiral staircase of light threading up and down the Z-axis.
+// Uses LavaColors_p at default speed (64) for a twisting thermal vortex.
+Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
+*/
+
   CubeSystem::loop();
     return;
   

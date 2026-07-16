@@ -1687,116 +1687,9 @@ class Streamers {
         plot(ix+1, iy+1, iz+1, col, w111);
     }
 
+    
     // ==========================================
-    // 3D DRIFT (Full-Reach Octant Pinwheel)
-    // ==========================================
-    /*static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-
-        // 1. OCTANT VECTORS (1/sqrt(3) * 256 = 147)
-        // These vectors point perfectly to the 8 extreme corners of the matrix.
-        const int16_t INV_SQRT3 = 147;
-        const int16_t armX[8] = { INV_SQRT3,  INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
-        const int16_t armY[8] = { INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
-        const int16_t armZ[8] = { INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3};
-
-        // 2. TRUE VOLUMETRIC REACH
-        // Calculate the exact distance to the farthest corner so the arms sweep 
-        // completely across the glass faces before clipping out of bounds.
-        float rx = RNDR_X / 2.0f;
-        float ry = RNDR_Y / 2.0f;
-        float rz = RNDR_Z / 2.0f;
-        float cornerDist = sqrtf(rx*rx + ry*ry + rz*rz);
-        
-        int16_t maxR_fp = (int16_t)(cornerDist * 256.0f); 
-        int16_t step_fp = 128; // 0.25 spatial steps
-
-        while (millis() - startTime < durationMs) {
-            uint32_t now = millis();
-            if (now - lastFrame < 15) { yield(); continue; }
-            lastFrame = now;
-
-            // 3. FASTER WLED FADE (Keep the sweeping lines distinct)
-            for (uint8_t x = 0; x < RNDR_X; x++) {
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { 
-                            c.nscale8(100); 
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }
-            yield(); 
-            
-            // --- THE TORSION PENDULUM ---
-            // 1. A continuous clock to drive the sine wave
-            uint16_t clock = (now * effectSpeed) / 8; 
-            
-            // 2. sin16 generates a perfect, eased pendulum (-32767 to +32767)
-            int16_t pendulum = sin16(clock);
-            
-            // 3. Multiply by 2 to expand the swing to a full 360-degree rotation 
-            // in both directions. It will sweep right, uncoil, and sweep left.
-            int32_t timeAngle = (int32_t)pendulum * 2;
-            // -----------------------------
-
-            for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
-                
-                // 4. THE KINETIC TWIST (Now using signed 32-bit math)
-                int32_t baseRot = timeAngle;
-                
-                // Because timeAngle goes negative, coreTwist will go negative, 
-                // physically inverting the curve of the streamers.
-                int32_t coreTwist = (timeAngle * 3 * (int32_t)(maxR_fp - r_fp)) / maxR_fp;
-                int32_t twist = baseRot + coreTwist;
-
-                // Safely cast back to uint16_t for FastLED's trig functions.
-                // (Casting a negative integer automatically wraps it to the correct 360-degree phase)
-                int16_t sZ = sin16((uint16_t)twist);
-                int16_t cZ = cos16((uint16_t)twist);
-                int16_t sY = sin16((uint16_t)(twist / 2)); 
-                int16_t cY = cos16((uint16_t)(twist / 2));
-
-                for (int i = 0; i < 8; i++) {
-                    int32_t bx = (armX[i] * r_fp) >> 8;
-                    int32_t by = (armY[i] * r_fp) >> 8;
-                    int32_t bz = (armZ[i] * r_fp) >> 8;
-
-                    // Rotate Primary Pinwheel Spin
-                    int32_t rx = (bx * cZ - by * sZ) >> 15;
-                    int32_t ry = (bx * sZ + by * cZ) >> 15;
-                    int32_t rz = bz;
-
-                    // Rotate Secondary Tumbling Spew
-                    int32_t finalX = (rx * cY + rz * sY) >> 15;
-                    int32_t finalY = ry;
-                    int32_t finalZ = (-rx * sY + rz * cY) >> 15;
-
-                    if (RNDR_Z > RNDR_X) {
-                       finalZ = (finalZ * (int32_t)RNDR_Z) / (int32_t)RNDR_X;
-                    }
-
-                    int32_t px_fp = (int32_t)(RNDR_CX * 256.0f) + finalX;
-                    int32_t py_fp = (int32_t)(RNDR_CY * 256.0f) + finalY;
-                    int32_t pz_fp = (int32_t)(RNDR_CZ * 256.0f) + finalZ;
-
-        
-                    uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
-                    CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
-                    
-                    // Wu-Voxel inherently discards anything outside the glass bounds 
-                    drawWuVoxel(px_fp, py_fp, pz_fp, col);
-                }
-            }
-            showCube();
-        }
-    }*/
-
-    // ==========================================
-    // 3D DRIFT (Gapless Torsion Pendulum)
+    // 3D DRIFT (High-Resolution Torsion Pendulum)
     // ==========================================
     static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
@@ -1815,9 +1708,8 @@ class Streamers {
         
         int16_t maxR_fp = (int16_t)(cornerDist * 256.0f); 
         
-        // Because we are interpolating, we only need to calculate 
-        // complex trigonometry once per full voxel.
-        int16_t step_fp = 256; 
+        // Ultra-high mathematical resolution (evaluates 8 times per voxel)
+        int16_t step_fp = 32; 
 
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();
@@ -1839,12 +1731,22 @@ class Streamers {
 
             // THE TORSION PENDULUM
             uint16_t clock = (now * effectSpeed) / 8; 
-            int16_t pendulum = sin16(clock);
-            int32_t timeAngle = (int32_t)pendulum * 2;
-
-            // Arrays to remember the last coordinate plotted for each arm
-            int32_t prevX[8], prevY[8], prevZ[8];
-            bool firstPoint = true;
+            
+            int32_t pendulum;
+            if (clock < 32768) {
+                // First half of cycle: sweep forward at constant speed
+                pendulum = -32767 + (int32_t)(clock * 2); 
+            } else {
+                // Second half of cycle: bounce and sweep backward at constant speed
+                pendulum = 32767 - (int32_t)((clock - 32768) * 2); 
+            }
+            /*
+            Original Baseline (100%): 20 / 10 equals 2.0.
+            The 70% Truncation: 14 / 10 equals 1.4. (1.4 is 70% of 2.0).
+            The 60% Truncation: 12 / 10 equals 1.2. (1.2 is 60% of 2.0).
+            The 50% Truncation: 10 / 10 equals 1.0. (1.0 is exactly half of 2.0).
+            */
+            int32_t timeAngle = (pendulum * 12) / 10;
 
             for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
                 
@@ -1878,50 +1780,18 @@ class Streamers {
                     int32_t py_fp = (int32_t)(RNDR_CY * 256.0f) + finalY;
                     int32_t pz_fp = (int32_t)(RNDR_CZ * 256.0f) + finalZ;
 
-                    if (firstPoint) {
-                        // Just lock in the origin point without drawing to prevent an 8-arm core blowout
-                        prevX[i] = px_fp;
-                        prevY[i] = py_fp;
-                        prevZ[i] = pz_fp;
-                    } else {
-                        // --- GAPLESS INTERPOLATION ---
-                        int32_t dx = px_fp - prevX[i];
-                        int32_t dy = py_fp - prevY[i];
-                        int32_t dz = pz_fp - prevZ[i];
-                        
-                        int32_t absX = dx > 0 ? dx : -dx;
-                        int32_t absY = dy > 0 ? dy : -dy;
-                        int32_t absZ = dz > 0 ? dz : -dz;
-                        int32_t maxDist = max(absX, max(absY, absZ));
-                        
-                        // Force a sub-voxel dot at least every 0.5 voxels (128 fixed-point units)
-                        int steps = maxDist / 128;
-                        if (steps < 1) steps = 1;
-                        
-                        // Dim the core to preserve negative space when arms overlap
-                        uint8_t armBrightness = min(255, 64 + ((r_fp >> 8) * 30));
-                        uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
-                        CRGB col = ColorFromPalette(pal, colorIndex, armBrightness, LINEARBLEND);
-
-                        for (int s = 1; s <= steps; s++) {
-                            int32_t interpX = prevX[i] + (dx * s) / steps;
-                            int32_t interpY = prevY[i] + (dy * s) / steps;
-                            int32_t interpZ = prevZ[i] + (dz * s) / steps;
-                            drawWuVoxel(interpX, interpY, interpZ, col);
-                        }
-                        
-                        // Save current point for the next segment
-                        prevX[i] = px_fp;
-                        prevY[i] = py_fp;
-                        prevZ[i] = pz_fp;
-                    }
+                    uint8_t armBrightness = min(255, 64 + ((r_fp >> 8) * 30));
+                    uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
+                    CRGB col = ColorFromPalette(pal, colorIndex, armBrightness, LINEARBLEND);
+                    
+                    drawWuVoxel(px_fp, py_fp, pz_fp, col);
                 }
-                firstPoint = false;
             }
             showCube();
         }
     }
-   
+
+
     // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
