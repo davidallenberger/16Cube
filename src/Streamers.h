@@ -177,15 +177,7 @@ class Streamers {
             // Check the clock once per frame
             bool timeIsUp = (now - startTime >= durationMs);
             
-            // Fast exponential fade clears the smoke
-            for (int x = 0; x < RNDR_X; x++) {
-                for (int y = 0; y < RNDR_Y; y++) {
-                    for (int z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { c.nscale8(180); setVoxel(x, y, z, c); }
-                    }
-                }
-            }
+            fadeAll(75);
 
             // 1. RANDOM LAUNCHER (Only allow launches if time is NOT up)
             if (!timeIsUp && random8(100) < 2) { 
@@ -1048,6 +1040,8 @@ class Streamers {
             tBase += (deltaMs / 1000.0f) * 1.5f; // Global orbit speed scalar
 
             // 1. VOLUMETRIC FADE (The Comet Trails)
+            fadeAll(55);
+            /*
             // Replaces clearAll() to allow persistent motion blurring
             for (uint8_t x = 0; x < RNDR_X; x++) {
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
@@ -1060,8 +1054,7 @@ class Streamers {
                         }
                     }
                 }
-            }
-
+            }*/
             // 2. THE SINGULARITY
             // A persistent, crisp white dot at the dead center of the array
             int cx = (int)RNDR_CX;
@@ -1376,22 +1369,9 @@ class Streamers {
             if (now - lastFrame == 0) { yield(); continue; }
             lastFrame = now;
 
-            // 1. WLED TRAIL (Fade to create comets)
-            for (uint8_t x = 0; x < RNDR_X; x++) {
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { 
-                            if (mode == CHUNCHUN_SERPENTINE) {
-                                c.nscale8(180); 
-                            } else {
-                                c.nscale8(220); 
-                            }
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }
+           // 1. WLED TRAIL (Fade to create comets)
+            uint8_t fadeAmt = (mode == CHUNCHUN_SERPENTINE) ? 75 : 35;
+            fadeAll(fadeAmt);
 
             // 2. THE WLED TIMELINE MATH
             uint32_t baseCounter = now * (6 + (effectSpeed >> 4));
@@ -1464,17 +1444,7 @@ class Streamers {
             hueBase++; 
 
             // 2. WLED FADE (The smeared trails)
-            for (uint8_t x = 0; x < RNDR_X; x++) {
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { 
-                            c.nscale8(200); 
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }
+            fadeAll(55);
 
             // 3. ORIGIN CALCULATION
             // X and Y drift around the core; Z sweeps the height.
@@ -1781,18 +1751,7 @@ class Streamers {
             if (now - lastFrame < 15) { yield(); continue; }
             lastFrame = now;
 
-            for (uint8_t x = 0; x < RNDR_X; x++) {
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { 
-                            c.nscale8(100); 
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }
-            yield(); 
+            fadeAll(155);
 
             // --- 1. OSCILLATING SPEED ENGINE (Tight Dynamic Range) ---
             uint16_t breathClock = (now * effectSpeed) / 16;

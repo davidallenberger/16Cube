@@ -39,6 +39,13 @@ boolean runOnce = true;
 
 void loop() 
 { 
+    // 3. Drift 3D (10 seconds)
+    // Using PartyColors_p to test the aerodynamic drag trails against a different color set
+  Streamers::animateDrift3D(20000, PartyColors_p, 32);
+
+  
+    return;
+
   CubeSystem::loop();
   return;
 
