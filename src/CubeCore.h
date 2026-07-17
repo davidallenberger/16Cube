@@ -24,7 +24,7 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 // Uncomment the line below to completely disable the Bluetooth radio, 
 // pairing menus, and background interrupts. The cube will boot directly 
 // into Ambient Art autonomously.
-#define DISABLE_BLUETOOTH
+//#define DISABLE_BLUETOOTH
 
 // 4. MULTI-THREADING OPTIMIZATION
 // Uncomment to pin the Bluetooth radio to Core 0, leaving Core 1 entirely to FastLED

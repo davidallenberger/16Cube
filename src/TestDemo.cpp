@@ -57,12 +57,12 @@ namespace {
     const uint32_t SPEED_SCENE_BOUNCING_BALL    = (uint32_t)(25 * SCALE_MS);   
     const float    SPEED_SCENE_LAVA_LAMP        = (.125f * SCALE_RATE);
 
-    const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); // 0.85 * 0.5 = 0.425x speed
-    const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); // 200 * 0.5 = 100
-    const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(132 * SCALE_RATE);  // 132 * 0.5 = 64
-    const uint8_t SPEED_SCENE_BPM_CHECKERBOARD = (uint8_t)(64 * SCALE_RATE);  // 64 * 0.5 = 32
-    const uint8_t SPEED_SCENE_COLOR_TWINKLES   = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64
-    const uint8_t SPEED_SCENE_CHUNCHUN         = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64
+    const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); 
+    const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); 
+    const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(132 * SCALE_RATE);  
+    const uint8_t SPEED_SCENE_BPM_CHECKERBOARD = (uint8_t)(64 * SCALE_RATE);  
+    const uint8_t SPEED_SCENE_COLOR_TWINKLES   = (uint8_t)(128 * SCALE_RATE); 
+    const uint8_t SPEED_SCENE_CHUNCHUN         = (uint8_t)(128 * SCALE_RATE); 
     #ifndef HARDWARE_BURNCUBE
         const uint32_t SPEED_TEXT_ICONS         = (uint32_t)(95 * SCALE_MS);  
     #else
@@ -96,15 +96,16 @@ namespace {
         CONCEPT_SCENE_DNA_SPIRAL = 32, CONCEPT_SCENE_DRIFT_ROSE = 33, CONCEPT_SCENE_COLOR_TWINKLES = 34,
         CONCEPT_SCENE_COLORED_BURSTS = 35, CONCEPT_SCENE_CHUNCHUN_SERP = 36, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS = 37,
         CONCEPT_SCENE_BPM_CHECKERBOARD = 38, CONCEPT_SCENE_BOUNCING_BALLS = 39,
+        CONCEPT_SCENE_DRIFT3D = 40, CONCEPT_SCENE_BLACKHOLE = 41,
         // Text & Icons (Shifted down)
-        CONCEPT_SCENE_TEXT_FYB = 40, CONCEPT_SCENE_ICONS_CCW = 41, CONCEPT_SCENE_ICONS_CW = 42, CONCEPT_SCENE_TEXT_PIZZA = 43,
-        CONCEPT_SCENE_TEXT_CUBINA = 44, CONCEPT_SCENE_TEXT_YES = 45, CONCEPT_SCENE_TEXT_YEAH = 46, CONCEPT_SCENE_TEXT_ISRAEL = 47,
+        CONCEPT_SCENE_TEXT_FYB = 42, CONCEPT_SCENE_ICONS_CCW = 43, CONCEPT_SCENE_ICONS_CW = 44, CONCEPT_SCENE_TEXT_PIZZA = 45,
+        CONCEPT_SCENE_TEXT_CUBINA = 46, CONCEPT_SCENE_TEXT_YES = 47, CONCEPT_SCENE_TEXT_YEAH = 48, CONCEPT_SCENE_TEXT_ISRAEL = 49,
         // Games (Shifted down)
-        CONCEPT_SCENE_RUBIKS = 48, CONCEPT_SCENE_TETRIS = 49
+        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 40; 
+    static const int NUM_SCENES = 42; 
     static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
@@ -133,6 +134,7 @@ namespace {
         /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 }, /* Bouncing Ball*/ { true,  1 }, /* Lava Lamp    */ { true,  1 },
         /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Col Twinkles */ { true,  1 }, /* Col Bursts   */ { true,  1 },
         /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Str Bounce   */ { true,  1 },
+        /* Drift 3D     */ { true,  1 }, /* Blackhole    */ { true,  1 },
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { true,  1 }, /* Icons CW     */ { true,  1 },
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Yes     */ { true,  1 },
         /* Text Yeah    */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
@@ -145,6 +147,7 @@ namespace {
         "Random Fall", "Fireworks", "Pipes", "Wild Mouse", "Atom Smasher", "Wobbling Dish", "What The Helix",
         "Flying Box", "Moving Boxes", "Rolling Ball", "Bouncing Ball", "Lava Lamp", "DNA Spiral", "Drift Rose 3D", 
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
+        "Drift 3D", "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Yes", "Text: Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris"
     };
@@ -203,6 +206,7 @@ namespace {
                             (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                             (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
+                            (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
                             (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
         }
 
@@ -251,6 +255,8 @@ namespace {
             else if (concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_CHUNCHUN);
             else if (concept == CONCEPT_SCENE_BPM_CHECKERBOARD) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_BPM_CHECKERBOARD);
             else if (concept == CONCEPT_SCENE_BOUNCING_BALLS) sprintf(speedBuf, "Self-Timed");
+            else if (concept == CONCEPT_SCENE_DRIFT3D) sprintf(speedBuf, "Spd: 32");
+            else if (concept == CONCEPT_SCENE_BLACKHOLE) sprintf(speedBuf, "Self-Timed");
             else if (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TEXT_ISRAEL) sprintf(speedBuf, "%u ms", SPEED_TEXT_ICONS);
             else if (concept == CONCEPT_SCENE_RUBIKS) sprintf(speedBuf, "Self-Timed");
             else if (concept == CONCEPT_SCENE_TETRIS) sprintf(speedBuf, "%lu sec", max((uint32_t)30, durationMs / 1000));
@@ -310,6 +316,8 @@ namespace {
                 case CONCEPT_SCENE_CHUNCHUN_LISSAJOUS: Streamers::animateChunchunVolumetric(durationMs, pal, SPEED_SCENE_CHUNCHUN, 128, CHUNCHUN_LISSAJOUS); break;
                 case CONCEPT_SCENE_BPM_CHECKERBOARD:   Streamers::animateBpmVolumetric(durationMs, pal, SPEED_SCENE_BPM_CHECKERBOARD, BPM_CHECKERBOARD); break;
                 case CONCEPT_SCENE_BOUNCING_BALLS:    Streamers::animateBouncingBalls(durationMs, pal); break;
+                case CONCEPT_SCENE_DRIFT3D:        Streamers::animateDrift3D(durationMs, RainbowColors_p, 32); break;
+                case CONCEPT_SCENE_BLACKHOLE:      Streamers::animateBlackHole(durationMs); break;
 
                 case CONCEPT_SCENE_LAVA_LAMP: {
                     uint8_t lavaR = random8(3);
@@ -600,6 +608,7 @@ namespace TestDemo {
                                  (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                                  (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
+                                 (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
                                  (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 

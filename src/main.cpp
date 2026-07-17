@@ -39,19 +39,17 @@ boolean runOnce = true;
 
 void loop() 
 { 
-
-  //Demo missing drift3d and blackhole XXXX
-  
-// 1. THE CHECKERBOARD PISTON
-// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
-Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
 // 3. THE DRIFT ROSE MANDALA
 // 10 Seconds. Default WLED speed (128). Rainbow default.
 // A symmetrical 3D sea urchin that continuously blooms outward from its 
 // core as the harmonic frequencies of the spokes intersect.
+Serial.println("no stretch");
+Streamers::animateDriftRose3D(10000, RainbowColors_p, false);
+Serial.println("stretch & 200");
 Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
-
 return;
+
+
     // 2. THE LISSAJOUS WEAVE (The Rubber Band)
 // 10 Seconds. Gap size 128 (Mid). 
 // The flock strings out beautifully into a long, twisting ribbon 
@@ -59,8 +57,7 @@ return;
 Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
 //Streamers::animateLissajous3D(10000, PartyColors_p, 128);
 return;
-CubeSystem::loop();
-  return;
+
 /*
 Streamers::animateTartan3D(10000, PartyColors_p, 128); // High-contrast neon threads weaving a 3D plaid at standard speed
 Streamers::animateTartan3D(10000, OceanColors_p, 64); // Slower, moody deep-sea woven intersecting laser grid
@@ -88,6 +85,9 @@ Streamers::animateChartExtruded(10000, Streamers::RATIO_5_3, 2, ForestColors_p);
 
   */
   
+// 1. THE CHECKERBOARD PISTON
+// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
+Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
 
 
 // 2. THE PARTY VORTEX

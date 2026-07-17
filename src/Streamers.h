@@ -1233,69 +1233,90 @@ class Streamers {
         }
     }
     
-    //This is an intensity sign wave that is spatially mapped to the 3D volume of the cube. It is a true FastLED BPM effect, but with a spatial twist. The effect can be configured to use different spatial modes, such as checkerboard, sphere, diagonal, or helix. The speed of the effect can be adjusted using the effectSpeed parameter, which maps to a BPM range of 10 to 120. The palette can also be customized to create different color effects.
     static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        
         // Map the 0-255 speed parameter to a usable FastLED BPM range (10 to 120 BPM)
         uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
         
-        // Pre-calculate physical constants so we don't do it 4,096 times per frame
+        // -------------------------------------------------------------------------
+        // 1. THE PRE-COMPUTATION ENGINE
+        // Allocate a phase map on the heap. We calculate the heavy math exactly 
+        // once per voxel and store it, stripping all floats from the render loop.
+        // -------------------------------------------------------------------------
+        uint32_t totalVoxels = RNDR_X * RNDR_Y * RNDR_Z;
+        uint8_t* phaseMap = (uint8_t*)malloc(totalVoxels);
+        if (!phaseMap) return; // Failsafe
+        
         float cx = RNDR_CX;
         float cy = RNDR_CY;
         float cz = RNDR_CZ;
         float maxDist = sqrtf(cx*cx + cy*cy + cz*cz);
-        if (maxDist < 1.0f) maxDist = 1.0f; // Prevent divide-by-zero on tiny matrices
+        if (maxDist < 1.0f) maxDist = 1.0f; 
         
         uint8_t zStep = 256 / RNDR_Z;
         uint8_t diagStep = 256 / (RNDR_X + RNDR_Y + RNDR_Z);
+
+        uint32_t idx = 0;
+        for (uint8_t z = 0; z < RNDR_Z; z++) {
+            for (uint8_t y = 0; y < RNDR_Y; y++) {
+                for (uint8_t x = 0; x < RNDR_X; x++) {
+                    uint8_t spatialPhase = 0;
+                    
+                    if (mode == BPM_CHECKERBOARD) {
+                        bool isEven = ((x + y) % 2 == 0);
+                        spatialPhase = isEven ? (z * zStep) : (256 - (z * zStep));
+                    } 
+                    else if (mode == BPM_SPHERE) {
+                        float dx = (float)x - cx; 
+                        float dy = (float)y - cy; 
+                        float dz = (float)z - cz;
+                        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+                        spatialPhase = (uint8_t)((dist / maxDist) * 255.0f);
+                    }
+                    else if (mode == BPM_DIAGONAL) {
+                        spatialPhase = (uint8_t)((x + y + z) * diagStep);
+                    }
+                    else if (mode == BPM_HELIX) {
+                        float angle = atan2f((float)y - cy, (float)x - cx);
+                        uint8_t anglePhase = (uint8_t)((angle + 3.14159f) * 40.74f); 
+                        spatialPhase = anglePhase + (z * zStep);
+                    }
+                    
+                    phaseMap[idx++] = spatialPhase;
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // 2. THE RENDER ENGINE
+        // -------------------------------------------------------------------------
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
 
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();
             if (now - lastFrame == 0) { yield(); continue; }
             lastFrame = now;
 
-            // 1. THE TIME ENGINE
             uint8_t beat = beatsin8(bpm, 64, 255);
             uint8_t timeBase = now / 15; 
 
+            idx = 0; // Reset lookup index for the new frame
+            
             for (uint8_t z = 0; z < RNDR_Z; z++) {
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
                     for (uint8_t x = 0; x < RNDR_X; x++) {
                         
-                        // 2. THE GEOMETRIC PHASE MAPPER
-                        uint8_t spatialPhase = 0;
+                        // O(1) Memory Lookup replaces branching and float math
+                        uint8_t spatialPhase = phaseMap[idx++];
                         
-                        if (mode == BPM_CHECKERBOARD) {
-                            bool isEven = ((x + y) % 2 == 0);
-                            spatialPhase = isEven ? (z * zStep) : (256 - (z * zStep));
-                        } 
-                        else if (mode == BPM_SPHERE) {
-                            float dx = (float)x - cx; 
-                            float dy = (float)y - cy; 
-                            float dz = (float)z - cz;
-                            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
-                            spatialPhase = (uint8_t)((dist / maxDist) * 255.0f);
-                        }
-                        else if (mode == BPM_DIAGONAL) {
-                            spatialPhase = (uint8_t)((x + y + z) * diagStep);
-                        }
-                        else if (mode == BPM_HELIX) {
-                            // atan2f returns -PI to PI. We shift it to 0->2PI, then map to 0-255.
-                            float angle = atan2f((float)y - cy, (float)x - cx);
-                            uint8_t anglePhase = (uint8_t)((angle + 3.14159f) * 40.74f); 
-                            spatialPhase = anglePhase + (z * zStep);
-                        }
-
-                        // 3. TRUE FASTLED BPM MATH
+                        // TRUE FASTLED BPM MATH
                         uint8_t brightness = beat - timeBase + spatialPhase;
                         
                         // Deepen the voids and sharpen the peaks
                         brightness = qsub8(brightness, 32);     
                         brightness = qadd8(brightness, brightness); 
                         
-                        // Map the palette color (offsetting the spatial phase so colors twist/expand)
+                        // Map the palette color
                         uint8_t colorIndex = timeBase + (spatialPhase / 2);
                         
                         CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
@@ -1306,8 +1327,10 @@ class Streamers {
             showCube();
             yield();
         }
+        
+        // Free the dynamically allocated buffer before exiting
+        free(phaseMap); 
     }
-
    
     static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
         uint32_t startTime = millis();
@@ -1833,37 +1856,53 @@ class Streamers {
             showCube();
         }
     }
-
-    // ==========================================
+// ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
-    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, bool stretch = true) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
 
-        // 80 float operations happens exactly once at startup, zero runtime cost
         const int NUM_SPOKES = (RNDR_X > 8) ? 80 : 36;
-        static float spokeX[90], spokeY[90], spokeZ[90];
-        static bool initRose = false;
         
-        if (!initRose) {
+        // Use fixed-point integers instead of floats to completely bypass the FPU
+        static int32_t spokeX_fp[90], spokeY_fp[90], spokeZ_fp[90];
+        static bool initRose = false;
+        static bool lastStretch = !stretch; // Force initialization on first run
+        
+        // 1. THE PRE-COMPUTATION ENGINE
+        // We only recalculate the geometry if the system reboots or the stretch flag changes
+        if (!initRose || stretch != lastStretch) {
             float goldenRatio = (1.0f + sqrtf(5.0f)) / 2.0f;
             float angleInc = TWO_PI * goldenRatio;
+            
+            float maxR_XY = min(RNDR_X, RNDR_Y) / 2.0f;
+            float maxR_Z  = stretch ? (RNDR_Z / 2.0f) : min(maxR_XY, RNDR_Z / 2.0f);
+            if (maxR_XY < 1.0f) maxR_XY = 1.0f;
+            if (maxR_Z < 1.0f) maxR_Z = 1.0f;
+
             for (int i = 0; i < NUM_SPOKES; i++) {
                 float t = (float)i / (float)NUM_SPOKES;
                 float phi = acosf(1.0f - 2.0f * t);
                 float theta = angleInc * i;
-                spokeX[i] = sinf(phi) * cosf(theta);
-                spokeY[i] = sinf(phi) * sinf(theta);
-                spokeZ[i] = cosf(phi);
+                
+                // Bake the radius and the 256x sub-pixel multiplier directly into the lookup table
+                spokeX_fp[i] = (int32_t)(sinf(phi) * cosf(theta) * maxR_XY * 256.0f);
+                spokeY_fp[i] = (int32_t)(sinf(phi) * sinf(theta) * maxR_XY * 256.0f);
+                spokeZ_fp[i] = (int32_t)(cosf(phi) * maxR_Z * 256.0f);
             }
             initRose = true;
+            lastStretch = stretch;
         }
 
-        float maxR = min(RNDR_X, min(RNDR_Y, RNDR_Z)) / 2.0f;
-        if (maxR < 1.0f) maxR = 1.0f;
         uint8_t fadeAmt = 32 + (effectSpeed >> 3);
+        
+        // Pre-compute center positions in fixed-point
+        int32_t cx_fp = (int32_t)(RNDR_CX * 256.0f);
+        int32_t cy_fp = (int32_t)(RNDR_CY * 256.0f);
+        int32_t cz_fp = (int32_t)(RNDR_CZ * 256.0f);
 
+        // 2. THE RENDER ENGINE
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();
             if (now - lastFrame < 15) { yield(); continue; }
@@ -1883,14 +1922,17 @@ class Streamers {
             yield();
 
             for (int i = 0; i < NUM_SPOKES; i++) {
-                
                 uint8_t spokeBpm = min(i + 1, 255); 
-                float r = (beatsin16(spokeBpm, 0, 65535) / 32768.0f - 1.0f) * maxR;
+                
+                // 3. ZERO-FLOAT KINEMATICS
+                // beatsin16 returns 0 to 65535. Subtracting 32768 maps it to a signed INT (-32768 to 32767).
+                int32_t r_scalar = (int32_t)beatsin16(spokeBpm, 0, 65535) - 32768;
 
-                // 80 calculations per frame is invisible to the ESP32 CPU
-                int32_t px_fp = (int32_t)((RNDR_CX + spokeX[i] * r) * 256.0f);
-                int32_t py_fp = (int32_t)((RNDR_CY + spokeY[i] * r) * 256.0f);
-                int32_t pz_fp = (int32_t)((RNDR_CZ + spokeZ[i] * r) * 256.0f);
+                // Multiply the pre-scaled vector by the scalar, then bitshift right by 15 (which perfectly divides by 32768).
+                // This flawlessly scales the geometry from -1.0 to 1.0 using pure integer math.
+                int32_t px_fp = cx_fp + ((spokeX_fp[i] * r_scalar) >> 15);
+                int32_t py_fp = cy_fp + ((spokeY_fp[i] * r_scalar) >> 15);
+                int32_t pz_fp = cz_fp + ((spokeZ_fp[i] * r_scalar) >> 15);
 
                 uint8_t colorIndex = i * (256 / NUM_SPOKES);
                 CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
@@ -1901,6 +1943,7 @@ class Streamers {
             showCube();
         }
     }
+    
 
     /*
  // The literal ratios from the left axis of your chart
