@@ -1327,7 +1327,11 @@ class Streamers {
                     for (uint8_t z = 0; z < RNDR_Z; z++) {
                         CRGB c = getVoxel(x, y, z);
                         if (c) { 
-                            c.nscale8(180); 
+                            if (mode == CHUNCHUN_SERPENTINE) {
+                                c.nscale8(180); 
+                            } else {
+                                c.nscale8(220); 
+                            }
                             setVoxel(x, y, z, c); 
                         }
                     }
@@ -1897,4 +1901,269 @@ class Streamers {
             showCube();
         }
     }
+
+    /*
+ // The literal ratios from the left axis of your chart
+    enum LissajousRatio {
+        RATIO_1_1, RATIO_2_1, RATIO_3_1, RATIO_3_2, 
+        RATIO_4_3, RATIO_5_3, RATIO_5_4
+    };
+
+    // Passes strictly the Ratio and K, draws a solid line, extrudes natively on Z, 4-way Radial Symmetry
+    static void animateChartExtruded(uint32_t durationMs, LissajousRatio ratio, uint8_t k, CRGBPalette16 pal = RainbowColors_p) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+
+        // 1. Look up the exact frequencies from the requested chart ratio
+        float nx = 1.0f, ny = 1.0f;
+        switch(ratio) {
+            case RATIO_1_1: nx = 1.0f; ny = 1.0f; break;
+            case RATIO_2_1: nx = 2.0f; ny = 1.0f; break;
+            case RATIO_3_1: nx = 3.0f; ny = 1.0f; break;
+            case RATIO_3_2: nx = 3.0f; ny = 2.0f; break;
+            case RATIO_4_3: nx = 4.0f; ny = 3.0f; break;
+            case RATIO_5_3: nx = 5.0f; ny = 3.0f; break;
+            case RATIO_5_4: nx = 5.0f; ny = 4.0f; break;
+        }
+
+        // 2. Convert 'k' (0-7) directly to a phase shift in radians
+        float phaseX = k * (PI / 4.0f);
+
+        // 3. Chunchun's Z Extrusion
+        float nz = 1.0f; 
+
+        // Center points and stretching radii
+        float cx = (RNDR_X - 1) / 2.0f;
+        float cy = (RNDR_Y - 1) / 2.0f;
+        float cz = (RNDR_Z - 1) / 2.0f;
+
+        // 800 points guarantees a solid, unbroken trace even on 4 strands
+        const int numPoints = 800; 
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame < 15) { yield(); continue; } // Cap at ~60fps
+            lastFrame = now;
+
+            clearAll();
+            
+            // Shift this over time to make the texture "flow" along the solid wires
+            uint8_t colorShift = (now / 15) & 0xFF; 
+
+            for (int i = 0; i < numPoints; i++) {
+                // Map 'i' to a full 0 to 2*PI mathematical circle
+                float t = (i / (float)numPoints) * TWO_PI;
+
+                // Calculate the base string ONCE (saves massive CPU)
+                float bx = sinf(nx * t + phaseX);
+                float by = sinf(ny * t);
+                float bz = sinf(nz * t);
+
+                // Color mapping
+                uint8_t knotPosition = (i * 255) / numPoints;
+                CRGB newColor = ColorFromPalette(pal, knotPosition + colorShift, 255, LINEARBLEND);
+
+                // 4-WAY RADIAL SYMMETRY MULTIPLEXER
+                for (int rot = 0; rot < 4; rot++) {
+                    float rotX, rotY;
+                    
+                    // Instant 90-degree rotations using coordinate swapping
+                    if (rot == 0)      { rotX = bx;   rotY = by; }   // 0 degrees
+                    else if (rot == 1) { rotX = -by;  rotY = bx; }   // 90 degrees
+                    else if (rot == 2) { rotX = -bx;  rotY = -by; }  // 180 degrees
+                    else               { rotX = by;   rotY = -bx; }  // 270 degrees
+
+                    // STRETCH TO HARDWARE BOUNDS
+                    int px = constrain((int)roundf(cx + rotX * cx), 0, RNDR_X - 1);
+                    int py = constrain((int)roundf(cy + rotY * cy), 0, RNDR_Y - 1);
+                    int pz = constrain((int)roundf(cz + bz * cz), 0, RNDR_Z - 1);
+                    
+                    // Additive blending: The core and the face intersections will glow brightly!
+                    CRGB existing = getVoxel(px, py, pz);
+                    setVoxel(px, py, pz, existing | newColor);
+                }
+            }
+            showCube();
+        }
+    }*/
+    /*
+    static void animateTartan3D(uint32_t durationMs, CRGBPalette16 pal = PartyColors_p, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        // Translate WLED speed into a discrete stepping interval
+        // A speed of 128 gives ~330ms per step, creating a deliberate, gentle geometric shift
+        uint32_t stepInterval = map(effectSpeed, 0, 255, 600, 60); 
+
+        // Pre-allocate our Boolean gap arrays to keep the inner loop lightning fast
+        bool gapX[RNDR_X], gapY[RNDR_Y], gapZ[RNDR_Z];
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis(); 
+            if (now - lastFrame < 15) { yield(); continue; } 
+            lastFrame = now;
+
+            // DISCRETE STEPPING: The lattice sits perfectly still until this ticks over
+            uint32_t ticks = now / stepInterval;
+            
+            // Offset the gaps to make the empty tunnels "step" through the room.
+            // Dividing ticks makes the axes weave at different speeds.
+            int offsetX = ticks % 4;
+            int offsetY = (ticks / 2) % 4;
+            int offsetZ = (ticks / 3) % 4; 
+
+            // HOISTED: A voxel is in a "gap band" if it falls in the second half of a 4-voxel cycle (2 ON, 2 OFF)
+            for (int x = 0; x < RNDR_X; x++) gapX[x] = ((x + offsetX) % 4) >= 2;
+            for (int y = 0; y < RNDR_Y; y++) gapY[y] = ((y + offsetY) % 4) >= 2;
+            for (int z = 0; z < RNDR_Z; z++) gapZ[z] = ((z + offsetZ) % 4) >= 2;
+
+            uint8_t colorShift = (ticks * 4) & 0xFF;
+
+            // INNER LOOP: Boolean scaffolding logic
+            for (int z = 0; z < RNDR_Z; z++) {
+                for (int y = 0; y < RNDR_Y; y++) {
+                    for (int x = 0; x < RNDR_X; x++) {
+                        
+                        // Count how many "gap bands" intersect at this exact voxel
+                        uint8_t numGaps = gapX[x] + gapY[y] + gapZ[z];
+                        
+                        // IF 2 OR 3 GAPS INTERSECT: It creates a hollow 2x2 tunnel passing entirely through the structure
+                        if (numGaps >= 2) {
+                            setVoxel(x, y, z, CRGB::Black); 
+                        } 
+                        // IF 0 OR 1 GAPS INTERSECT: It forms the solid physical lattice (beams and pillars)
+                        else {
+                            uint8_t hue;
+                            // Color the lattice based on its structural role to mimic woven threads
+                            if (numGaps == 0) hue = (x * 8 + y * 8 + z * 8); // Corner Pillar (Intersection of walls)
+                            else if (gapX[x]) hue = (y * 16 + z * 16) + 40;  // X-Beam (Running through X-gap)
+                            else if (gapY[y]) hue = (x * 16 + z * 16) + 80;  // Y-Beam (Running through Y-gap)
+                            else              hue = (x * 16 + y * 16) + 120; // Z-Beam (Running through Z-gap)
+
+                            // NOBLEND forces razor-sharp edges with no fuzzy math
+                            setVoxel(x, y, z, ColorFromPalette(pal, hue + colorShift, 255, NOBLEND));
+                        }
+                    }
+                }
+            }
+            showCube();
+        }
+    }
+    static void animateWavingCell3D(uint32_t durationMs, CRGBPalette16 pal = PartyColors_p, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        uint32_t t = 0;
+
+        uint8_t aX = 12, aY = 15, aZ = 18; 
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; } lastFrame = now;
+
+            t += (deltaMs * (effectSpeed + 1)) >> 6;
+            uint8_t t8 = t & 0xFF;
+
+            for (int z = 0; z < RNDR_Z; z++) {
+                // HOISTED: Z math only runs up to 16 times per frame
+                uint8_t waveZ = sin8((z * aZ) + t8);
+                uint8_t cosZ = cos8(z * aZ); 
+                
+                for (int y = 0; y < RNDR_Y; y++) {
+                    // HOISTED: Y math only runs up to 256 times per frame
+                    uint8_t waveY = sin8((y * aY) + waveZ);
+                    uint8_t cosYZ = cosZ + cos8(y * aY); 
+                    
+                    for (int x = 0; x < RNDR_X; x++) {
+                        // INNER LOOP: Only the X math runs 4096 times
+                        uint8_t wave = sin8((x * aX) + waveY) + cosYZ + cos8(x * aX);
+                        uint8_t colorIndex = wave + (t >> 2);
+                        uint8_t brightness = qadd8(wave, 64);
+                        
+                        setVoxel(x, y, z, ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND));
+                    }
+                }
+            }
+            showCube();
+        }
+    }
+
+static void animateSoapFilm3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis(), lastFrame = millis(), noiseTime = 0;
+        uint16_t scale = 1200; 
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; } lastFrame = now;
+
+            noiseTime += (deltaMs * effectSpeed) / 4;
+
+            for (int z = 0; z < RNDR_Z; z++) {
+                uint32_t zScale = z * scale;
+                for (int y = 0; y < RNDR_Y; y++) {
+                    uint32_t yScale = y * scale;
+                    for (int x = 0; x < RNDR_X; x++) {
+                        uint32_t xScale = x * scale;
+                        
+                        // Domain warping
+                        uint16_t warpX = inoise16(xScale, yScale, zScale + noiseTime);
+                        uint16_t warpY = inoise16(xScale + 4000, yScale + 4000, zScale + noiseTime);
+                        uint8_t data = inoise8(xScale + (warpX >> 4), yScale + (warpY >> 4), zScale + (noiseTime >> 2));
+                        
+                        setVoxel(x, y, z, ColorFromPalette(pal, data * 3, 255, LINEARBLEND));
+                    }
+                }
+            }
+            showCube();
+        }
+    }
+
+   
+
+    static void animatePlasmaBall3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis(), lastFrame = millis(), noiseTime = 0, colorTime = 0;
+        
+        float baseRadius = (RNDR_X / 2.0f) - 1.5f;
+        float maxDisplacement = 1.5f;
+        float maxAllowedRadSq = (baseRadius + maxDisplacement) * (baseRadius + maxDisplacement);
+        uint16_t scale = 1500; 
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; } lastFrame = now;
+
+            noiseTime += (deltaMs * effectSpeed) / 4;
+            colorTime += deltaMs / 4; 
+            clearAll();
+
+            for (int z = 0; z < RNDR_Z; z++) {
+                float dz = (float)z - RNDR_CZ; float dzSq = dz * dz;
+                for (int y = 0; y < RNDR_Y; y++) {
+                    float dy = (float)y - RNDR_CY; float dySq = dy * dy;
+                    for (int x = 0; x < RNDR_X; x++) {
+                        float dx = (float)x - RNDR_CX; 
+                        float distSq = dx * dx + dySq + dzSq;
+
+                        // SDF CULLING: Skip the expensive math if we are outside the bounds of the bubble!
+                        if (distSq > maxAllowedRadSq) continue; 
+
+                        // ONLY run the expensive sqrt and noise if the voxel survived the cull
+                        float dist = sqrtf(distSq);
+                        uint8_t noiseVal = inoise8(x * scale, y * scale, z * scale + noiseTime);
+                        float displacement = ((noiseVal / 255.0f) * (maxDisplacement * 2.0f)) - maxDisplacement;
+                        float localRadius = baseRadius + displacement;
+
+                        if (dist < localRadius) {
+                            float depth = dist / localRadius;
+                            uint8_t hue = (colorTime & 0xFF) + (uint8_t)(depth * 64.0f);
+                            CRGB finalColor = ColorFromPalette(pal, hue, 255, LINEARBLEND);
+                            if (depth < 0.4f) finalColor |= CRGB(150, 150, 150); // White hot core
+                            setVoxel(x, y, z, finalColor);
+                        }
+                    }
+                }
+            }
+            showCube();
+        }
+    }
+*/
 };

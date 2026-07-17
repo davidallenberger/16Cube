@@ -137,10 +137,21 @@ void Breakout2d::handleInput(GamepadState pad) {
 
     float moveSpeed = 0.4f;
     float ax = -(pad.axisX / 512.0f);
+    
+    bool rightPressed = pad.dpad & DPAD_RIGHT;
+    bool leftPressed  = pad.dpad & DPAD_LEFT;
+
+#ifdef HARDWARE_BURNCUBE
+    // Flip the X-axis polarity for the Burn Cube's mirrored face
+    ax = -ax; 
+    bool temp = rightPressed;
+    rightPressed = leftPressed;
+    leftPressed = temp;
+#endif
 
     if (abs(ax) > 0.2f) paddleX += ax * moveSpeed;
-    if (pad.dpad & DPAD_RIGHT) paddleX -= moveSpeed; 
-    if (pad.dpad & DPAD_LEFT)  paddleX += moveSpeed; 
+    if (rightPressed) paddleX -= moveSpeed; 
+    if (leftPressed)  paddleX += moveSpeed; 
 
     if (paddleX < 0.0f) paddleX = 0.0f;
     if (paddleX > RNDR_X - 3.0f) paddleX = RNDR_X - 3.0f;
@@ -148,8 +159,8 @@ void Breakout2d::handleInput(GamepadState pad) {
     if (ballInPlay && currentMode == MODE2D_OVERDRIVE) {
         if (velZ > 0.0f) {
             if (abs(ax) > 0.2f) velX += ax * 0.08f;
-            if (pad.dpad & DPAD_RIGHT) velX -= 0.08f; 
-            if (pad.dpad & DPAD_LEFT) velX += 0.08f;  
+            if (rightPressed) velX -= 0.08f; 
+            if (leftPressed) velX += 0.08f;  
             
             if (velX > 0.4f) velX = 0.4f; 
             if (velX < -0.4f) velX = -0.4f;
@@ -382,25 +393,19 @@ void Breakout2d::run() {
 }
 
 void Breakout2d::renderIcon(TextureState& tex) {
-    // Render an ambient mirrored icon
-    auto drawIconFace = [](int yFace) {
-        // 3-wide Green Paddle
-        setVoxel(2, yFace, 0, CRGB::Green);
-        setVoxel(3, yFace, 0, CRGB::Green);
-        setVoxel(4, yFace, 0, CRGB::Green);
-        
-        // White Ball
-        setVoxel(3, yFace, 4, CRGB::White);
-
-        // Brick Stack
-        for (int z = 12; z <= 15; z++) {
-            CRGB layerColor = BRICK_COLORS_2D[z - 12];
-            for (int x = 0; x < RNDR_X; x++) {
-                setVoxel(x, yFace, z, layerColor);
-            }
-        }
-    };
+    // 3-wide Green Paddle
+    drawMirrored(2, 0, CRGB::Green);
+    drawMirrored(3, 0, CRGB::Green);
+    drawMirrored(4, 0, CRGB::Green);
     
-    drawIconFace(0); // Front
-    drawIconFace(7); // Back
+    // White Ball
+    drawMirrored(3, 4, CRGB::White);
+
+    // Brick Stack
+    for (int z = 12; z <= 15; z++) {
+        CRGB layerColor = BRICK_COLORS_2D[z - 12];
+        for (int x = 0; x < RNDR_X; x++) {
+            drawMirrored(x, z, layerColor);
+        }
+    }
 }

@@ -81,15 +81,27 @@ void Snake2d::playGameOver() {
 void Snake2d::handleInput(GamepadState pad) {
     if (!pad.connected) return;
 
+    bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
+    bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
+    bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
+    bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+
+#ifdef HARDWARE_BURNCUBE
+    // Flip the left/right inputs for the mirrored view
+    bool temp = leftPressed;
+    leftPressed = rightPressed;
+    rightPressed = temp;
+#endif
+
     // Up/Down manipulates the Z axis in our 2D grid
-    if (pad.dpad & DPAD_UP || pad.axisY < -200) {
+    if (upPressed) {
         if (dz == 0) { pDx = 0; pDz = 1; }
-    } else if (pad.dpad & DPAD_DOWN || pad.axisY > 200) {
+    } else if (downPressed) {
         if (dz == 0) { pDx = 0; pDz = -1; }
-    } else if (pad.dpad & DPAD_LEFT || pad.axisX < -200) {
-        if (dx == 0) { pDx = 1; pDz = 0; } // FLIPPED X POLARITY
-    } else if (pad.dpad & DPAD_RIGHT || pad.axisX > 200) {
-        if (dx == 0) { pDx = -1; pDz = 0; } // FLIPPED X POLARITY
+    } else if (leftPressed) {
+        if (dx == 0) { pDx = -1; pDz = 0; } // True Left
+    } else if (rightPressed) {
+        if (dx == 0) { pDx = 1; pDz = 0; }  // True Right
     }
 }
 

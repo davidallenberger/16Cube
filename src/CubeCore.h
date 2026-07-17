@@ -14,8 +14,8 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 // ================== ENVIRONMENT SWITCHES ==================
 
 // 1. SELECT YOUR HARDWARE WIRING TOPOLOGY
-#define HARDWARE_BURNCUBE      // The 4-pin Dig-Octa T-Connector layout
-//#define HARDWARE_DESKTOP     // The original 8-pin serpentine test layout
+//#define HARDWARE_BURNCUBE      // The 4-pin Dig-Octa T-Connector layout
+#define HARDWARE_DESKTOP     // The original 8-pin serpentine test layout
 
 // 2. SELECT YOUR RENDER CANVAS - For 8*8*16 uncomment next two lines
 #define TARGET_2026_CUBOID     // 8x8x16 spatial rendering
@@ -24,7 +24,7 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 // Uncomment the line below to completely disable the Bluetooth radio, 
 // pairing menus, and background interrupts. The cube will boot directly 
 // into Ambient Art autonomously.
-//#define DISABLE_BLUETOOTH
+#define DISABLE_BLUETOOTH
 
 // 4. MULTI-THREADING OPTIMIZATION
 // Uncomment to pin the Bluetooth radio to Core 0, leaving Core 1 entirely to FastLED

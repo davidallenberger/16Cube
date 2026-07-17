@@ -39,8 +39,54 @@ boolean runOnce = true;
 
 void loop() 
 { 
-    CubeSystem::loop();
-    return;
+
+  //Demo missing drift3d and blackhole XXXX
+  
+// 1. THE CHECKERBOARD PISTON
+// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
+Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
+// 3. THE DRIFT ROSE MANDALA
+// 10 Seconds. Default WLED speed (128). Rainbow default.
+// A symmetrical 3D sea urchin that continuously blooms outward from its 
+// core as the harmonic frequencies of the spokes intersect.
+Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
+
+return;
+    // 2. THE LISSAJOUS WEAVE (The Rubber Band)
+// 10 Seconds. Gap size 128 (Mid). 
+// The flock strings out beautifully into a long, twisting ribbon 
+// that sweeps the dead center of the room and banks off the walls.
+Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
+//Streamers::animateLissajous3D(10000, PartyColors_p, 128);
+return;
+CubeSystem::loop();
+  return;
+/*
+Streamers::animateTartan3D(10000, PartyColors_p, 128); // High-contrast neon threads weaving a 3D plaid at standard speed
+Streamers::animateTartan3D(10000, OceanColors_p, 64); // Slower, moody deep-sea woven intersecting laser grid
+
+return;
+Streamers::animateWavingCell3D(10000, LavaColors_p, 128); // Searing hot, rapidly pulsing volumetric interference plasma
+Streamers::animateWavingCell3D(10000, RainbowColors_p, 64); // Slower, hypnotic full-spectrum mathematical interference waves
+
+Streamers::animateSoapFilm3D(10000, RainbowColors_p, 128); // Classic oil-slick/soap bubble topological domain warping
+Streamers::animateSoapFilm3D(10000, ForestColors_p, 200); // Fast, churning toxic jungle topological contour lines
+
+Streamers::animateLissajous3D(10000, PartyColors_p, 128); // High-speed single comet blazing a fading orbital knot
+Streamers::animateLissajous3D(10000, LavaColors_p, 64); // Slower, molten 3D thread leaving a thick fiery smear behind it
+
+Streamers::animatePlasmaBall3D(10000, RainbowColors_p, 128); // Classic uniform rainbow boiling plasma sphere with white core
+Streamers::animatePlasmaBall3D(10000, OceanColors_p, 192); // Fast, aggressively boiling deep sea energy core
+
+return;
+  // 1. The 3:2 row, k=2 column (The classic 3-loop crown)
+Streamers::animateChartExtruded(10000, Streamers::RATIO_3_2, 2, RainbowColors_p);
+// 3. The 2:1 row, k=2 column (The infinity symbol)
+Streamers::animateChartExtruded(10000, Streamers::RATIO_4_3, 2, OceanColors_p);
+// 2. The 5:4 row, k=0 column (The dense square web)
+Streamers::animateChartExtruded(10000, Streamers::RATIO_5_3, 2, ForestColors_p);
+
+  */
   
 
 
@@ -48,7 +94,6 @@ void loop()
 // 10 Seconds. Maximum speed (255). PartyColors.
 // High-energy, aggressive twisting that will fill the room with overlapping sweeps.
 Streamers::animateDrift3D(120000, RainbowColors_p, 32);
-
 return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
@@ -115,9 +160,7 @@ Streamers::animateChunchunVolumetric(10000, PartyColors_p, 128, 32, CHUNCHUN_SER
 // that sweeps the dead center of the room and banks off the walls.
 Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
 
-  // 1. THE CHECKERBOARD PISTON
-// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
-Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
+  
 
 
 // 1. THE CLASSIC JUGGLER (Rainbow Default)

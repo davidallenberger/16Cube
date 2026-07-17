@@ -191,11 +191,25 @@ void Tetris::handleInput(GamepadState pad) {
     if (now - lastMoveTime > 150) {
         int8_t dx = 0, dy = 0;
         
-        if (pad.dpad & DPAD_RIGHT || pad.axisX > 200) dx = -1;
-        else if (pad.dpad & DPAD_LEFT || pad.axisX < -200) dx = 1;
+        bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
+        bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
+        bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
+        bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+
+#ifdef HARDWARE_BURNCUBE
+        // 90-degree CW hardware rotation map
+        bool tempUp = upPressed;
+        upPressed = leftPressed;
+        leftPressed = downPressed;
+        downPressed = rightPressed;
+        rightPressed = tempUp;
+#endif
+
+        if (rightPressed) dx = -1;
+        else if (leftPressed) dx = 1;
         
-        if (pad.dpad & DPAD_UP || pad.axisY < -200) dy = 1;
-        else if (pad.dpad & DPAD_DOWN || pad.axisY > 200) dy = -1;
+        if (upPressed) dy = 1;
+        else if (downPressed) dy = -1;
 
         if (dx != 0 || dy != 0) {
             tryMove(dx, dy, 0);
@@ -207,6 +221,7 @@ void Tetris::handleInput(GamepadState pad) {
     if (now - lastInputTime > 200) {
         bool rotated = false;
         
+        // Buttons stay fixed relative to the controller face
         if (pad.x)      rotated = tryRotate(0, true);  
         else if (pad.b) rotated = tryRotate(0, false); 
         else if (pad.y) rotated = tryRotate(2, true);  

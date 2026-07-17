@@ -49,7 +49,7 @@ void Tetris2d::renderIcon(TextureState& tex) {
 // =========================================================================
 //                  THE MULTI-SURFACE PROJECTION ENGINE
 // =========================================================================
-void Tetris2d::setMirroredVoxel(int lx, int ly, CRGB color) {
+void Tetris2d::drawMirrored(int lx, int ly, CRGB color) {
     if(lx < 0 || lx >= 8 || ly < 0 || ly >= 16) return;
     
     #ifdef HARDWARE_BURNCUBE
@@ -73,7 +73,7 @@ void Tetris2d::drawBoard() {
     for (int x = 0; x < 8; x++) {
         for (int y = 0; y < 16; y++) {
             if (board[x][y]) {
-                setMirroredVoxel(x, y, board[x][y]);
+                drawMirrored(x, y, board[x][y]);
             }
         }
     }
@@ -94,9 +94,9 @@ void Tetris2d::drawPiece() {
         for (int c = 0; c < 4; c++) {
             if (activeMatrix[r][c]) {
                 // Draw Ghost
-                setMirroredVoxel(pieceX + c, ghostY - r, ghostColor);
+                drawMirrored(pieceX + c, ghostY - r, ghostColor);
                 // Draw Real
-                setMirroredVoxel(pieceX + c, pieceY - r, pieceColor);
+                drawMirrored(pieceX + c, pieceY - r, pieceColor);
             }
         }
     }
@@ -215,9 +215,9 @@ void Tetris2d::checkLines() {
 
 void Tetris2d::animateClearLine(uint8_t line) {
     for(int flash = 0; flash < 3; flash++) {
-        for(int x = 0; x < 8; x++) setMirroredVoxel(x, line, CRGB::White);
+        for(int x = 0; x < 8; x++) drawMirrored(x, line, CRGB::White);
         showCube(); delay(50);
-        for(int x = 0; x < 8; x++) setMirroredVoxel(x, line, CRGB::Black);
+        for(int x = 0; x < 8; x++) drawMirrored(x, line, CRGB::Black);
         showCube(); delay(50);
     }
 }
@@ -225,7 +225,7 @@ void Tetris2d::animateClearLine(uint8_t line) {
 void Tetris2d::animateGameOver() {
     for (int y = 0; y < 16; y++) {
         for (int x = 0; x < 8; x++) {
-            if (board[x][y]) setMirroredVoxel(x, y, CRGB::Red);
+            if (board[x][y]) drawMirrored(x, y, CRGB::Red);
         }
         showCube(); delay(20);
     }
@@ -240,8 +240,17 @@ void Tetris2d::handleInput(GamepadState pad) {
     if (now - lastMoveTime > 150) {
         int8_t dx = 0;
         
-        if (pad.dpad & DPAD_RIGHT || pad.axisX > 200) dx = -1;
-        else if (pad.dpad & DPAD_LEFT || pad.axisX < -200) dx = 1;
+        bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+        bool leftPressed  = pad.dpad & DPAD_LEFT || pad.axisX < -200;
+
+#ifdef HARDWARE_BURNCUBE
+        if (rightPressed) dx = 1;
+        else if (leftPressed) dx = -1;
+#else
+        // Maintain the original mirrored math for the Desktop cube
+        if (rightPressed) dx = -1;
+        else if (leftPressed) dx = 1;
+#endif
 
         if (dx != 0) {
             tryMove(dx, 0);

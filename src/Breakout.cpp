@@ -161,6 +161,13 @@ void Breakout::handleInput(GamepadState pad) {
     float ax = -(pad.axisX / 512.0f);
     float ay = -(pad.axisY / 512.0f);
 
+#ifdef HARDWARE_BURNCUBE
+    // Apply a 90-degree clockwise rotation to the joystick floats
+    float tempAx = ax;
+    ax = -ay;
+    ay = tempAx;
+#endif
+
     if (abs(ax) > 0.2f) paddleX += ax * moveSpeed;
     if (abs(ay) > 0.2f) paddleY += ay * moveSpeed;
 

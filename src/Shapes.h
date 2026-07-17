@@ -438,6 +438,15 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
         
         const float SYSTEM_ENERGY = 1.35f; 
         
+        // 1. THE LINEAR ADAPTATION
+        // Calculate the ratio based on your 15-second baseline
+        float durationRatio = (float)durationMs / 15000.0f;
+        
+        // If 15s (Ratio 1.0), multiplier is exactly 1.0f (Current behavior)
+        // If 30s (Ratio 2.0), multiplier is 1.015f (Adds 1.5% energy per bounce)
+        // Calculated exactly once at setup. Zero CPU cost.
+        float bounceMultiplier = 1.0f + (0.015f * (durationRatio - 1.0f));
+        
         // Hardcode a 5-voxel diameter (2.5 radius) for both architectures
         float radius = 2.5f; 
         
@@ -509,7 +518,11 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
                 else if (balls[i].py > RNDR_Y - 1 - radius) { balls[i].py = RNDR_Y - 1 - radius; balls[i].vy = -balls[i].vy; }
 
                 if (balls[i].pz < radius) {
-                    balls[i].pz = radius; balls[i].vz = -balls[i].vz; 
+                    balls[i].pz = radius; 
+                    
+                    // 2. APPLY THE LINEAR MULTIPLIER
+                    balls[i].vz = -balls[i].vz * bounceMultiplier; 
+                    
                     balls[i].vx += ((random8(15) / 10.0f) - 0.7f) * SYSTEM_ENERGY; 
                     balls[i].vy += ((random8(15) / 10.0f) - 0.7f) * SYSTEM_ENERGY;
                     
@@ -518,7 +531,10 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
                     if (balls[i].vy > maxLateralSpeed) balls[i].vy = maxLateralSpeed;
                     if (balls[i].vy < -maxLateralSpeed) balls[i].vy = -maxLateralSpeed;
                 } else if (balls[i].pz > maxZ) {
-                    balls[i].pz = maxZ; balls[i].vz = -balls[i].vz; 
+                    balls[i].pz = maxZ; 
+                    
+                    // Ceiling collisions also benefit from the adaptation to prevent trapping
+                    balls[i].vz = -balls[i].vz * bounceMultiplier; 
                 }
 
                 // Visual Rotation

@@ -71,14 +71,28 @@ void Snake::playGameOver() {
 void Snake::handleInput(GamepadState pad) {
     if (!pad.connected) return;
 
+    bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
+    bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
+    bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
+    bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+
+#ifdef HARDWARE_BURNCUBE
+    // 90-degree CW hardware rotation map
+    bool tempUp = upPressed;
+    upPressed = leftPressed;
+    leftPressed = downPressed;
+    downPressed = rightPressed;
+    rightPressed = tempUp;
+#endif
+
     // X / Y Axis Navigation (D-Pad or Left Stick)
-    if (pad.dpad & DPAD_UP || pad.axisY < -200) {
+    if (upPressed) {
         if (dy == 0) { pDx = 0; pDy = 1; pDz = 0; }
-    } else if (pad.dpad & DPAD_DOWN || pad.axisY > 200) {
+    } else if (downPressed) {
         if (dy == 0) { pDx = 0; pDy = -1; pDz = 0; }
-    } else if (pad.dpad & DPAD_LEFT || pad.axisX < -200) {
+    } else if (leftPressed) {
         if (dx == 0) { pDx = 1; pDy = 0; pDz = 0; } // FLIPPED X POLARITY
-    } else if (pad.dpad & DPAD_RIGHT || pad.axisX > 200) {
+    } else if (rightPressed) {
         if (dx == 0) { pDx = -1; pDy = 0; pDz = 0; } // FLIPPED X POLARITY
     }
     
@@ -89,7 +103,6 @@ void Snake::handleInput(GamepadState pad) {
         if (dz == 0) { pDx = 0; pDy = 0; pDz = -1; }
     }
 }
-
 void Snake::updatePhysics() {
     // Lock in the buffered direction
     dx = pDx; dy = pDy; dz = pDz;

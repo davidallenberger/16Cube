@@ -68,7 +68,7 @@ namespace {
 */
     const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); // 0.85 * 0.5 = 0.425x speed
     const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); // 200 * 0.5 = 100
-    const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(96 * SCALE_RATE);  // 96 * 0.5 = 48
+    const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(132 * SCALE_RATE);  // 132 * 0.5 = 64
     const uint8_t SPEED_SCENE_BPM_CHECKERBOARD = (uint8_t)(64 * SCALE_RATE);  // 64 * 0.5 = 32
     const uint8_t SPEED_SCENE_COLOR_TWINKLES   = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64
     const uint8_t SPEED_SCENE_CHUNCHUN         = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64

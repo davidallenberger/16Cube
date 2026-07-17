@@ -40,7 +40,7 @@ private:
     //static void handleInput(ControllerPtr pad);
     void handleInput(GamepadState pad);
     
-    void setMirroredVoxel(int lx, int ly, CRGB color);
+    void drawMirrored(int lx, int ly, CRGB color);
     void drawBoard();
     void drawPiece();
     

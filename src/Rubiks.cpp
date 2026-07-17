@@ -526,14 +526,28 @@ void Rubiks::run() {
         GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
         GamepadState activePad = p1.connected ? p1 : p2;
 
-        if (activePad.connected && millis() - lastInputTime > 200) {
+       if (activePad.connected && millis() - lastInputTime > 200) {
             bool moved = false;
             
-            if (activePad.dpad & DPAD_RIGHT || activePad.axisX > 200) {
+            bool upPressed    = activePad.dpad & DPAD_UP    || activePad.axisY < -200;
+            bool downPressed  = activePad.dpad & DPAD_DOWN  || activePad.axisY > 200;
+            bool leftPressed  = activePad.dpad & DPAD_LEFT  || activePad.axisX < -200;
+            bool rightPressed = activePad.dpad & DPAD_RIGHT || activePad.axisX > 200;
+
+        #ifdef HARDWARE_BURNCUBE
+            // 90-degree CW hardware rotation map
+            bool tempUp = upPressed;
+            upPressed = leftPressed;
+            leftPressed = downPressed;
+            downPressed = rightPressed;
+            rightPressed = tempUp;
+        #endif
+
+            if (rightPressed) {
                 currentAxis = static_cast<SelAxis>((currentAxis + 1) % 3);
                 currentSlice = 0; 
                 moved = true;
-            } else if (activePad.dpad & DPAD_LEFT || activePad.axisX < -200) {
+            } else if (leftPressed) {
                 currentAxis = static_cast<SelAxis>((currentAxis + 2) % 3);
                 currentSlice = 0;
                 moved = true;
@@ -544,10 +558,10 @@ void Rubiks::run() {
                 if (currentAxis == AXIS_Z) maxSlices = 5;
             #endif
 
-            if (activePad.dpad & DPAD_UP || activePad.axisY < -200) {
+            if (upPressed) {
                 currentSlice = (currentSlice + 1) % maxSlices;
                 moved = true;
-            } else if (activePad.dpad & DPAD_DOWN || activePad.axisY > 200) {
+            } else if (downPressed) {
                 currentSlice = (currentSlice + maxSlices - 1) % maxSlices;
                 moved = true;
             }

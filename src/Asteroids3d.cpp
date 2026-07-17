@@ -185,12 +185,26 @@ void Asteroids3d::handleInput(GamepadState pad) {
     uint32_t now = millis();
     float dt = 0.016f; // Assumption for input scaling
 
+    bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
+    bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
+    bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
+    bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+
+#ifdef HARDWARE_BURNCUBE
+    // 90-degree CW hardware rotation map (Up->Right, Right->Down, Down->Left, Left->Up)
+    bool tempUp = upPressed;
+    upPressed = leftPressed;
+    leftPressed = downPressed;
+    downPressed = rightPressed;
+    rightPressed = tempUp;
+#endif
+
     // 1. Rotation (Pitch and Yaw via D-Pad / Left Stick)
     float turnSpeed = 3.5f;
-    if (pad.dpad & DPAD_UP || pad.axisY < -200)    pitch -= turnSpeed * dt;
-    if (pad.dpad & DPAD_DOWN || pad.axisY > 200)   pitch += turnSpeed * dt;
-    if (pad.dpad & DPAD_LEFT || pad.axisX < -200)  yaw -= turnSpeed * dt;
-    if (pad.dpad & DPAD_RIGHT || pad.axisX > 200)  yaw += turnSpeed * dt;
+    if (upPressed)    pitch -= turnSpeed * dt;
+    if (downPressed)  pitch += turnSpeed * dt;
+    if (leftPressed)  yaw -= turnSpeed * dt;
+    if (rightPressed) yaw += turnSpeed * dt;
 
     // 2. Shield (Y Button)
     bool wasShieldActive = shieldActive;
