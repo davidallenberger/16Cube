@@ -77,9 +77,20 @@ public:
         
         if (r < 50) { 
             // 50% Chance: Mathematical / Flowing Gradients
-            uint8_t m = random8(3); 
-            plan.sMode = (m == 0) ? MODE_SPATIAL_GRADIENT : ((m == 1) ? MODE_LINEAR_FLOW : MODE_HIPHOTIC); 
-            plan.palette = PartyColors_p; 
+            uint8_t m = random8(4); 
+            if (m == 0) {
+                plan.sMode = MODE_SPATIAL_GRADIENT;
+                plan.palette = PartyColors_p;
+            } else if (m == 1) {
+                plan.sMode = MODE_LINEAR_FLOW;
+                plan.palette = PartyColors_p;
+            } else if (m == 2) {
+                plan.sMode = MODE_HIPHOTIC;
+                plan.palette = PartyColors_p;
+            } else {
+                plan.sMode = MODE_DISTORTION_WAVES;
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+            }
         } 
         else { 
             // 50% Chance: High-Texture Noise & Scatter
@@ -97,14 +108,26 @@ public:
     static TexturePlan getRandomTexturePlan() {
         TexturePlan plan;
         uint8_t r = random8(99);
+        
         if (r < 33) { 
             plan.sMode = MODE_SOLID; 
             plan.palette = CRGBPalette16(CHSV(random8(), 255, 255)); 
         } 
         else if (r < 66) { 
-            uint8_t m = random8(3); 
-            plan.sMode = (m == 0) ? MODE_SPATIAL_GRADIENT : ((m == 1) ? MODE_LINEAR_FLOW : MODE_HIPHOTIC); 
-            plan.palette = PartyColors_p; 
+            uint8_t m = random8(4); 
+            if (m == 0) {
+                plan.sMode = MODE_SPATIAL_GRADIENT;
+                plan.palette = PartyColors_p;
+            } else if (m == 1) {
+                plan.sMode = MODE_LINEAR_FLOW;
+                plan.palette = PartyColors_p;
+            } else if (m == 2) {
+                plan.sMode = MODE_HIPHOTIC;
+                plan.palette = PartyColors_p;
+            } else {
+                plan.sMode = MODE_DISTORTION_WAVES;
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+            }
         } 
         else { 
             if (random8(2) == 0) { 

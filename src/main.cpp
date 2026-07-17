@@ -39,6 +39,11 @@ boolean runOnce = true;
 
 void loop() 
 { 
+    CubeSystem::loop();
+    return;
+  
+
+
 // 2. THE PARTY VORTEX
 // 10 Seconds. Maximum speed (255). PartyColors.
 // High-energy, aggressive twisting that will fill the room with overlapping sweeps.
@@ -154,8 +159,6 @@ Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
 Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
 */
 
-  CubeSystem::loop();
-    return;
   
     //bukkake edit
 

@@ -49,13 +49,21 @@ namespace {
     const float    SPEED_SCENE_RANDOM_FALL      = (0.8f * SCALE_RATE); 
     const uint32_t SPEED_SCENE_PIPES            = (uint32_t)(15 * SCALE_MS);   
     const uint32_t SPEED_SCENE_WILD_MOUSE       = (uint32_t)(25 * SCALE_MS);   
-    const uint32_t SPEED_SCENE_WOBBLING_DISH     = (45.0f * SCALE_RATE);  
+    const uint32_t SPEED_SCENE_WOBBLING_DISH    = (45.0f * SCALE_RATE);  
     const uint32_t SPEED_SCENE_HELIX            = (uint32_t)(50 * SCALE_MS);  
     const uint32_t SPEED_SCENE_FLYING_BOX       = (uint32_t)(25 * SCALE_MS);  
     const uint32_t SPEED_SCENE_MOVING_BOXES     = (uint32_t)(40 * SCALE_MS);  
     const uint32_t SPEED_SCENE_ROLLING_BALL     = (uint32_t)(25 * SCALE_MS);   
     const uint32_t SPEED_SCENE_BOUNCING_BALL    = (uint32_t)(25 * SCALE_MS);   
     const float    SPEED_SCENE_LAVA_LAMP        = (.125f * SCALE_RATE);
+
+    // Engine constants for new volumetric scenes
+    const float    SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE);
+    const uint32_t SPEED_SCENE_DRIFT_ROSE       = (uint32_t)(200 * SCALE_MS);
+    const uint32_t SPEED_SCENE_COLORED_BURSTS   = (uint32_t)(96 * SCALE_MS);
+    const uint32_t SPEED_SCENE_BPM_CHECKERBOARD = (uint32_t)(64 * SCALE_MS);
+    const uint8_t  SPEED_SCENE_COLOR_TWINKLES   = 128; // Raw byte value for WLED math
+    const uint8_t  SPEED_SCENE_CHUNCHUN         = 128; // Raw byte value for volumetric phases
 
     #ifndef HARDWARE_BURNCUBE
         const uint32_t SPEED_TEXT_ICONS         = (uint32_t)(95 * SCALE_MS);  
@@ -86,23 +94,26 @@ namespace {
         CONCEPT_SCENE_TORNADO = 18, CONCEPT_SCENE_HULA = 19, CONCEPT_SCENE_RANDOM_FALL = 20, CONCEPT_SCENE_FIREWORKS = 21,
         CONCEPT_SCENE_PIPES = 22, CONCEPT_SCENE_WILD_MOUSE = 23, CONCEPT_SCENE_ATOM_SMASHER = 24, CONCEPT_SCENE_WOBBLING_DISH = 25,
         CONCEPT_SCENE_HELIX = 26, CONCEPT_SCENE_FLYING_BOX = 27, CONCEPT_SCENE_MOVING_BOXES = 28, CONCEPT_SCENE_ROLLING_BALL = 29,
-        CONCEPT_SCENE_BOUNCING_BALL = 30, CONCEPT_SCENE_LAVA_LAMP = 31, // <-- ADDED HERE
-        // Text & Icons (Shifted down by 1)
-        CONCEPT_SCENE_TEXT_FYB = 32, CONCEPT_SCENE_ICONS_CCW = 33, CONCEPT_SCENE_ICONS_CW = 34, CONCEPT_SCENE_TEXT_PIZZA = 35,
-        CONCEPT_SCENE_TEXT_CUBINA = 36, CONCEPT_SCENE_TEXT_YES = 37, CONCEPT_SCENE_TEXT_YEAH = 38, CONCEPT_SCENE_TEXT_ISRAEL = 39,
-        // Games (Shifted down by 1)
-        CONCEPT_SCENE_RUBIKS = 40, CONCEPT_SCENE_TETRIS = 41
+        CONCEPT_SCENE_BOUNCING_BALL = 30, CONCEPT_SCENE_LAVA_LAMP = 31,
+        CONCEPT_SCENE_DNA_SPIRAL = 32, CONCEPT_SCENE_DRIFT_ROSE = 33, CONCEPT_SCENE_COLOR_TWINKLES = 34,
+        CONCEPT_SCENE_COLORED_BURSTS = 35, CONCEPT_SCENE_CHUNCHUN_SERP = 36, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS = 37,
+        CONCEPT_SCENE_BPM_CHECKERBOARD = 38, CONCEPT_SCENE_BOUNCING_BALLS = 39,
+        // Text & Icons (Shifted down)
+        CONCEPT_SCENE_TEXT_FYB = 40, CONCEPT_SCENE_ICONS_CCW = 41, CONCEPT_SCENE_ICONS_CW = 42, CONCEPT_SCENE_TEXT_PIZZA = 43,
+        CONCEPT_SCENE_TEXT_CUBINA = 44, CONCEPT_SCENE_TEXT_YES = 45, CONCEPT_SCENE_TEXT_YEAH = 46, CONCEPT_SCENE_TEXT_ISRAEL = 47,
+        // Games (Shifted down)
+        CONCEPT_SCENE_RUBIKS = 48, CONCEPT_SCENE_TETRIS = 49
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 32; 
+    static const int NUM_SCENES = 40; 
     static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
     struct SceneRule { bool enabled; uint8_t demoBoost; };
 
     const ShapeRule SHAPE_RULES[] = {
-        /* BOX         */ { true,  6, MASK_STATIC, MASK_SOLID }, 
+        /* BOX         */ { true,  7, MASK_STATIC, MASK_SOLID }, // Boosted to 7 for Distortion Waves Invocation
         /* SPHERE      */ { true,  1, MASK_STATIC | MASK_EXPAND_COLLAPSE, MASK_SOLID  },
         /* OVOID       */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID  },
         /* TETRAHEDRON */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID | MASK_WIREFRAME },
@@ -122,9 +133,11 @@ namespace {
         /* Pipes        */ { true,  1 }, /* Wild Mouse   */ { true,  1 }, /* Atom Smasher */ { true,  1 },
         /* Wobbling Dish*/ { true,  1 }, /* Helix        */ { true,  1 }, /* Flying Box   */ { true,  2 },
         /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 }, /* Bouncing Ball*/ { true,  1 }, /* Lava Lamp    */ { true,  1 },
+        /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Col Twinkles */ { true,  1 }, /* Col Bursts   */ { true,  1 },
+        /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Str Bounce   */ { true,  1 },
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { true,  1 }, /* Icons CW     */ { true,  1 },
-        /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Yes   */ { true,  1 },
-        /* Text Yeah    */ { true,  1 }, /* Text Israel  */ { false,  1 }, /* Rubiks       */ { true,  1 },
+        /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Yes     */ { true,  1 },
+        /* Text Yeah    */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
         /* Tetris       */ { true,  1 }
     };
 
@@ -132,12 +145,14 @@ namespace {
         "Box", "Sphere", "Ovoid", "Tetrahedron", "Octahedron", "Merkaba", "Torus", "Cylinder", "Hemispheres", "Hourglass",
         "Hinge Dance", "Splat", "Bounce", "Saddle", "Sine Wave", "Rain", "Cyclone", "Vert Streamer", "Tornado", "Hula", 
         "Random Fall", "Fireworks", "Pipes", "Wild Mouse", "Atom Smasher", "Wobbling Dish", "What The Helix",
-        "Flying Box", "Moving Boxes", "Rolling Ball", "Bouncing Ball", "Lava Lamp", "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", 
-        "Text: Cubina", "Text: Yes", "Text: Yeah", "Text: Israel", "Rubiks Cube", "Tetris"
+        "Flying Box", "Moving Boxes", "Rolling Ball", "Bouncing Ball", "Lava Lamp", "DNA Spiral", "Drift Rose 3D", 
+        "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
+        "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Yes", "Text: Yeah", "Text: Israel", 
+        "Rubiks Cube", "Tetris"
     };
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
-    static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic"};
+    static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves"};
     static const char* motionNames[] = {"Static", "Expand/Collapse", "Spring", "Tumbling", "Spinning"};
 
     template <typename T>
@@ -189,6 +204,7 @@ namespace {
             isSelfManaged = (concept >= CONCEPT_SCENE_HINGE_DANCE && concept <= CONCEPT_SCENE_BOUNCE) || 
                             (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
+                            (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                             (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
         }
 
@@ -229,11 +245,19 @@ namespace {
             else if (concept == CONCEPT_SCENE_ROLLING_BALL) sprintf(speedBuf, "%u ms", SPEED_SCENE_ROLLING_BALL);
             else if (concept == CONCEPT_SCENE_BOUNCING_BALL) sprintf(speedBuf, "%u ms", SPEED_SCENE_BOUNCING_BALL);
             else if (concept == CONCEPT_SCENE_LAVA_LAMP) sprintf(speedBuf, "%.2fx", SPEED_SCENE_LAVA_LAMP);
+            else if (concept == CONCEPT_SCENE_DNA_SPIRAL) sprintf(speedBuf, "%.2fx", SPEED_SCENE_DNA_SPIRAL);
+            else if (concept == CONCEPT_SCENE_DRIFT_ROSE) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_DRIFT_ROSE);
+            else if (concept == CONCEPT_SCENE_COLOR_TWINKLES) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_COLOR_TWINKLES);
+            else if (concept == CONCEPT_SCENE_COLORED_BURSTS) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_COLORED_BURSTS);
+            else if (concept == CONCEPT_SCENE_CHUNCHUN_SERP) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_CHUNCHUN);
+            else if (concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_CHUNCHUN);
+            else if (concept == CONCEPT_SCENE_BPM_CHECKERBOARD) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_BPM_CHECKERBOARD);
+            else if (concept == CONCEPT_SCENE_BOUNCING_BALLS) sprintf(speedBuf, "Self-Timed");
             else if (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TEXT_ISRAEL) sprintf(speedBuf, "%u ms", SPEED_TEXT_ICONS);
             else if (concept == CONCEPT_SCENE_RUBIKS) sprintf(speedBuf, "Self-Timed");
             else if (concept == CONCEPT_SCENE_TETRIS) sprintf(speedBuf, "%lu sec", max((uint32_t)30, durationMs / 1000));
             
-            Serial.printf("[%02d/%02d] Concept: %02d | Scene: %-15s | Shader: %-16s | Color: %-22s | Speed: %s\n", 
+            Serial.printf("[%02d/%02d] Concept: %02d | Scene: %-17s | Shader: %-16s | Color: %-22s | Speed: %s\n", 
                 currentStep, totalSteps, concept, sceneNames[concept], displayShader, displayColor, speedBuf);
         }
 
@@ -279,7 +303,23 @@ namespace {
                 case CONCEPT_SCENE_MOVING_BOXES:   Shapes::animateMovingBoxes(durationMs, SPEED_SCENE_MOVING_BOXES); break;
                 case CONCEPT_SCENE_ROLLING_BALL:   Shapes::animateRollingBall(durationMs, (RenderMode)(random8(100) < 30 ? RENDER_SHELL : RENDER_SOLID), pal, sModeTracker, SPEED_SCENE_ROLLING_BALL); break;
                 case CONCEPT_SCENE_BOUNCING_BALL:  Shapes::animateBouncingBall(durationMs, SPEED_SCENE_BOUNCING_BALL); break;
-                case CONCEPT_SCENE_LAVA_LAMP:      Streamers::animateLavaLamp(durationMs, SPEED_SCENE_LAVA_LAMP); break;
+                
+                case CONCEPT_SCENE_DNA_SPIRAL:     Streamers::animateDNASpiral(durationMs, RainbowColors_p, SPEED_SCENE_DNA_SPIRAL); break;
+                case CONCEPT_SCENE_DRIFT_ROSE:     Streamers::animateDriftRose3D(durationMs, RainbowColors_p, SPEED_SCENE_DRIFT_ROSE); break;
+                case CONCEPT_SCENE_COLOR_TWINKLES: Streamers::animateColorTwinkles(durationMs, SPEED_SCENE_COLOR_TWINKLES, 128); break;
+                case CONCEPT_SCENE_COLORED_BURSTS: Streamers::animateColoredBursts(durationMs, SPEED_SCENE_COLORED_BURSTS); break;
+                case CONCEPT_SCENE_CHUNCHUN_SERP:  Streamers::animateChunchunVolumetric(durationMs, pal, SPEED_SCENE_CHUNCHUN, 32, CHUNCHUN_SERPENTINE); break;
+                case CONCEPT_SCENE_CHUNCHUN_LISSAJOUS: Streamers::animateChunchunVolumetric(durationMs, pal, SPEED_SCENE_CHUNCHUN, 128, CHUNCHUN_LISSAJOUS); break;
+                case CONCEPT_SCENE_BPM_CHECKERBOARD:   Streamers::animateBpmVolumetric(durationMs, pal, SPEED_SCENE_BPM_CHECKERBOARD, BPM_CHECKERBOARD); break;
+                case CONCEPT_SCENE_BOUNCING_BALLS:    Streamers::animateBouncingBalls(durationMs, pal); break;
+
+                case CONCEPT_SCENE_LAVA_LAMP: {
+                    uint8_t lavaR = random8(3);
+                    if (lavaR == 0) Streamers::animateLavaLamp(durationMs, 1.0f * SCALE_RATE, 0.20f, pal);
+                    else if (lavaR == 1) Streamers::animateLavaLamp(durationMs, 2.5f * SCALE_RATE, 0.10f, pal);
+                    else Streamers::animateLavaLamp(durationMs, 0.3f * SCALE_RATE, 0.20f, pal);
+                    break;
+                }
 
                 // --- BILLBOARD DECK ---
                 case CONCEPT_SCENE_TEXT_FYB: 
@@ -351,9 +391,9 @@ namespace TestDemo {
         */
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 30000;  
+        const uint32_t DURATION_ART_MS       = 10000;  
         const uint32_t DURATION_BILLBOARD_MS = 20000;  
-       
+        
         uint32_t durationMs;
 
 
@@ -495,12 +535,12 @@ namespace TestDemo {
             static const char* boxPaletteNames[5] = {"Rainbow", "Lava", "Forest", "Ocean", "Party"};
             
             if (motion == MOTION_STATIC) {
-                ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC};
+                ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
                 if (shape == SHAPE_BOX) { 
-                    uint8_t step = states[concept].shaderTracker % 6;
+                    uint8_t step = states[concept].shaderTracker % 7; // Expanded to 7
                     sModeTracker = flow[step]; 
                     
-                    // Trigger a private shuffle at the start of every 6-step Box cycle
+                    // Trigger a private shuffle at the start of every 7-step Box cycle
                     if (step == 0) {
                         for (int i = 4; i > 0; i--) {
                             int j = random8(i + 1);
@@ -509,13 +549,13 @@ namespace TestDemo {
                         }
                     }
                 } else {
-                    sModeTracker = flow[random8(6)];
+                    sModeTracker = flow[random8(7)];
                 }
             } else {
                 if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
                 else {
-                    ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC};
-                    sModeTracker = comp[random8(7)];
+                    ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
+                    sModeTracker = comp[random8(8)];
                 }
             }
             
@@ -525,7 +565,7 @@ namespace TestDemo {
             // THE BOX PALETTE ENFORCER
             // ==========================================
             if (shape == SHAPE_BOX) {
-                uint8_t step = states[concept].shaderTracker % 6;
+                uint8_t step = states[concept].shaderTracker % 7;
                 
                 if (sModeTracker == MODE_UNIFORM_CYCLE) { 
                     pal = RainbowColors_p; 
@@ -533,6 +573,10 @@ namespace TestDemo {
                 }
                 else if (sModeTracker == MODE_HIPHOTIC) {
                     strcpy(PaletteUtils::getPaletteNameBuffer(), "Hiphotic Native");
+                }
+                else if (sModeTracker == MODE_DISTORTION_WAVES) {
+                    pal = PaletteUtils::getRandomOrganicPalette(); 
+                    strcpy(PaletteUtils::getPaletteNameBuffer(), "Distortion Organic");
                 }
                 else {
                     // Steps 1, 2, 3, and 4 grab the first 4 palettes from the freshly shuffled pool
@@ -557,14 +601,17 @@ namespace TestDemo {
             bool isSelfManaged = (concept >= CONCEPT_SCENE_HINGE_DANCE && concept <= CONCEPT_SCENE_BOUNCE) || 
                                  (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
+                                 (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                                  (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 
             else {
-                bool allowSolid = (concept != CONCEPT_SCENE_HULA && concept != CONCEPT_SCENE_VERT_STREAMER && concept != CONCEPT_SCENE_TORNADO) && (random8(100) < 25);
+                // Ensure the required "No Solids" scenes are fully protected from random solid rolls
+                bool allowSolid = (concept != CONCEPT_SCENE_HULA && concept != CONCEPT_SCENE_VERT_STREAMER && concept != CONCEPT_SCENE_TORNADO && concept != CONCEPT_SCENE_CHUNCHUN_SERP && concept != CONCEPT_SCENE_CHUNCHUN_LISSAJOUS && concept != CONCEPT_SCENE_BPM_CHECKERBOARD && concept != CONCEPT_SCENE_BOUNCING_BALLS) && (random8(100) < 25);
+                
                 if (concept == CONCEPT_SCENE_SADDLE || concept == CONCEPT_SCENE_SINE_WAVE || concept == CONCEPT_SCENE_ROLLING_BALL || concept == CONCEPT_SCENE_BOUNCING_BALL) { 
                     if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
-                    else { ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC}; sModeTracker = comp[random8(7)]; }
+                    else { ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES}; sModeTracker = comp[random8(8)]; }
                 } 
                 else if (concept == CONCEPT_SCENE_SINE_WAVE) {
                     // ISOLATED: De-seizured pool for Sine Wave (Removed Noise & Distance Fields)
@@ -573,10 +620,15 @@ namespace TestDemo {
                 }
                 else { 
                     if (allowSolid) sModeTracker = MODE_SOLID; 
-                    else { ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER}; sModeTracker = flow[random8(4)]; }
+                    else { ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTORTION_WAVES}; sModeTracker = flow[random8(5)]; }
                 }
-                if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_WILD_MOUSE || concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_LAVA_LAMP) pal = PaletteUtils::getRandomOrganicPalette();
-                else pal = PaletteUtils::getSmartPalette(sModeTracker);
+                
+                if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_WILD_MOUSE || concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_LAVA_LAMP || concept == CONCEPT_SCENE_CHUNCHUN_SERP || concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS || concept == CONCEPT_SCENE_BPM_CHECKERBOARD || concept == CONCEPT_SCENE_BOUNCING_BALLS) {
+                    pal = PaletteUtils::getRandomOrganicPalette(); // Satisfies "random palette no solids" requirement
+                }
+                else {
+                    pal = PaletteUtils::getSmartPalette(sModeTracker);
+                }
             }        
         }
 
