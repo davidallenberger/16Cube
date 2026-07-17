@@ -58,13 +58,20 @@ namespace {
     const float    SPEED_SCENE_LAVA_LAMP        = (.125f * SCALE_RATE);
 
     // Engine constants for new volumetric scenes
+    /*
     const float    SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE);
     const uint32_t SPEED_SCENE_DRIFT_ROSE       = (uint32_t)(200 * SCALE_MS);
     const uint32_t SPEED_SCENE_COLORED_BURSTS   = (uint32_t)(96 * SCALE_MS);
     const uint32_t SPEED_SCENE_BPM_CHECKERBOARD = (uint32_t)(64 * SCALE_MS);
     const uint8_t  SPEED_SCENE_COLOR_TWINKLES   = 128; // Raw byte value for WLED math
     const uint8_t  SPEED_SCENE_CHUNCHUN         = 128; // Raw byte value for volumetric phases
-
+*/
+    const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); // 0.85 * 0.5 = 0.425x speed
+    const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); // 200 * 0.5 = 100
+    const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(96 * SCALE_RATE);  // 96 * 0.5 = 48
+    const uint8_t SPEED_SCENE_BPM_CHECKERBOARD = (uint8_t)(64 * SCALE_RATE);  // 64 * 0.5 = 32
+    const uint8_t SPEED_SCENE_COLOR_TWINKLES   = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64
+    const uint8_t SPEED_SCENE_CHUNCHUN         = (uint8_t)(128 * SCALE_RATE); // 128 * 0.5 = 64
     #ifndef HARDWARE_BURNCUBE
         const uint32_t SPEED_TEXT_ICONS         = (uint32_t)(95 * SCALE_MS);  
     #else
@@ -391,7 +398,7 @@ namespace TestDemo {
         */
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 5000;  
+        const uint32_t DURATION_ART_MS       = 30000;  
         const uint32_t DURATION_BILLBOARD_MS = 20000;  
         
         uint32_t durationMs;
