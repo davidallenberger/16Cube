@@ -43,10 +43,10 @@ void loop()
 // 10 Seconds. Default WLED speed (128). Rainbow default.
 // A symmetrical 3D sea urchin that continuously blooms outward from its 
 // core as the harmonic frequencies of the spokes intersect.
-Serial.println("no stretch");
-Streamers::animateDriftRose3D(10000, RainbowColors_p, false);
-Serial.println("stretch & 200");
-Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
+Streamers::animateDriftRose3D(10000);
+// 1. THE CHECKERBOARD PISTON
+// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
+Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
 return;
 
 
@@ -85,9 +85,6 @@ Streamers::animateChartExtruded(10000, Streamers::RATIO_5_3, 2, ForestColors_p);
 
   */
   
-// 1. THE CHECKERBOARD PISTON
-// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
-Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
 
 
 // 2. THE PARTY VORTEX

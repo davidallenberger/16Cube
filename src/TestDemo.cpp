@@ -329,7 +329,7 @@ namespace {
 
                 // --- BILLBOARD DECK ---
                 case CONCEPT_SCENE_TEXT_FYB: 
-                    Letters::scrollTextCycles("Fuck Yer `27` Burn", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, LavaColors_p, MODE_NOISE_FIELD, true, 75); break;
+                    Letters::scrollTextCycles("Fuck Yer `27` Burn", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, true, 75); break;
                 case CONCEPT_SCENE_ICONS_CCW: 
                     Icons::scrollIcons("{(1.2.3),(4.5.6),(7.8.9.10),(11.12.13.14),(15.16.17.18),(19.20),21,22,23,24,25,26,27,28,30,31,32}", durationMs, SPEED_TEXT_ICONS, 120, false); break;
                 case CONCEPT_SCENE_ICONS_CW: 
@@ -337,11 +337,11 @@ namespace {
                 case CONCEPT_SCENE_TEXT_PIZZA: 
                     Letters::scrollTextCycles("`R30` KINKY PIZZA `R30`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Gold, OceanColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_CUBINA: 
-                    Letters::scrollTextCycles("`(4.5.6)` CUBINA `C27`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Cyan, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
+                    Letters::scrollTextCycles("`(4.5.6)` CUBINA `C27`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_YES: 
                     Letters::scrollTextCycles("`25` Just Say Yes `24`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, ForestColors_p, MODE_NOISE_FIELD, false, 85); break;
                 case CONCEPT_SCENE_TEXT_YEAH: 
-                    Letters::scrollTextCycles("`C27` FUCK `23` YEAH! `28`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
+                    Letters::scrollTextCycles("`C27` FUCK `23` YEAH! `28`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_ISRAEL: 
                     Letters::scrollTextCycles("`HeM` `HySral` `HHy` `29`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, OceanColors_p, MODE_LINEAR_FLOW, false, 75, true); 
                     break;

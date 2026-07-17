@@ -1238,13 +1238,10 @@ class Streamers {
         uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
         
         // -------------------------------------------------------------------------
-        // 1. THE PRE-COMPUTATION ENGINE
-        // Allocate a phase map on the heap. We calculate the heavy math exactly 
-        // once per voxel and store it, stripping all floats from the render loop.
+        // 1. THE PRE-COMPUTATION ENGINE (HEAP-FREE)
+        // Map the phase array directly to the global scratchpad. Zero fragmentation.
         // -------------------------------------------------------------------------
-        uint32_t totalVoxels = RNDR_X * RNDR_Y * RNDR_Z;
-        uint8_t* phaseMap = (uint8_t*)malloc(totalVoxels);
-        if (!phaseMap) return; // Failsafe
+        uint8_t* phaseMap = (uint8_t*)SharedAppMemory;
         
         float cx = RNDR_CX;
         float cy = RNDR_CY;
@@ -1306,17 +1303,13 @@ class Streamers {
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
                     for (uint8_t x = 0; x < RNDR_X; x++) {
                         
-                        // O(1) Memory Lookup replaces branching and float math
+                        // O(1) Memory Lookup replaces all branching and float math
                         uint8_t spatialPhase = phaseMap[idx++];
                         
-                        // TRUE FASTLED BPM MATH
                         uint8_t brightness = beat - timeBase + spatialPhase;
-                        
-                        // Deepen the voids and sharpen the peaks
                         brightness = qsub8(brightness, 32);     
                         brightness = qadd8(brightness, brightness); 
                         
-                        // Map the palette color
                         uint8_t colorIndex = timeBase + (spatialPhase / 2);
                         
                         CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
@@ -1327,11 +1320,9 @@ class Streamers {
             showCube();
             yield();
         }
-        
-        // Free the dynamically allocated buffer before exiting
-        free(phaseMap); 
     }
-   
+    
+    
     static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
@@ -1856,43 +1847,41 @@ class Streamers {
             showCube();
         }
     }
-// ==========================================
+    
+    // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
-    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, bool stretch = true) {
+    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
 
         const int NUM_SPOKES = (RNDR_X > 8) ? 80 : 36;
         
-        // Use fixed-point integers instead of floats to completely bypass the FPU
-        static int32_t spokeX_fp[90], spokeY_fp[90], spokeZ_fp[90];
-        static bool initRose = false;
-        static bool lastStretch = !stretch; // Force initialization on first run
-        
         // 1. THE PRE-COMPUTATION ENGINE
-        // We only recalculate the geometry if the system reboots or the stretch flag changes
-        if (!initRose || stretch != lastStretch) {
-            float goldenRatio = (1.0f + sqrtf(5.0f)) / 2.0f;
-            float angleInc = TWO_PI * goldenRatio;
-            
-            float maxR_XY = min(RNDR_X, RNDR_Y) / 2.0f;
-            float maxR_Z  = stretch ? (RNDR_Z / 2.0f) : min(maxR_XY, RNDR_Z / 2.0f);
-            if (maxR_XY < 1.0f) maxR_XY = 1.0f;
-            if (maxR_Z < 1.0f) maxR_Z = 1.0f;
+        // Safely map 1,080 bytes of integer arrays to AppMemory.
+        // Because AppMemory is volatile, we recompute this once per scene load.
+        int32_t* spokeX_fp = (int32_t*)SharedAppMemory;
+        int32_t* spokeY_fp = (int32_t*)(SharedAppMemory + 360);  // 90 * sizeof(int32_t)
+        int32_t* spokeZ_fp = (int32_t*)(SharedAppMemory + 720);  // 180 * sizeof(int32_t)
+        
+        float goldenRatio = (1.0f + sqrtf(5.0f)) / 2.0f;
+        float angleInc = TWO_PI * goldenRatio;
+        
+        float maxR_XY = min(RNDR_X, RNDR_Y) / 2.0f;
+        float maxR_Z  = RNDR_Z / 2.0f; // ALWAYS STRETCHED TO FULL VERTICAL VOLUME
+        
+        if (maxR_XY < 1.0f) maxR_XY = 1.0f;
+        if (maxR_Z < 1.0f) maxR_Z = 1.0f;
 
-            for (int i = 0; i < NUM_SPOKES; i++) {
-                float t = (float)i / (float)NUM_SPOKES;
-                float phi = acosf(1.0f - 2.0f * t);
-                float theta = angleInc * i;
-                
-                // Bake the radius and the 256x sub-pixel multiplier directly into the lookup table
-                spokeX_fp[i] = (int32_t)(sinf(phi) * cosf(theta) * maxR_XY * 256.0f);
-                spokeY_fp[i] = (int32_t)(sinf(phi) * sinf(theta) * maxR_XY * 256.0f);
-                spokeZ_fp[i] = (int32_t)(cosf(phi) * maxR_Z * 256.0f);
-            }
-            initRose = true;
-            lastStretch = stretch;
+        for (int i = 0; i < NUM_SPOKES; i++) {
+            float t = (float)i / (float)NUM_SPOKES;
+            float phi = acosf(1.0f - 2.0f * t);
+            float theta = angleInc * i;
+            
+            // Bake the radius and the 256x sub-pixel multiplier directly into AppMemory
+            spokeX_fp[i] = (int32_t)(sinf(phi) * cosf(theta) * maxR_XY * 256.0f);
+            spokeY_fp[i] = (int32_t)(sinf(phi) * sinf(theta) * maxR_XY * 256.0f);
+            spokeZ_fp[i] = (int32_t)(cosf(phi) * maxR_Z * 256.0f);
         }
 
         uint8_t fadeAmt = 32 + (effectSpeed >> 3);
@@ -1924,12 +1913,9 @@ class Streamers {
             for (int i = 0; i < NUM_SPOKES; i++) {
                 uint8_t spokeBpm = min(i + 1, 255); 
                 
-                // 3. ZERO-FLOAT KINEMATICS
-                // beatsin16 returns 0 to 65535. Subtracting 32768 maps it to a signed INT (-32768 to 32767).
+                // ZERO-FLOAT KINEMATICS
                 int32_t r_scalar = (int32_t)beatsin16(spokeBpm, 0, 65535) - 32768;
 
-                // Multiply the pre-scaled vector by the scalar, then bitshift right by 15 (which perfectly divides by 32768).
-                // This flawlessly scales the geometry from -1.0 to 1.0 using pure integer math.
                 int32_t px_fp = cx_fp + ((spokeX_fp[i] * r_scalar) >> 15);
                 int32_t py_fp = cy_fp + ((spokeY_fp[i] * r_scalar) >> 15);
                 int32_t pz_fp = cz_fp + ((spokeZ_fp[i] * r_scalar) >> 15);
@@ -1937,13 +1923,11 @@ class Streamers {
                 uint8_t colorIndex = i * (256 / NUM_SPOKES);
                 CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
                 
-                // Glide gracefully between integer boundaries
                 drawWuVoxel(px_fp, py_fp, pz_fp, col);
             }
             showCube();
         }
     }
-    
 
     /*
  // The literal ratios from the left axis of your chart
