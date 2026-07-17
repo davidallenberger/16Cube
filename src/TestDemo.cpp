@@ -57,15 +57,6 @@ namespace {
     const uint32_t SPEED_SCENE_BOUNCING_BALL    = (uint32_t)(25 * SCALE_MS);   
     const float    SPEED_SCENE_LAVA_LAMP        = (.125f * SCALE_RATE);
 
-    // Engine constants for new volumetric scenes
-    /*
-    const float    SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE);
-    const uint32_t SPEED_SCENE_DRIFT_ROSE       = (uint32_t)(200 * SCALE_MS);
-    const uint32_t SPEED_SCENE_COLORED_BURSTS   = (uint32_t)(96 * SCALE_MS);
-    const uint32_t SPEED_SCENE_BPM_CHECKERBOARD = (uint32_t)(64 * SCALE_MS);
-    const uint8_t  SPEED_SCENE_COLOR_TWINKLES   = 128; // Raw byte value for WLED math
-    const uint8_t  SPEED_SCENE_CHUNCHUN         = 128; // Raw byte value for volumetric phases
-*/
     const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); // 0.85 * 0.5 = 0.425x speed
     const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); // 200 * 0.5 = 100
     const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(132 * SCALE_RATE);  // 132 * 0.5 = 64
