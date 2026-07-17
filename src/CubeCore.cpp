@@ -318,3 +318,21 @@ void setVoxelByAxis(uint8_t u, uint8_t w, uint8_t h, uint8_t axis, CRGB color) {
     else if (axis == 0) setVoxel(h, u, w, color);
     else setVoxel(u, w, h, color);
 }
+
+void fadeAll(uint8_t fadeAmt) {
+#ifdef HARDWARE_BURNCUBE
+  fadeToBlackBy(strip0, STRIP_LEN, fadeAmt);
+  fadeToBlackBy(strip1, STRIP_LEN, fadeAmt);
+  fadeToBlackBy(strip2, STRIP_LEN, fadeAmt);
+  fadeToBlackBy(strip3, STRIP_LEN, fadeAmt);
+#else
+  fadeToBlackBy(strip0, STRIP0_LEN, fadeAmt);
+  fadeToBlackBy(strip1, STRIP1_LEN, fadeAmt);
+  fadeToBlackBy(strip2, STRIP2_LEN, fadeAmt);
+  fadeToBlackBy(strip3, STRIP3_LEN, fadeAmt);
+  fadeToBlackBy(strip4, STRIP4_LEN, fadeAmt);
+  fadeToBlackBy(strip5, STRIP5_LEN, fadeAmt);
+  fadeToBlackBy(strip6, STRIP6_LEN, fadeAmt);
+  fadeToBlackBy(strip7, STRIP7_LEN, fadeAmt);
+#endif
+}

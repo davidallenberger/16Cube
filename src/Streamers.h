@@ -1286,7 +1286,7 @@ class Streamers {
         // -------------------------------------------------------------------------
         // 2. THE RENDER ENGINE
         // -------------------------------------------------------------------------
-        uint32_t startTime = millis();
+      /*  uint32_t startTime = millis();
         uint32_t lastFrame = millis();
 
         while (millis() - startTime < durationMs) {
@@ -1300,6 +1300,7 @@ class Streamers {
             idx = 0; // Reset lookup index for the new frame
             
             for (uint8_t z = 0; z < RNDR_Z; z++) {
+                yield();
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
                     for (uint8_t x = 0; x < RNDR_X; x++) {
                         
@@ -1318,7 +1319,47 @@ class Streamers {
                 }
             }
             showCube();
-            yield();
+            //yield();
+            delay(15);
+        }*/
+       // -------------------------------------------------------------------------
+        // 2. THE RENDER ENGINE
+        // -------------------------------------------------------------------------
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame == 0) { yield(); continue; }
+            lastFrame = now;
+
+            uint8_t beat = beatsin8(bpm, 64, 255);
+            uint8_t timeBase = now / 15; 
+
+            idx = 0; // Reset lookup index for the new frame
+            
+            for (uint8_t z = 0; z < RNDR_Z; z++) {
+                // yield(); <-- REMOVED: Do not context-switch 16 times per frame!
+                for (uint8_t y = 0; y < RNDR_Y; y++) {
+                    for (uint8_t x = 0; x < RNDR_X; x++) {
+                        
+                        // O(1) Memory Lookup replaces all branching and float math
+                        uint8_t spatialPhase = phaseMap[idx++];
+                        
+                        uint8_t brightness = beat - timeBase + spatialPhase;
+                        brightness = qsub8(brightness, 32);     
+                        brightness = qadd8(brightness, brightness); 
+                        
+                        // BIT SHIFT: Divides by 2 directly in the ALU
+                        uint8_t colorIndex = timeBase + (spatialPhase >> 1);
+                        
+                        CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
+                        setVoxel(x, y, z, finalColor);
+                    }
+                }
+            }
+            showCube();
+            delay(15);
         }
     }
     
@@ -1891,6 +1932,7 @@ class Streamers {
         int32_t cy_fp = (int32_t)(RNDR_CY * 256.0f);
         int32_t cz_fp = (int32_t)(RNDR_CZ * 256.0f);
 
+        /*
         // 2. THE RENDER ENGINE
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();
@@ -1898,6 +1940,7 @@ class Streamers {
             lastFrame = now;
 
             for (int x = 0; x < RNDR_X; x++) {
+                yield();
                 for (int y = 0; y < RNDR_Y; y++) {
                     for (int z = 0; z < RNDR_Z; z++) {
                         CRGB c = getVoxel(x, y, z);
@@ -1908,7 +1951,7 @@ class Streamers {
                     }
                 }
             }
-            yield();
+         //   yield();
 
             for (int i = 0; i < NUM_SPOKES; i++) {
                 uint8_t spokeBpm = min(i + 1, 255); 
@@ -1926,6 +1969,35 @@ class Streamers {
                 drawWuVoxel(px_fp, py_fp, pz_fp, col);
             }
             showCube();
+            delay(15); // <-- ADDED: Explicit DMA frame limiter
+        }
+         */
+        // 2. THE RENDER ENGINE
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame < 15) { yield(); continue; }
+            lastFrame = now;
+
+            // Lightning-fast hardware fade completely replaces the 4096-iteration x/y/z loop
+            fadeAll(fadeAmt);
+
+            for (int i = 0; i < NUM_SPOKES; i++) {
+                uint8_t spokeBpm = min(i + 1, 255); 
+                
+                // ZERO-FLOAT KINEMATICS
+                int32_t r_scalar = (int32_t)beatsin16(spokeBpm, 0, 65535) - 32768;
+
+                int32_t px_fp = cx_fp + ((spokeX_fp[i] * r_scalar) >> 15);
+                int32_t py_fp = cy_fp + ((spokeY_fp[i] * r_scalar) >> 15);
+                int32_t pz_fp = cz_fp + ((spokeZ_fp[i] * r_scalar) >> 15);
+
+                uint8_t colorIndex = i * (256 / NUM_SPOKES);
+                CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
+                
+                drawWuVoxel(px_fp, py_fp, pz_fp, col);
+            }
+            showCube();
+            delay(15); // Explicit DMA frame limiter
         }
     }
 

@@ -39,24 +39,9 @@ boolean runOnce = true;
 
 void loop() 
 { 
-// 3. THE DRIFT ROSE MANDALA
-// 10 Seconds. Default WLED speed (128). Rainbow default.
-// A symmetrical 3D sea urchin that continuously blooms outward from its 
-// core as the harmonic frequencies of the spokes intersect.
-Streamers::animateDriftRose3D(10000);
-// 1. THE CHECKERBOARD PISTON
-// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
-Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
-return;
+  CubeSystem::loop();
+  return;
 
-
-    // 2. THE LISSAJOUS WEAVE (The Rubber Band)
-// 10 Seconds. Gap size 128 (Mid). 
-// The flock strings out beautifully into a long, twisting ribbon 
-// that sweeps the dead center of the room and banks off the walls.
-Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
-//Streamers::animateLissajous3D(10000, PartyColors_p, 128);
-return;
 
 /*
 Streamers::animateTartan3D(10000, PartyColors_p, 128); // High-contrast neon threads weaving a 3D plaid at standard speed
@@ -85,7 +70,22 @@ Streamers::animateChartExtruded(10000, Streamers::RATIO_5_3, 2, ForestColors_p);
 
   */
   
-
+// 3. THE DRIFT ROSE MANDALA
+// 10 Seconds. Default WLED speed (128). Rainbow default.
+// A symmetrical 3D sea urchin that continuously blooms outward from its 
+// core as the harmonic frequencies of the spokes intersect.
+Streamers::animateDriftRose3D(10000);
+// 1. THE CHECKERBOARD PISTON
+// 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
+Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
+return;
+// 2. THE LISSAJOUS WEAVE (The Rubber Band)
+// 10 Seconds. Gap size 128 (Mid). 
+// The flock strings out beautifully into a long, twisting ribbon 
+// that sweeps the dead center of the room and banks off the walls.
+Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_LISSAJOUS); //<--this works
+//Streamers::animateLissajous3D(10000, PartyColors_p, 128);
+return;
 
 // 2. THE PARTY VORTEX
 // 10 Seconds. Maximum speed (255). PartyColors.

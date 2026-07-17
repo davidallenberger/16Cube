@@ -54,6 +54,7 @@ void initCube();
 void showCube();
 void clearAll();
 void seedAllRng();
+void fadeAll(uint8_t fadeAmt);
 
 // Voxel Read/Write (3D Space -> Physical Space)
 void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB& c);
