@@ -337,7 +337,7 @@ namespace {
                 case CONCEPT_SCENE_TEXT_PIZZA: 
                     Letters::scrollTextCycles("`R30` KINKY PIZZA `R30`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Gold, OceanColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_CUBINA: 
-                    Letters::scrollTextCycles("`(4.5.6)` CUBINA `C27`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
+                    Letters::scrollTextCycles("`(4.5.6)` CUBINA `C27`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Gold, OceanColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_YES: 
                     Letters::scrollTextCycles("`25` Just Say Yes `24`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, ForestColors_p, MODE_NOISE_FIELD, false, 85); break;
                 case CONCEPT_SCENE_TEXT_YEAH: 
