@@ -449,17 +449,9 @@ class Streamers {
         static uint8_t helixStyle = 255;
         helixStyle = (helixStyle + 1) % 4; 
         
-        ShaderMode sMode = MODE_UNIFORM_CYCLE;
-        CRGBPalette16 pal = PartyColors_p;
-        
-        switch(helixStyle) {
-            case 0: sMode = MODE_UNIFORM_CYCLE; pal = RainbowColors_p; break;
-            case 1: sMode = MODE_NOISE_FIELD;   pal = OceanColors_p;   break;
-            case 2: sMode = MODE_LINEAR_FLOW;   pal = LavaColors_p;    break;
-            case 3: sMode = MODE_SCATTER;       pal = PartyColors_p;   break;
-        }
-        
-        TextureState tex(sMode, pal, 1.0f);
+        // Pull dynamically from the full non-solid pool
+        TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan();
+        TextureState tex(plan.sMode, plan.palette, 1.0f);
 
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();

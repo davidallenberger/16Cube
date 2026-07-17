@@ -64,81 +64,65 @@ public:
         if (sMode == MODE_SOLID || sMode == MODE_SPATIAL_GRADIENT) {
             return CRGBPalette16(getRandomVibrantColor());
         }
-        if (sMode == MODE_NOISE_FIELD || sMode == MODE_LINEAR_FLOW || sMode == MODE_DISTANCE_FIELD) {
+        if (sMode == MODE_NOISE_FIELD || sMode == MODE_LINEAR_FLOW || sMode == MODE_DISTANCE_FIELD || sMode == MODE_DISTORTION_WAVES) {
             return getRandomOrganicPalette();
         }
         strcpy(getPaletteNameBuffer(), "Party (Neon Mix)");
         return PartyColors_p; 
     }
    
-    static TexturePlan getRandomNonSolidTexturePlan() {
+   static TexturePlan getRandomNonSolidTexturePlan() {
         TexturePlan plan;
-        uint8_t r = random8(100);
+        uint8_t m = random8(8); // Now rolling evenly across all 8 non-solid shaders
         
-        if (r < 50) { 
-            // 50% Chance: Mathematical / Flowing Gradients
-            uint8_t m = random8(4); 
-            if (m == 0) {
+        switch (m) {
+            case 0:
+                plan.sMode = MODE_UNIFORM_CYCLE;
+                plan.palette = RainbowColors_p; 
+                break;
+            case 1:
                 plan.sMode = MODE_SPATIAL_GRADIENT;
-                plan.palette = PartyColors_p;
-            } else if (m == 1) {
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+                break;
+            case 2:
                 plan.sMode = MODE_LINEAR_FLOW;
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+                break;
+            case 3:
+                plan.sMode = MODE_NOISE_FIELD;
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+                break;
+            case 4:
+                plan.sMode = MODE_SCATTER;
+                plan.palette = PaletteUtils::getRandomOrganicPalette();
+                break;
+            case 5:
+                plan.sMode = MODE_DISTANCE_FIELD;
                 plan.palette = PartyColors_p;
-            } else if (m == 2) {
+                break;
+            case 6:
                 plan.sMode = MODE_HIPHOTIC;
                 plan.palette = PartyColors_p;
-            } else {
+                break;
+            case 7:
                 plan.sMode = MODE_DISTORTION_WAVES;
                 plan.palette = PaletteUtils::getRandomOrganicPalette();
-            }
-        } 
-        else { 
-            // 50% Chance: High-Texture Noise & Scatter
-            if (random8(2) == 0) { 
-                plan.sMode = MODE_NOISE_FIELD; 
-                plan.palette = PaletteUtils::getRandomOrganicPalette(); 
-            } else { 
-                plan.sMode = MODE_SCATTER; 
-                plan.palette = PartyColors_p;
-            }
+                break;
         }
         return plan;
     }
 
     static TexturePlan getRandomTexturePlan() {
-        TexturePlan plan;
-        uint8_t r = random8(99);
-        
-        if (r < 33) { 
+        // 33% Chance for a Solid Color
+        if (random8(100) < 33) {
+            TexturePlan plan;
             plan.sMode = MODE_SOLID; 
             plan.palette = CRGBPalette16(CHSV(random8(), 255, 255)); 
+            return plan;
         } 
-        else if (r < 66) { 
-            uint8_t m = random8(4); 
-            if (m == 0) {
-                plan.sMode = MODE_SPATIAL_GRADIENT;
-                plan.palette = PartyColors_p;
-            } else if (m == 1) {
-                plan.sMode = MODE_LINEAR_FLOW;
-                plan.palette = PartyColors_p;
-            } else if (m == 2) {
-                plan.sMode = MODE_HIPHOTIC;
-                plan.palette = PartyColors_p;
-            } else {
-                plan.sMode = MODE_DISTORTION_WAVES;
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
-            }
-        } 
-        else { 
-            if (random8(2) == 0) { 
-                plan.sMode = MODE_NOISE_FIELD; 
-                plan.palette = PaletteUtils::getRandomOrganicPalette(); 
-            } else { 
-                plan.sMode = MODE_SCATTER; 
-                plan.palette = PartyColors_p;
-            }
-        }
-        return plan;
+        
+        // 67% Chance to just route directly into the flattened non-solid pool
+        return getRandomNonSolidTexturePlan();
     }
 
     static CRGBPalette16 getDynamicContrastPalette(CRGB sentinel) {
