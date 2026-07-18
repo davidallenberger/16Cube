@@ -58,7 +58,8 @@ namespace {
     const float    SPEED_SCENE_LAVA_LAMP        = (.125f * SCALE_RATE);
 
     const float   SPEED_SCENE_DNA_SPIRAL       = (0.85f * SCALE_RATE); 
-    const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE); 
+    const uint8_t SPEED_SCENE_DRIFT_ROSE       = (uint8_t)(200 * SCALE_RATE);
+    const uint8_t SPEED_SCENE_DRIFT            = (uint8_t)(32 * SCALE_RATE); 
     const uint8_t SPEED_SCENE_COLORED_BURSTS   = (uint8_t)(132 * SCALE_RATE);  
     const uint8_t SPEED_SCENE_BPM_CHECKERBOARD = (uint8_t)(64 * SCALE_RATE);  
     const uint8_t SPEED_SCENE_COLOR_TWINKLES   = (uint8_t)(128 * SCALE_RATE); 
@@ -255,7 +256,7 @@ namespace {
             else if (concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_CHUNCHUN);
             else if (concept == CONCEPT_SCENE_BPM_CHECKERBOARD) sprintf(speedBuf, "Spd: %u", SPEED_SCENE_BPM_CHECKERBOARD);
             else if (concept == CONCEPT_SCENE_BOUNCING_BALLS) sprintf(speedBuf, "Self-Timed");
-            else if (concept == CONCEPT_SCENE_DRIFT3D) sprintf(speedBuf, "Spd: 32");
+            else if (concept == CONCEPT_SCENE_DRIFT3D) sprintf(speedBuf, "Spd: %u",SPEED_SCENE_DRIFT);
             else if (concept == CONCEPT_SCENE_BLACKHOLE) sprintf(speedBuf, "Self-Timed");
             else if (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TEXT_ISRAEL) sprintf(speedBuf, "%u ms", SPEED_TEXT_ICONS);
             else if (concept == CONCEPT_SCENE_RUBIKS) sprintf(speedBuf, "Self-Timed");
@@ -316,7 +317,7 @@ namespace {
                 case CONCEPT_SCENE_CHUNCHUN_LISSAJOUS: Streamers::animateChunchunVolumetric(durationMs, pal, SPEED_SCENE_CHUNCHUN, 128, CHUNCHUN_LISSAJOUS); break;
                 case CONCEPT_SCENE_BPM_CHECKERBOARD:   Streamers::animateBpmVolumetric(durationMs, pal, SPEED_SCENE_BPM_CHECKERBOARD, BPM_CHECKERBOARD); break;
                 case CONCEPT_SCENE_BOUNCING_BALLS:    Streamers::animateBouncingBalls(durationMs, pal); break;
-                case CONCEPT_SCENE_DRIFT3D:        Streamers::animateDrift3D(durationMs, RainbowColors_p, 32); break;
+                case CONCEPT_SCENE_DRIFT3D:        Streamers::animateDrift3D(durationMs, RainbowColors_p, SPEED_SCENE_DRIFT); break;
                 case CONCEPT_SCENE_BLACKHOLE:      Streamers::animateBlackHole(durationMs); break;
 
                 case CONCEPT_SCENE_LAVA_LAMP: {

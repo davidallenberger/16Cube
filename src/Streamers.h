@@ -1753,32 +1753,34 @@ class Streamers {
 
             fadeAll(155);
 
-            // --- 1. OSCILLATING SPEED ENGINE (Tight Dynamic Range) ---
-            uint16_t breathClock = (now * effectSpeed) / 16;
+    
+            // --- 1. OSCILLATING SPEED ENGINE (Widened Dynamic Range) ---
+            static uint32_t physLastFrame = millis();
+            uint32_t deltaMs = now - physLastFrame;
+            physLastFrame = now;
+
+            uint16_t breathClock = (now * effectSpeed) / 24;
             uint16_t normalizedSin = sin16(breathClock) + 32768; // 0 to 65535
             
-            // Calculate a comfortable baseline speed tied to WLED's effectSpeed
             uint32_t baseSpeed = 20 + (effectSpeed / 3); 
-
-            // Compress the variance: Speed never drops below 75% or exceeds 115%
-            uint32_t minSpeed = (baseSpeed * 75) / 100; 
-            uint32_t maxSpeed = (baseSpeed * 115) / 100;
+            uint32_t minSpeed = baseSpeed;
+            // NEW: Reduced max speed ceiling (160% instead of 240%). 
+            // Adjust this number (e.g., 140 to 180) to dial in the exact peak rotation speed you want.
+            uint32_t maxSpeed = (baseSpeed * 110) / 100;
             uint32_t speedRange = maxSpeed - minSpeed;
 
             uint32_t currentSpeed = minSpeed + ((normalizedSin * speedRange) >> 16); 
+            uint32_t timeScaledSpeed = (currentSpeed * deltaMs) / 15;
 
             // --- 2. GOLDEN RATIO TUMBLE ---
-            // Continuous tumbling. Never stops, never reverses.
-            angleX += currentSpeed * 2; 
-            angleY += currentSpeed * 3;  // Prime ratios ensure non-repeating tumble
-            angleZ += currentSpeed * 5; 
+            angleX += timeScaledSpeed * 1; 
+            angleY += timeScaledSpeed * 2;  
+            angleZ += timeScaledSpeed * 3; 
 
-            // Calculate the 3D Euler Matrix ONCE per frame (Saves huge CPU cycles)
             float fsx = sin16(angleX) / 32768.0f, fcx = cos16(angleX) / 32768.0f;
             float fsy = sin16(angleY) / 32768.0f, fcy = cos16(angleY) / 32768.0f;
             float fsz = sin16(angleZ) / 32768.0f, fcz = cos16(angleZ) / 32768.0f;
 
-            // Generate tumbling matrix in 15-bit fixed point math for the fast inner loop
             int16_t UX_x = (fcy * fcz) * 32767;
             int16_t UX_y = (fcy * fsz) * 32767;
             int16_t UX_z = (-fsy) * 32767;
@@ -1792,15 +1794,19 @@ class Streamers {
             int16_t UZ_z = (fcx * fcy) * 32767;
 
             // --- 3. THE AIR RESISTANCE BEND ---
-            // The pinwheel constantly spins around its own center axis
-            masterSpin += currentSpeed * 30; 
+            masterSpin += timeScaledSpeed * 20; 
             
-            // Because the speed never drops to 0, the drag never drops to 0.
-            // Minimum bend (~14 degrees) up to Maximum bend (~34 degrees).
-            // Hard cap at 6300 guarantees arms will NEVER cross paths.
-            int32_t minBend = 2600; 
-            int32_t maxBend = 6300; 
-            int32_t currentBend = minBend + ((normalizedSin * (maxBend - minBend)) >> 16); 
+            // EXTREME BEND (TRUE AERODYNAMIC DRAG)
+            // In physics, drag scales with velocity squared (v^2).
+            // We square the normalized speed factor (0-65535) to create a true parabolic drag curve 
+            // entirely in fast 32-bit integer math.
+            uint32_t dragFactor = ((uint32_t)normalizedSin * (uint32_t)normalizedSin) >> 16; 
+            
+            int32_t minBend = 1000; 
+            int32_t maxBend = 30000;
+            
+            // Apply the v^2 drag factor to the bend limits
+            int32_t currentBend = minBend + ((dragFactor * (maxBend - minBend)) >> 16);
 
             for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
                 
@@ -1891,46 +1897,6 @@ class Streamers {
         int32_t cy_fp = (int32_t)(RNDR_CY * 256.0f);
         int32_t cz_fp = (int32_t)(RNDR_CZ * 256.0f);
 
-        /*
-        // 2. THE RENDER ENGINE
-        while (millis() - startTime < durationMs) {
-            uint32_t now = millis();
-            if (now - lastFrame < 15) { yield(); continue; }
-            lastFrame = now;
-
-            for (int x = 0; x < RNDR_X; x++) {
-                yield();
-                for (int y = 0; y < RNDR_Y; y++) {
-                    for (int z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        if (c) { 
-                            c.nscale8(255 - fadeAmt); 
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }
-         //   yield();
-
-            for (int i = 0; i < NUM_SPOKES; i++) {
-                uint8_t spokeBpm = min(i + 1, 255); 
-                
-                // ZERO-FLOAT KINEMATICS
-                int32_t r_scalar = (int32_t)beatsin16(spokeBpm, 0, 65535) - 32768;
-
-                int32_t px_fp = cx_fp + ((spokeX_fp[i] * r_scalar) >> 15);
-                int32_t py_fp = cy_fp + ((spokeY_fp[i] * r_scalar) >> 15);
-                int32_t pz_fp = cz_fp + ((spokeZ_fp[i] * r_scalar) >> 15);
-
-                uint8_t colorIndex = i * (256 / NUM_SPOKES);
-                CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
-                
-                drawWuVoxel(px_fp, py_fp, pz_fp, col);
-            }
-            showCube();
-            delay(15); // <-- ADDED: Explicit DMA frame limiter
-        }
-         */
         // 2. THE RENDER ENGINE
         while (millis() - startTime < durationMs) {
             uint32_t now = millis();
