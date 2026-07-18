@@ -92,103 +92,129 @@ private:
         }
     }
 #endif
-    // ==========================================
-    // THE PHANTOM ZONE RINGS (Kissing Wobble)
-    // ==========================================
-    static void animateWobblingDishInternal(uint32_t durationMs, float rpm, bool intersectCenter) {
-        uint32_t startTime = millis(), lastFrame = millis();
+   
 
-        // SINGLE UNIFIED TEXTURE: Enforces that both rings share the exact same 3D color space.
-        // This makes the "kissing" point perfectly seamless, hiding the geometry intersection.
-        TexturePlan plan = PaletteUtils::getRandomTexturePlan();
-        TextureState tex(plan.sMode, plan.palette, 1.5f);
+  static void animateWobblingDishInternal(uint32_t durationMs, float rpm, bool intersectCenter) {
+    uint32_t startTime = millis(), lastFrame = millis();
 
-        float wobbleSpeed = TWO_PI * (rpm / 60.0f); 
+    TexturePlan plan = PaletteUtils::getRandomTexturePlan();
+    TextureState tex(plan.sMode, plan.palette, 1.5f);
 
-        // TRUE 3D RADIUS: explicitly pad the native radius to 4.0 
-        float ringRadius = fminf((float)RNDR_CX, (float)RNDR_CY) + 0.5f; 
+    float wobbleSpeed = TWO_PI * (rpm / 60.0f); 
+    float ringRadius = fminf((float)RNDR_CX, (float)RNDR_CY) + 0.5f; 
 
-        // THE TILT FIX: Lock the tilt to a maximum of 45 degrees. 
-        float maxTanCap = tanf(45.0f * PI / 180.0f); 
-        float maxAllowedTan = intersectCenter ? (RNDR_CZ / ringRadius) : (RNDR_CZ / (2.0f * ringRadius));
-        float actualTan = fminf(maxTanCap, maxAllowedTan);
-        float tiltAngle = atanf(actualTan);
+    // THE TILT FIX: Strictly 30 degrees
+    float maxTanCap = tanf(30.0f * PI / 180.0f); 
+    float maxAllowedTan = intersectCenter ? (RNDR_CZ / ringRadius) : (RNDR_CZ / (2.0f * ringRadius));
+    float actualTan = fminf(maxTanCap, maxAllowedTan);
+    float tiltAngle = atanf(actualTan);
 
-        // Z-separation so rims perfectly kiss
-        float kissDistance = intersectCenter ? 0.0f : (2.0f * ringRadius * sinf(tiltAngle));
+    float kissDistance = intersectCenter ? 0.0f : (2.0f * ringRadius * sinf(tiltAngle));
+    
+    // STATIC CONSTANTS
+    float sinTilt = sinf(-tiltAngle), cosTilt = cosf(-tiltAngle);
+    float tanTilt = sinTilt / cosTilt;
+    
+    // THE Z=1 FLOOR KISS CALCULATION (FIXED)
+    // Using absolute sinf() correctly finds the true geometric lowest point of the tilted torus
+    float lowestTheoreticalZ = RNDR_CZ - (kissDistance / 2.0f) - (ringRadius * sinf(tiltAngle));
+    float zElevation = 1.0f - lowestTheoreticalZ; 
 
-        while (millis() - startTime < durationMs) {
-            uint32_t now = millis(); 
-            uint32_t deltaMs = now - lastFrame;
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrame = now; 
+    // PRE-CALCULATED SQUARED BOUNDARIES
+    float innerBoundSq = (ringRadius - 1.5f) * (ringRadius - 1.5f);
+    float outerBoundSq = (ringRadius + 1.5f) * (ringRadius + 1.5f);
 
-            float timeSec = (now - startTime) / 1000.0f;
-            float wobblePhase = timeSec * wobbleSpeed;
-            
-            clearAll();
+    // Master dial to reduce floor brightness (0-255). 
+    // 255 = 100% of the original brightness. 127 = 50%, etc.
+    uint8_t floorBrightness = 127; 
 
-            float sinTilt = sinf(-tiltAngle), cosTilt = cosf(-tiltAngle);
-            float tanTilt = sinTilt / cosTilt;
+    // A cool slate-grey blue that peaks at your original brightness level of 40
+    CRGB floorColor = CRGB(25, 32, 40); 
+    floorColor.nscale8(floorBrightness);
+
+    while (millis() - startTime < durationMs) {
+        uint32_t now = millis(); 
+        uint32_t deltaMs = now - lastFrame;
+        if (deltaMs == 0) { yield(); continue; }
+        lastFrame = now; 
+
+        float timeSec = (now - startTime) / 1000.0f;
+        float wobblePhase = timeSec * wobbleSpeed;
+        
+        clearAll();
+
+        // 1. DRAW THE SLATE GREY BASE FLOOR
+        for(uint8_t x = 0; x < RNDR_X; x++){
+            for(uint8_t y = 0; y < RNDR_Y; y++){
+                setVoxel(x, y, 0, floorColor); 
+            }
+        }
+
+        float phase[2] = { wobblePhase, wobblePhase + (float)PI };
+        float cosYaw[2] = { cosf(-phase[0]), cosf(-phase[1]) };
+        float sinYaw[2] = { sinf(-phase[0]), sinf(-phase[1]) };
+        float offset[2] = { kissDistance / 2.0f, -kissDistance / 2.0f };
+
+        for (int i = 0; i < 2; i++) {
+            float cy = cosYaw[i];
+            float sy = sinYaw[i];
+            float off = offset[i];
 
             for (uint8_t x = 0; x < RNDR_X; x++) {
                 float vx = (float)x - RNDR_CX;
                 for (uint8_t y = 0; y < RNDR_Y; y++) {
                     float vy = (float)y - RNDR_CY;
 
-                    for (int i = 0; i < 2; i++) {
-                        float offset_i = (i == 0) ? (kissDistance / 2.0f) : (-kissDistance / 2.0f);
-                        float phase_i = wobblePhase + ((float)i * PI);
+                    float vx1 = vx * cy - vy * sy;
+                    float vy1 = vx * sy + vy * cy;
 
-                        // True 3D Matrix Rotation Math
-                        float cosYaw = cosf(-phase_i), sinYaw = sinf(-phase_i);
-                        float vx1 = vx * cosYaw - vy * sinYaw;
-                        float vy1 = vx * sinYaw + vy * cosYaw;
+                    float lx_plane = vx1;
+                    float ly_plane = vy1 / cosTilt; 
+                    
+                    float r2 = (lx_plane * lx_plane) + (ly_plane * ly_plane);
+                    if (r2 < innerBoundSq || r2 > outerBoundSq) continue;
 
-                        // 1. FAST CULLING: Calculate 3D footprint on the mathematical plane
-                        float lx_plane = vx1;
-                        float ly_plane = vy1 / cosTilt; 
-                        float r_3d = sqrtf(lx_plane * lx_plane + ly_plane * ly_plane);
+                    float r_3d = sqrtf(r2);
+                    if (fabsf(r_3d - ringRadius) > 1.5f) continue;
 
-                        // Strict 3D radius cutoff (Cull BOTH the outside and the inside!)
-                        // This leaves only a hollow ring of ~1.5 thickness for the raycaster
-                        if (fabsf(r_3d - ringRadius) > 1.5f) continue;
+                    float exact_z = RNDR_CZ + zElevation + off - vy1 * tanTilt;
 
-                        // 2. RAYCAST Z: Algebraically find exact height of mathematical plane
-                        float exact_z = RNDR_CZ + offset_i - vy1 * tanTilt;
+                    // 2. THE SLATE DROP SHADOW
+                    // Darkens the slate color based on height. (Multiplier of 12 smoothly fades the shadow out as Z increases)
+                    /*uint8_t shadowScale = min(255, (int)(exact_z * 12)); 
+                    CRGB shadowVoxel = floorColor;
+                    shadowVoxel.nscale8(shadowScale);
+                    setVoxel(x, y, 0, shadowVoxel);*/
+                    
+                    // 3. THE RING RAYCASTER
+                    int z_min = max(1, (int)floorf(exact_z - 1.2f)); 
+                    int z_max = min((int)RNDR_Z - 1, (int)ceilf(exact_z + 1.2f));
 
-                        // 3. RENDER: Only check the 2 or 3 integer Z voxels intersecting the plane
-                        int z_min = max(0, (int)floorf(exact_z - 1.2f));
-                        int z_max = min((int)RNDR_Z - 1, (int)ceilf(exact_z + 1.2f));
+                    for (int z = z_min; z <= z_max; z++) {
+                        float vz = (float)z - (RNDR_CZ + zElevation) - off;
+                        
+                        float lx = vx1;
+                        float ly = vy1 * cosTilt - vz * sinTilt;
+                        float lz = vy1 * sinTilt + vz * cosTilt;
 
-                        for (int z = z_min; z <= z_max; z++) {
-                            float vz = (float)z - RNDR_CZ - offset_i;
-                            
-                            float lx = vx1;
-                            float ly = vy1 * cosTilt - vz * sinTilt;
-                            float lz = vy1 * sinTilt + vz * cosTilt;
+                        float dist_radial = fabsf(sqrtf(lx * lx + ly * ly) - ringRadius);
+                        float dist_to_surface = sqrtf(lz * lz + dist_radial * dist_radial);
 
-                            // True 3D HOLLOW TORUS SDF 
-                            // Replaced fmaxf (solid disk) with fabsf (hollow hoop)
-                            float dist_radial = fabsf(sqrtf(lx * lx + ly * ly) - ringRadius);
-                            float dist_to_surface = sqrtf(lz * lz + dist_radial * dist_radial);
-
-                            // BRUTAL BINARY SNAP (0.8f guarantees unbroken 1-2 pixel thickness across slopes)
-                            if (dist_to_surface <= 0.8f) {
-                                CRGB c = tex.getColor(x, y, z);
-                                CRGB existing = getVoxel(x, y, z);
-                                setVoxel(x, y, z, existing + c);
-                            }
+                        if (dist_to_surface <= 0.8f) {
+                            CRGB c = tex.getColor(x, y, z);
+                            CRGB existing = getVoxel(x, y, z);
+                            setVoxel(x, y, z, existing + c);
                         }
                     }
                 }
             }
-            
-            tex.advance(deltaMs);
-            showCube();
-            yield();
         }
+        
+        tex.advance(deltaMs);
+        showCube();
+        delay(15); 
     }
+}
 public:
     // ==========================================
     // PURE OVERLOADS (Intent Inference)

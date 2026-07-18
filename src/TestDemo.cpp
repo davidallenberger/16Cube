@@ -49,7 +49,7 @@ namespace {
     const float    SPEED_SCENE_RANDOM_FALL      = (0.8f * SCALE_RATE); 
     const uint32_t SPEED_SCENE_PIPES            = (uint32_t)(15 * SCALE_MS);   
     const uint32_t SPEED_SCENE_WILD_MOUSE       = (uint32_t)(25 * SCALE_MS);   
-    const uint32_t SPEED_SCENE_WOBBLING_DISH    = (45.0f * SCALE_RATE);  
+    const uint32_t SPEED_SCENE_WOBBLING_DISH    = (45.0f); //going to take a risk that we shouldn't slow down the wobbling dish to preserve the effect  
     const uint32_t SPEED_SCENE_HELIX            = (uint32_t)(50 * SCALE_MS);  
     const uint32_t SPEED_SCENE_FLYING_BOX       = (uint32_t)(25 * SCALE_MS);  
     const uint32_t SPEED_SCENE_MOVING_BOXES     = (uint32_t)(40 * SCALE_MS);  
@@ -330,7 +330,7 @@ namespace {
 
                 // --- BILLBOARD DECK ---
                 case CONCEPT_SCENE_TEXT_FYB: 
-                    Letters::scrollTextCycles("Fuck Yer `27` Burn", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, true, 75); break;
+                    Letters::scrollTextCycles("Fuck Yer `C27` Burn", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Yellow, LavaColors_p, MODE_NOISE_FIELD, true, 75); break;
                 case CONCEPT_SCENE_ICONS_CCW: 
                     Icons::scrollIcons("{(1.2.3),(4.5.6),(7.8.9.10),(11.12.13.14),(15.16.17.18),(19.20),21,22,23,24,25,26,27,28,30,31,32}", durationMs, SPEED_TEXT_ICONS, 120, false); break;
                 case CONCEPT_SCENE_ICONS_CW: 
@@ -398,7 +398,7 @@ namespace TestDemo {
         */
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 30000;  
+        const uint32_t DURATION_ART_MS       = 10000;  
         const uint32_t DURATION_BILLBOARD_MS = 20000;  
         
         uint32_t durationMs;
