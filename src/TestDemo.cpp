@@ -342,7 +342,7 @@ namespace {
                 case CONCEPT_SCENE_TEXT_YES: 
                     Letters::scrollTextCycles("`25` Just Say Yes `24`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, ForestColors_p, MODE_NOISE_FIELD, false, 85); break;
                 case CONCEPT_SCENE_TEXT_YEAH: 
-                    Letters::scrollTextCycles("`C27` FUCK `23` YEAH! `28`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Green, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
+                    Letters::scrollTextCycles("`C27` FUCK `23` YEAH! `28`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Yellow, LavaColors_p, MODE_NOISE_FIELD, false, 75); break;
                 case CONCEPT_SCENE_TEXT_ISRAEL: 
                     Letters::scrollTextCycles("`HeM` `HySral` `HHy` `29`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::White, OceanColors_p, MODE_LINEAR_FLOW, false, 75, true); 
                     break;
@@ -398,7 +398,7 @@ namespace TestDemo {
         */
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 10000;  
+        const uint32_t DURATION_ART_MS       = 30000;  
         const uint32_t DURATION_BILLBOARD_MS = 20000;  
         
         uint32_t durationMs;
