@@ -86,13 +86,6 @@ void Snake2d::handleInput(GamepadState pad) {
     bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
     bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
 
-#ifdef HARDWARE_BURNCUBE
-    // Flip the left/right inputs for the mirrored view
-    bool temp = leftPressed;
-    leftPressed = rightPressed;
-    rightPressed = temp;
-#endif
-
     // Up/Down manipulates the Z axis in our 2D grid
     if (upPressed) {
         if (dz == 0) { pDx = 0; pDz = 1; }
