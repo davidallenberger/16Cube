@@ -80,6 +80,166 @@ namespace GeometryEngine {
         }
     }
 
+    // ==========================================
+    // 3D WU VOXEL (Sub-Voxel Anti-Aliasing)
+    // ==========================================
+    inline void drawWuVoxel(int32_t x_fp, int32_t y_fp, int32_t z_fp, CRGB col) {
+        int ix = x_fp >> 8;
+        int iy = y_fp >> 8;
+        int iz = z_fp >> 8;
+        
+        uint8_t fx = x_fp & 0xFF;
+        uint8_t fy = y_fp & 0xFF;
+        uint8_t fz = z_fp & 0xFF;
+        
+        uint8_t ifx = 255 - fx;
+        uint8_t ify = 255 - fy;
+        uint8_t ifz = 255 - fz;
+
+        uint8_t w000 = ((uint32_t)ifx * ify * ifz) >> 16;
+        uint8_t w100 = ((uint32_t)fx  * ify * ifz) >> 16;
+        uint8_t w010 = ((uint32_t)ifx * fy  * ifz) >> 16;
+        uint8_t w110 = ((uint32_t)fx  * fy  * ifz) >> 16;
+        uint8_t w001 = ((uint32_t)ifx * ify * fz ) >> 16;
+        uint8_t w101 = ((uint32_t)fx  * ify * fz ) >> 16;
+        uint8_t w011 = ((uint32_t)ifx * fy  * fz ) >> 16;
+        uint8_t w111 = ((uint32_t)fx  * fy  * fz ) >> 16;
+
+        auto plot = [](int x, int y, int z, CRGB c, uint8_t w) {
+            if (w > 0 && x >= 0 && x < RNDR_X && y >= 0 && y < RNDR_Y && z >= 0 && z < RNDR_Z) {
+                CRGB drawn = c;
+                drawn.nscale8(w);
+                CRGB existing = getVoxel(x, y, z);
+                setVoxel(x, y, z, existing + drawn);
+            }
+        };
+
+        plot(ix,   iy,   iz,   col, w000);
+        plot(ix+1, iy,   iz,   col, w100);
+        plot(ix,   iy+1, iz,   col, w010);
+        plot(ix+1, iy+1, iz,   col, w110);
+        plot(ix,   iy,   iz+1, col, w001);
+        plot(ix+1, iy,   iz+1, col, w101);
+        plot(ix,   iy+1, iz+1, col, w011);
+        plot(ix+1, iy+1, iz+1, col, w111);
+    }
+
+    // ==========================================
+    // 3D WU LINE (Fixed-Point Interpolation)
+    // ==========================================
+    inline void drawWuLine3D(int32_t x0_fp, int32_t y0_fp, int32_t z0_fp, int32_t x1_fp, int32_t y1_fp, int32_t z1_fp, CRGB col) {
+        int32_t dx = x1_fp - x0_fp;
+        int32_t dy = y1_fp - y0_fp;
+        int32_t dz = z1_fp - z0_fp;
+        
+        // Calculate step count based on the largest integer-level displacement
+        int32_t steps = max(abs(dx), max(abs(dy), abs(dz))) >> 8;
+
+        if (steps == 0) {
+            drawWuVoxel(x0_fp, y0_fp, z0_fp, col);
+            return;
+        }
+
+        int32_t xInc = dx / steps;
+        int32_t yInc = dy / steps;
+        int32_t zInc = dz / steps;
+
+        int32_t curX = x0_fp;
+        int32_t curY = y0_fp;
+        int32_t curZ = z0_fp;
+
+        for (int32_t i = 0; i <= steps; i++) {
+            drawWuVoxel(curX, curY, curZ, col);
+            curX += xInc;
+            curY += yInc;
+            curZ += zInc;
+        }
+    }
+
+    // ==========================================
+    // 3D SDF LINE (Mathematically Perfect Capsule)
+    // ==========================================
+    inline void drawSdfLine3D(float x0, float y0, float z0, float x1, float y1, float z1, float radius, CRGB col) {
+        // 1. Line segment vector and squared length
+        float dx = x1 - x0;
+        float dy = y1 - y0;
+        float dz = z1 - z0;
+        float l2 = (dx*dx + dy*dy + dz*dz);
+
+        // Precompute the inverse length for fast multiplication later
+        float invL2 = (l2 > 0.0001f) ? (1.0f / l2) : 0.0f;
+
+        // 2. AABB CULLING (The Ultimate Optimization)
+        // We only check voxels that physically fall within the bounding box of the line.
+        // We add 1.2f to the radius to account for the anti-aliasing blur falloff.
+        float padding = radius + 1.2f; 
+        
+        int minX = max(0, (int)floorf(min(x0, x1) - padding));
+        int maxX = min((int)RNDR_X - 1, (int)ceilf(max(x0, x1) + padding));
+        int minY = max(0, (int)floorf(min(y0, y1) - padding));
+        int maxY = min((int)RNDR_Y - 1, (int)ceilf(max(y0, y1) + padding));
+        int minZ = max(0, (int)floorf(min(z0, z1) - padding));
+        int maxZ = min((int)RNDR_Z - 1, (int)ceilf(max(z0, z1) + padding));
+
+        float radiusSq = radius * radius;
+        float paddedRadiusSq = padding * padding; 
+
+        // 3. TARGETED RENDER LOOP
+        for (int z = minZ; z <= maxZ; z++) {
+            float fz = (float)z;
+            float pz_A = fz - z0; // Loop Hoisting: Calculate Z once per layer
+            
+            for (int y = minY; y <= maxY; y++) {
+                float fy = (float)y;
+                float py_A = fy - y0; // Loop Hoisting: Calculate Y once per row
+                
+                for (int x = minX; x <= maxX; x++) {
+                    float fx = (float)x;
+                    float px_A = fx - x0;
+
+                    // Vector Projection: Find closest point on the line segment
+                    float t = 0.0f;
+                    if (l2 > 0.0001f) {
+                        float dotAP_AB = (px_A * dx) + (py_A * dy) + (pz_A * dz);
+                        t = dotAP_AB * invL2;
+                        t = max(0.0f, min(1.0f, t)); // Clamp to the ends of the segment
+                    }
+
+                    // Coordinates of the closest point on the line
+                    float projX = x0 + t * dx;
+                    float projY = y0 + t * dy;
+                    float projZ = z0 + t * dz;
+
+                    // Calculate squared distance from current voxel to the projection point
+                    float dX = fx - projX;
+                    float dY = fy - projY;
+                    float dZ = fz - projZ;
+                    float distSq = dX*dX + dY*dY + dZ*dZ;
+
+                    // 4. DEFERRED SQUARE ROOT
+                    if (distSq <= paddedRadiusSq) {
+                        float dist = sqrtf(distSq);
+                        
+                        // SDF Coverage Math:
+                        // If dist < radius, intensity is 1.0 (Solid core)
+                        // If dist > radius, intensity fades to 0.0 over 1 voxel of distance
+                        float intensity = 1.0f - (dist - radius);
+                        intensity = max(0.0f, min(1.0f, intensity));
+                        
+                        if (intensity > 0.01f) {
+                            CRGB drawn = col;
+                            drawn.nscale8((uint8_t)(intensity * 255.0f));
+                            
+                            // Additive blend prevents dark halos when lines cross
+                            CRGB existing = getVoxel(x, y, z);
+                            setVoxel(x, y, z, existing + drawn);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
    inline void drawHyperbolicParaboloid(int offSet, int offsetSign, float rotX, float rotY, float rotZ, const TextureState &tex) {
         float hpOffsetSteps[32]; 
         float z_max = (float)(RNDR_Z - 1);

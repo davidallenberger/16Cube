@@ -1041,20 +1041,7 @@ class Streamers {
 
             // 1. VOLUMETRIC FADE (The Comet Trails)
             fadeAll(55);
-            /*
-            // Replaces clearAll() to allow persistent motion blurring
-            for (uint8_t x = 0; x < RNDR_X; x++) {
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t z = 0; z < RNDR_Z; z++) {
-                        CRGB c = getVoxel(x, y, z);
-                        // Only scale active pixels to save cycles
-                        if (c) { 
-                            c.nscale8(200); // 200 = majestic, slow-decaying tails
-                            setVoxel(x, y, z, c); 
-                        }
-                    }
-                }
-            }*/
+        
             // 2. THE SINGULARITY
             // A persistent, crisp white dot at the dead center of the array
             int cx = (int)RNDR_CX;
@@ -1276,45 +1263,7 @@ class Streamers {
             }
         }
 
-        // -------------------------------------------------------------------------
-        // 2. THE RENDER ENGINE
-        // -------------------------------------------------------------------------
-      /*  uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
 
-        while (millis() - startTime < durationMs) {
-            uint32_t now = millis();
-            if (now - lastFrame == 0) { yield(); continue; }
-            lastFrame = now;
-
-            uint8_t beat = beatsin8(bpm, 64, 255);
-            uint8_t timeBase = now / 15; 
-
-            idx = 0; // Reset lookup index for the new frame
-            
-            for (uint8_t z = 0; z < RNDR_Z; z++) {
-                yield();
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t x = 0; x < RNDR_X; x++) {
-                        
-                        // O(1) Memory Lookup replaces all branching and float math
-                        uint8_t spatialPhase = phaseMap[idx++];
-                        
-                        uint8_t brightness = beat - timeBase + spatialPhase;
-                        brightness = qsub8(brightness, 32);     
-                        brightness = qadd8(brightness, brightness); 
-                        
-                        uint8_t colorIndex = timeBase + (spatialPhase / 2);
-                        
-                        CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
-                        setVoxel(x, y, z, finalColor);
-                    }
-                }
-            }
-            showCube();
-            //yield();
-            delay(15);
-        }*/
        // -------------------------------------------------------------------------
         // 2. THE RENDER ENGINE
         // -------------------------------------------------------------------------
@@ -1420,10 +1369,10 @@ class Streamers {
             delay(15); 
         }
     }
-// ==========================================
+    // ==========================================
     // COLORED BURSTS (Auto-Scaling 3D Rays)
     // ==========================================
-    static void animateColoredBursts(uint32_t durationMs, uint8_t effectSpeed = 128) {
+  /*  static void animateColoredBursts(uint32_t durationMs, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
         
@@ -1483,8 +1432,57 @@ class Streamers {
             showCube();
             delay(15);
         }
+    }*/
+
+    // ==========================================
+    // COLORED BURSTS (Auto-Scaling Anti-Aliased Rays)
+    // ==========================================
+      static void animateColoredBursts(uint32_t durationMs, uint8_t effectSpeed = 128) {
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
+        
+        uint32_t volume = RNDR_X * RNDR_Y * RNDR_Z;
+        uint8_t numLines = max(1, (int)(sqrt(volume) / 8.0f));
+        
+        uint8_t speed = (effectSpeed / 16); 
+        uint8_t hueBase = 0;
+
+        while (millis() - startTime < durationMs) {
+            uint32_t now = millis();
+            if (now - lastFrame == 0) { yield(); continue; }
+            lastFrame = now;
+
+            hueBase++; 
+            fadeAll(55);
+
+            // 1. ORIGIN CALCULATION (Upgraded to 16-bit sub-voxel precision)
+            int32_t ox_fp = beatsin16(1 + speed, (int32_t)((RNDR_CX - 2.0f) * 256.0f), (int32_t)((RNDR_CX + 2.0f) * 256.0f));
+            int32_t oy_fp = beatsin16(2 + speed, (int32_t)((RNDR_CY - 2.0f) * 256.0f), (int32_t)((RNDR_CY + 2.0f) * 256.0f));
+            int32_t oz_fp = beatsin16(2 + speed, 0, (RNDR_Z - 1) * 256); 
+
+            // 2. RAY TRACING LOOP
+            for (size_t i = 0; i < numLines; i++) {
+                
+                // Scale the old 8-bit phases directly into the new 16-bit range
+                uint16_t phaseX = i * 6144;         // i * 24 * 256
+                uint16_t phaseY = i * 9216;         // i * 36 * 256
+                uint16_t phaseZ = (i * 12288) + 16384; // (i * 48 + 64) * 256
+
+                int32_t dx_fp = beatsin16(5 + speed, 0, (RNDR_X - 1) * 256, 0, phaseX);
+                int32_t dy_fp = beatsin16(4 + speed, 0, (RNDR_Y - 1) * 256, 0, phaseY);
+                int32_t dz_fp = beatsin16(3 + speed, 0, (RNDR_Z - 1) * 256, 0, phaseZ);
+
+                uint8_t colorIndex = (i * 255 / numLines) + hueBase;
+                CRGB rayColor = ColorFromPalette(RainbowColors_p, colorIndex, 255, LINEARBLEND);
+
+                // 3. DRAW ANTI-ALIASED 3D LINE
+                GeometryEngine::drawWuLine3D(ox_fp, oy_fp, oz_fp, dx_fp, dy_fp, dz_fp, rayColor);
+            }
+            showCube();
+            delay(15);
+        }
     }
-// ==========================================
+    // ==========================================
     // COLOR TWINKLES (Volumetric Sparkle)
     // ==========================================
     static void animateColorTwinkles(uint32_t durationMs, uint8_t effectSpeed = 128, uint8_t spawnSpeed = 128) {
@@ -1676,50 +1674,7 @@ class Streamers {
             showCube();
         }
     }
-    // ==========================================
-    // 3D WU VOXEL (Sub-Voxel Anti-Aliasing)
-    // ==========================================
-    static inline void drawWuVoxel(int32_t x_fp, int32_t y_fp, int32_t z_fp, CRGB col) {
-        int ix = x_fp >> 8;
-        int iy = y_fp >> 8;
-        int iz = z_fp >> 8;
-        
-        uint8_t fx = x_fp & 0xFF;
-        uint8_t fy = y_fp & 0xFF;
-        uint8_t fz = z_fp & 0xFF;
-        
-        uint8_t ifx = 255 - fx;
-        uint8_t ify = 255 - fy;
-        uint8_t ifz = 255 - fz;
-
-        uint8_t w000 = ((uint32_t)ifx * ify * ifz) >> 16;
-        uint8_t w100 = ((uint32_t)fx  * ify * ifz) >> 16;
-        uint8_t w010 = ((uint32_t)ifx * fy  * ifz) >> 16;
-        uint8_t w110 = ((uint32_t)fx  * fy  * ifz) >> 16;
-        uint8_t w001 = ((uint32_t)ifx * ify * fz ) >> 16;
-        uint8_t w101 = ((uint32_t)fx  * ify * fz ) >> 16;
-        uint8_t w011 = ((uint32_t)ifx * fy  * fz ) >> 16;
-        uint8_t w111 = ((uint32_t)fx  * fy  * fz ) >> 16;
-
-        auto plot = [](int x, int y, int z, CRGB c, uint8_t w) {
-            if (w > 0 && x >= 0 && x < RNDR_X && y >= 0 && y < RNDR_Y && z >= 0 && z < RNDR_Z) {
-                CRGB drawn = c;
-                drawn.nscale8(w);
-                CRGB existing = getVoxel(x, y, z);
-                setVoxel(x, y, z, existing + drawn);
-            }
-        };
-
-        plot(ix,   iy,   iz,   col, w000);
-        plot(ix+1, iy,   iz,   col, w100);
-        plot(ix,   iy+1, iz,   col, w010);
-        plot(ix+1, iy+1, iz,   col, w110);
-        plot(ix,   iy,   iz+1, col, w001);
-        plot(ix+1, iy,   iz+1, col, w101);
-        plot(ix,   iy+1, iz+1, col, w011);
-        plot(ix+1, iy+1, iz+1, col, w111);
-    }
-
+    
     
     // ==========================================
     // 3D DRIFT (Aerodynamic Drag & Golden Tumble)
@@ -1847,7 +1802,7 @@ class Streamers {
                     uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
                     CRGB col = ColorFromPalette(pal, colorIndex, armBrightness, LINEARBLEND);
                     
-                    drawWuVoxel(px_fp, py_fp, pz_fp, col);
+                    GeometryEngine::drawWuVoxel(px_fp, py_fp, pz_fp, col);
                 }
             }
             showCube();
@@ -1919,7 +1874,7 @@ class Streamers {
                 uint8_t colorIndex = i * (256 / NUM_SPOKES);
                 CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
                 
-                drawWuVoxel(px_fp, py_fp, pz_fp, col);
+                GeometryEngine::drawWuVoxel(px_fp, py_fp, pz_fp, col);
             }
             showCube();
             delay(15); // Explicit DMA frame limiter
