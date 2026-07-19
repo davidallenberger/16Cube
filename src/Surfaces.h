@@ -179,12 +179,6 @@ private:
 
                     float exact_z = RNDR_CZ + zElevation + off - vy1 * tanTilt;
 
-                    // 2. THE SLATE DROP SHADOW
-                    // Darkens the slate color based on height. (Multiplier of 12 smoothly fades the shadow out as Z increases)
-                    /*uint8_t shadowScale = min(255, (int)(exact_z * 12)); 
-                    CRGB shadowVoxel = floorColor;
-                    shadowVoxel.nscale8(shadowScale);
-                    setVoxel(x, y, 0, shadowVoxel);*/
                     
                     // 3. THE RING RAYCASTER
                     int z_min = max(1, (int)floorf(exact_z - 1.2f)); 
