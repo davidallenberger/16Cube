@@ -128,17 +128,17 @@ namespace {
     const SceneRule SCENE_RULES[] = {
         /* Hinge Dance  */ { true,  2 }, /* Splat        */ { true,  2 }, /* Bounce       */ { true,  2 },
         /* Saddle       */ { true,  1 }, /* Sine Wave    */ { true,  3 }, /* Rain         */ { true,  1 },
-        /* Cyclone      */ { true,  1 }, /* Vert Stream  */ { true,  1 }, /* Tornado      */ { true,  1 },
+        /* Cyclone      */ { true,  2 }, /* Vert Stream  */ { true,  1 }, /* Tornado      */ { true,  1 },
         /* Hula         */ { true,  1 }, /* Random Fall  */ { true,  1 }, /* Fireworks    */ { true,  1 },
-        /* Pipes        */ { true,  1 }, /* Wild Mouse   */ { true,  1 }, /* Atom Smasher */ { true,  1 },
+        /* Vert Pipes   */ { true,  1 }, /* Wild Mouse   */ { true,  1 }, /* Atom Smasher */ { true,  1 },
         /* Wobbling Dish*/ { true,  1 }, /* Helix        */ { true,  1 }, /* Flying Box   */ { true,  2 },
-        /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 }, /* Bouncing Ball*/ { true,  1 }, /* Lava Lamp    */ { true,  1 },
-        /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Col Twinkles */ { true,  1 }, /* Col Bursts   */ { true,  1 },
-        /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Str Bounce   */ { true,  1 },
-        /* Drift 3D     */ { true,  1 }, /* Blackhole    */ { true,  1 },
-        /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { true,  1 }, /* Icons CW     */ { true,  1 },
-        /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Yes     */ { true,  1 },
-        /* Text Yeah    */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
+        /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 }, /* Bouncing Ball*/ { true,  1 }, /* Lava Lamp    */ { true,  2 },
+        /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Twinkles */     { true,  1 }, /* Col Bursts   */ { true,  1 },
+        /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Bounce Ballsz*/ { true,  1 },
+        /* Drift 3D     */ { true,  2 }, /* Blackhole    */ { true,  1 },
+        /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { false,  1 }, /* Icons CW     */ { true,  2},
+        /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
+        /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
         /* Tetris       */ { true,  1 }
     };
 
@@ -149,7 +149,7 @@ namespace {
         "Flying Box", "Moving Boxes", "Rolling Ball", "Bouncing Ball", "Lava Lamp", "DNA Spiral", "Drift Rose 3D", 
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
         "Drift 3D", "Blackhole",
-        "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Yes", "Text: Yeah", "Text: Israel", 
+        "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris"
     };
 
@@ -398,7 +398,7 @@ namespace TestDemo {
         */
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 30000;  
+        const uint32_t DURATION_ART_MS       = 15000;  
         const uint32_t DURATION_BILLBOARD_MS = 20000;  
         
         uint32_t durationMs;
