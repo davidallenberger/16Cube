@@ -39,11 +39,14 @@ static std::string expandRandomString(const std::string& input) {
     
     for (int i = 0; i < numIcons; i++) {
       int randomIndex = random(pool.size());
+#ifndef TARGET_2026_CUBOID
+      // Only inject random color cycling if NOT building for the 2026 16^3 cube
       if (random(2) == 1) generated += "C"; 
+#endif
+
       generated += pool[randomIndex];
       if (i < numIcons - 1) generated += ",";
     }
-    
     result.replace(start, end - start + 1, generated);
   }
   return result; 
@@ -232,13 +235,20 @@ void scrollIcons(const char* iconString, uint32_t durationMs, uint8_t scrollDela
           uint8_t iconByte = pgm_read_byte(&icons[currentIconId][y * 16 + x]);
           
           if (iconByte != 0) {
-            CRGB color;
+            CRGB color;      
+#ifdef TARGET_2026_CUBOID
+            // Force solid colors for maximum distance visibility on the 2026 build, 
+            // ignoring any 'C' flags that might have been passed manually
+            color = getColorFromPaletteCode(iconByte);
+#else
+            // Standard behavior: allow rainbow cycling if commanded
             if (cmd.rainbow) {
               uint8_t phase = (iconByte * 16 + globalRainbowPhase) % 256;
               color = getPerceptualRainbowColor(phase);
             } else {
               color = getColorFromPaletteCode(iconByte);
             }
+#endif
             
             if (SCROLL_AXIS == 1)      setVoxel(u, w, h, color);      
             else if (SCROLL_AXIS == 0) setVoxel(h, u, w, color); 
