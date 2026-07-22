@@ -126,7 +126,7 @@ namespace {
     };
 
     const SceneRule SCENE_RULES[] = {
-        /* Hinge Dance  */ { true,  2 }, /* Splat        */ { true,  2 }, /* Bounce       */ { true,  2 },
+        /* Hinge Dance  */ { true,  2 }, /* Plane Splat  */ { true,  2 }, /* Plane Bounce */ { true,  2 },
         /* Saddle       */ { true,  1 }, /* Sine Wave    */ { true,  3 }, /* Rain         */ { true,  1 },
         /* Cyclone      */ { true,  2 }, /* Vert Stream  */ { true,  1 }, /* Tornado      */ { true,  1 },
         /* Hula         */ { true,  1 }, /* Random Fall  */ { true,  1 }, /* Fireworks    */ { true,  1 },
