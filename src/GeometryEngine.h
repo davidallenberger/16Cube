@@ -935,50 +935,58 @@ namespace GeometryEngine {
     // THE 2026 SPLIT-CUBE: UNIVERSAL PUDDLE ENGINE
     // ==========================================
 #ifdef TARGET_2026_CUBOID
-    inline void drawSineWaveSplit2026(float amplitude, int periodDegrees, uint16_t phaseBot, uint16_t phaseTop, uint8_t axisBot, uint8_t axisTop, bool invertBot, bool invertTop, const TextureState &tex) {
+    inline void drawSineWaveSplit2026(float passedAmplitude, int periodDegrees, uint16_t phaseBot, uint16_t phaseTop, uint8_t axisBot, uint8_t axisTop, bool invertBot, bool invertTop, const TextureState &tex) {
         float angleScale = (360.0f / (float)periodDegrees) * 4096.0f;
+        uint8_t halfZ = RNDR_Z / 2;
 
-        // --- BOTTOM CUBE (0-7) ---
-        for (uint8_t u = 0; u < 8; u++) {
-            for (uint8_t v = 0; v < 8; v++) {
-                float fu = (float)u - 3.5f;
-                float fv = (float)v - 3.5f;
-                float dist = sqrtf(fu*fu + fv*fv); 
-                
-                int16_t s_bot = sin16((uint16_t)(dist * angleScale) - phaseBot);
-                int w_bot = (int)roundf(((amplitude * (float)s_bot) / 32767.0f) + 3.5f);
-                if (invertBot) w_bot = 7 - w_bot;
-
-                uint8_t x, y, z;
-                if (axisBot == 0) { x = w_bot; y = u; z = v; }      
-                else if (axisBot == 1) { x = u; y = w_bot; z = v; } 
-                else { x = u; y = v; z = w_bot; }                   
-                
-                if (x < 8 && y < 8 && z < 8) setVoxel(x, y, z, tex.getColor(x, y, z));
+        // A reusable lambda to calculate exact bounds and amplitudes per-axis
+        auto drawHalf = [&](uint16_t phase, uint8_t axis, bool invert, uint8_t zOffset) {
+            uint8_t limU, limV, limW;
+            float cU, cV, cW;
+            
+            if (axis == 0) { // Oscillates along X (U=Y, V=Local Z, W=X)
+                limU = RNDR_Y; limV = halfZ; limW = RNDR_X;
+                cU = RNDR_CY - 0.5f; cV = (halfZ / 2.0f) - 0.5f; cW = RNDR_CX - 0.5f;
+            } else if (axis == 1) { // Oscillates along Y (U=X, V=Local Z, W=Y)
+                limU = RNDR_X; limV = halfZ; limW = RNDR_Y;
+                cU = RNDR_CX - 0.5f; cV = (halfZ / 2.0f) - 0.5f; cW = RNDR_CY - 0.5f;
+            } else { // Oscillates along Local Z (U=X, V=Y, W=Local Z)
+                limU = RNDR_X; limV = RNDR_Y; limW = halfZ;
+                cU = RNDR_CX - 0.5f; cV = RNDR_CY - 0.5f; cW = (halfZ / 2.0f) - 0.5f;
             }
-        }
 
-        // --- TOP CUBE (8-15) ---
-        for (uint8_t u = 0; u < 8; u++) {
-            for (uint8_t v = 0; v < 8; v++) {
-                float fu = (float)u - 3.5f;
-                float fv = (float)v - 3.5f;
-                float dist = sqrtf(fu*fu + fv*fv); 
-                
-                int16_t s_top = sin16((uint16_t)(dist * angleScale) - phaseTop);
-                int w_top = (int)roundf(((amplitude * (float)s_top) / 32767.0f) + 3.5f);
-                if (invertTop) w_top = 7 - w_top; 
+            // Completely ignore the passed-in amplitude and calculate perfect edge-to-edge math
+            float amp = cW;
 
-                uint8_t x, y, z;
-                if (axisTop == 0) { x = w_top; y = u; z = v; }      
-                else if (axisTop == 1) { x = u; y = w_top; z = v; } 
-                else { x = u; y = v; z = w_top; }                   
-                
-                z += 8; 
-                
-                if (x < 8 && y < 8 && z >= 8 && z < 16) setVoxel(x, y, z, tex.getColor(x, y, z));
+            for (uint8_t u = 0; u < limU; u++) {
+                for (uint8_t v = 0; v < limV; v++) {
+                    float fu = (float)u - cU;
+                    float fv = (float)v - cV;
+                    float dist = sqrtf(fu*fu + fv*fv); 
+                    
+                    int16_t s = sin16((uint16_t)(dist * angleScale) - phase);
+                    int w = (int)roundf(((amp * (float)s) / 32767.0f) + cW);
+                    
+                    if (invert) w = (limW - 1) - w; 
+
+                    uint8_t x, y, z;
+                    if (axis == 0) { x = w; y = u; z = v; }      
+                    else if (axis == 1) { x = u; y = w; z = v; } 
+                    else { x = u; y = v; z = w; }                   
+                    
+                    // Shift the local Z up to the physical Top half if required
+                    z += zOffset; 
+                    
+                    // Final safety clamp before rendering
+                    if (x < RNDR_X && y < RNDR_Y && z >= zOffset && z < zOffset + halfZ) {
+                        setVoxel(x, y, z, tex.getColor(x, y, z));
+                    }
+                }
             }
-        }
+        };
+
+        drawHalf(phaseBot, axisBot, invertBot, 0);       // Draw Bottom
+        drawHalf(phaseTop, axisTop, invertTop, halfZ);   // Draw Top
     }
 #endif
 

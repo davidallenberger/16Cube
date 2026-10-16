@@ -71,7 +71,7 @@ private:
 #ifdef TARGET_2026_CUBOID
     static void animateSineWaveSplit2026Internal(uint32_t durationMs, int period, SplitWaveMode2026 mode, ShaderMode sMode, CRGBPalette16 pal, float waveSpeed = 0.8f) {
         uint32_t startTime = millis(), lastFrame = millis();
-        float geomPhase = 0.0f, amplitude = 3.5f; 
+        float geomPhase = 0.0f, amplitude = 3.5f;
         uint8_t aBot = 2, aTop = 2; bool invBot = false, invTop = false, outOfPhase = false;
 
         if (mode == SPLIT_2026_MIRRORED_Z) { aBot = 2; aTop = 2; invTop = true; } 

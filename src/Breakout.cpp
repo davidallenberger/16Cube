@@ -11,7 +11,7 @@ BreakoutMode Breakout::currentMode = MODE_CLASSIC;
 int Breakout::bricksRemaining = 0;
 bool Breakout::ballInPlay = false;
 
-float Breakout::paddleX = 2.5f;
+float Breakout::paddleX = RNDR_CX - 1.5f;
 float Breakout::paddleY = 2.5f;
 
 float Breakout::ballX = 0.0f;

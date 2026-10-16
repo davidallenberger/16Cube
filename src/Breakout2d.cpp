@@ -8,7 +8,7 @@ Breakout2dMode Breakout2d::currentMode = MODE2D_CLASSIC;
 int Breakout2d::bricksRemaining = 0;
 bool Breakout2d::ballInPlay = false;
 
-float Breakout2d::paddleX = 2.5f;
+float Breakout2d::paddleX = RNDR_CX - 1.5f;
 float Breakout2d::ballX = 0.0f;
 float Breakout2d::ballZ = 0.0f;
 float Breakout2d::velX = 0.0f;
