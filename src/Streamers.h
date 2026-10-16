@@ -161,7 +161,7 @@ class Streamers {
         float minX = RNDR_X * 0.25f, maxX = RNDR_X * 0.75f;
         float minY = RNDR_Y * 0.25f, maxY = RNDR_Y * 0.75f;
 
-        const int MAX_PARTICLES = (RNDR_X * RNDR_Y * RNDR_Z) / 7;
+        const int MAX_PARTICLES = min(((RNDR_X * RNDR_Y * RNDR_Z) / 7), 170);
         
         //static KineticParticle pool[MAX_PARTICLES];
         KineticParticle* pool = (KineticParticle*)SharedAppMemory;
@@ -1129,7 +1129,9 @@ class Streamers {
         // Each ball struct is 12 bytes. 
         // 8x8 requires 64 columns. Max balls = 8192 / (64 * 12) = 10 balls per col.
         // 16x16 requires 256 columns. Max balls = 29000 / (256 * 12) = 9 balls per col.
-        const int MAX_BALLS_PER_COL = (RNDR_X > 8) ? 9 : 10; 
+        // 8x8 uses 10 (640 balls). 10x10 uses 6 (600 balls). 16x16 uses 9 (2304 balls in 29KB memory).
+        const int MAX_BALLS_PER_COL = (RNDR_X == 10) ? 6 : ((RNDR_X > 10) ? 9 : 10);
+        
         const int TOTAL_COLS = RNDR_X * RNDR_Y;
         
         // Cast the global arena
