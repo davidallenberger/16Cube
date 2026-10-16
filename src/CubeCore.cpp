@@ -12,19 +12,19 @@
     #define BRIGHTNESS 64  
     #define COLOR_ORDER   RGB
 
-    // Dig-Octa Left-to-Right Output Pins (LED 6,5,4,3)
-    #define PIN_0 5  // Brainboard LED 6
-    #define PIN_1 4  // Brainboard LED 5
-    #define PIN_2 0  // Brainboard LED 1
-    #define PIN_3 2  // Brainboard LED 3
+    // Dig-Octa Left-to-Right Output Pins
+    #define PIN_0 4  // Brainboard LED 5 -> Right Sender Pair 1 (Ops 9, 10 / X=5, 6)
+    #define PIN_1 5  // Brainboard LED 6 -> Right Sender Pair 2 (Ops 11, 12, 13 / X=7, 8, 9)
+    #define PIN_2 0  // Brainboard LED 1 -> Left Sender Pair 1 (Ops 7, 8 / X=3, 4)
+    #define PIN_3 1  // Brainboard LED 2 -> Left Sender Pair 2 (Ops 4, 5, 6 / X=0, 1, 2)
 
     // --- THE SAFETY PORTS (Unused LEDs) ---
-    #define PIN_SAFE_1 1  
-    #define PIN_SAFE_2 3  
-    #define PIN_SAFE_3 12 
-    #define PIN_SAFE_4 13 
+    #define PIN_SAFE_1 2   // Brainboard LED 3
+    #define PIN_SAFE_2 3   // Brainboard LED 4
+    #define PIN_SAFE_3 12  // Brainboard LED 7
+    #define PIN_SAFE_4 13  // Brainboard LED 8
 
-    #define STRIP_LEN 256
+    #define STRIP_LEN 480  // Max length: 3 planes * 10 strands * 16 LEDs = 480
     CRGB strip0[STRIP_LEN];
     CRGB strip1[STRIP_LEN];
     CRGB strip2[STRIP_LEN];
@@ -84,21 +84,31 @@ static inline MappedPixel mapXYZ(uint8_t x, uint8_t y, uint8_t z) {
   uint8_t x_local = 0;
 
   switch(x) {
-      case 0: m.strip = 3; x_local = 1; break; 
-      case 1: m.strip = 3; x_local = 0; break; 
-      case 2: m.strip = 2; x_local = 1; break; 
-      case 3: m.strip = 2; x_local = 0; break; 
-      case 4: m.strip = 0; x_local = 0; break; 
-      case 5: m.strip = 0; x_local = 1; break; 
-      case 6: m.strip = 1; x_local = 0; break; 
-      case 7: m.strip = 1; x_local = 1; break; 
+      // Left Outer (Strip 3) - 3 planes
+      case 0: m.strip = 3; x_local = 2; break; // Op 4 
+      case 1: m.strip = 3; x_local = 1; break; // Op 5
+      case 2: m.strip = 3; x_local = 0; break; // Op 6
+      
+      // Left Inner (Strip 2) - 2 planes
+      case 3: m.strip = 2; x_local = 1; break; // Op 7
+      case 4: m.strip = 2; x_local = 0; break; // Op 8
+      
+      // Right Inner (Strip 0) - 2 planes
+      case 5: m.strip = 0; x_local = 0; break; // Op 9
+      case 6: m.strip = 0; x_local = 1; break; // Op 10
+      
+      // Right Outer (Strip 1) - 3 planes
+      case 7: m.strip = 1; x_local = 0; break; // Op 11
+      case 8: m.strip = 1; x_local = 1; break; // Op 12
+      case 9: m.strip = 1; x_local = 2; break; // Op 13
   }
 
-  uint8_t drop_index = (x_local == 0) ? y_inv : (7 - y_inv);
+  // Modulo 2 guarantees perfect Y-inversion for both 2-plane and 3-plane serpentines
+  uint8_t drop_index = ((x_local % 2) == 0) ? y_inv : y;
   uint8_t pixel_index = 15 - z;
   
-  // Fast bitwise equivalent of: (x_local * 128) + (drop_index * 16) + pixel_index
-  m.index = (x_local << 7) + (drop_index << 4) + pixel_index;
+  uint16_t leds_per_plane = RNDR_Y * 16; 
+  m.index = (x_local * leds_per_plane) + (drop_index * 16) + pixel_index;
   m.ok = true;
   return m;
 }
@@ -299,11 +309,11 @@ void debugVoxel(uint8_t x, uint8_t y, uint8_t z) {
 
 void getPerimeterCoords(uint8_t p, uint8_t& u, uint8_t& w) {
 #ifdef TARGET_2026_CUBOID
-    // 8x8 perimeter mapping (28 LEDs around the ring)
-    if (p < 7)       { u = p; w = 0; }               // Face 1
-    else if (p < 14) { u = 7; w = p - 7; }           // Face 2 (Bend 1)
-    else if (p < 21) { u = 7 - (p - 14); w = 7; }    // Face 3 (Bend 2)
-    else             { u = 0; w = 7 - (p - 21); }    // Face 4 (Bend 3)
+    // 10x10 perimeter mapping (36 LEDs around the ring)
+    if (p < 9)       { u = p; w = 0; }               // Face 1
+    else if (p < 18) { u = 9; w = p - 9; }           // Face 2 (Bend 1)
+    else if (p < 27) { u = 9 - (p - 18); w = 9; }    // Face 3 (Bend 2)
+    else             { u = 0; w = 9 - (p - 27); }    // Face 4 (Bend 3)
 #else
     // 16x16 perimeter mapping (60 LEDs around the ring)
     if (p < 15)      { u = p; w = 0; } 

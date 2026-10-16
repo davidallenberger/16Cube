@@ -14,11 +14,11 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 // ================== ENVIRONMENT SWITCHES ==================
 
 // 1. SELECT YOUR HARDWARE WIRING TOPOLOGY
-//#define HARDWARE_BURNCUBE      // The 4-pin Dig-Octa T-Connector layout
-#define HARDWARE_DESKTOP     // The original 8-pin serpentine test layout
+#define HARDWARE_BURNCUBE      // The 4-pin Dig-Octa T-Connector layout
+//#define HARDWARE_DESKTOP     // The original 8-pin serpentine test layout
 
-// 2. SELECT YOUR RENDER CANVAS - For 8*8*16 uncomment next two lines
-#define TARGET_2026_CUBOID     // 8x8x16 spatial rendering
+// 2. SELECT YOUR RENDER CANVAS - For 8*8*16 (or 10*10*16) uncomment next two lines
+#define TARGET_2026_CUBOID     // 10x10x16 spatial rendering
 
 // 3. COMPILE-TIME BLUETOOTH KILL SWITCH
 // Uncomment the line below to completely disable the Bluetooth radio, 
@@ -32,12 +32,12 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 // =========================================================
 
 #ifdef TARGET_2026_CUBOID
-    constexpr uint8_t RNDR_X = 8;
-    constexpr uint8_t RNDR_Y = 8;
+    constexpr uint8_t RNDR_X = 10;
+    constexpr uint8_t RNDR_Y = 10;
     constexpr uint8_t RNDR_Z = 16;
-    constexpr uint8_t RNDR_PERIMETER = 28; // 8x8 Non-overlapping corners (7+7+7+7)
-    constexpr float RNDR_CX = 3.5f;
-    constexpr float RNDR_CY = 3.5f;
+    constexpr uint8_t RNDR_PERIMETER = 36; // 10x10 Non-overlapping corners (9+9+9+9)
+    constexpr float RNDR_CX = 4.5f;
+    constexpr float RNDR_CY = 4.5f;
     constexpr float RNDR_CZ = 7.5f;
 #else
     constexpr uint8_t RNDR_X = CUBE_SIZE;
