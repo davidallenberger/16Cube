@@ -28,7 +28,8 @@ static bool menuNeedsRedraw = true;
 // Local Wrappers for system-level apps
 static void runAmbientArt() { 
     while (true) {
-        TestDemo::runEngine(false); 
+        TestDemo::runEngine(false);
+       //Forces in order testing TestDemo::runEngine(true); 
     }
 }
 static void renderAmbientIcon(TextureState& tex) { Shapes::animateStatic(SHAPE_MERKABA, 10, RENDER_SOLID, MODE_SPATIAL_GRADIENT); }
@@ -98,7 +99,10 @@ void CubeSystem::setup() {
     ESP_ERROR_CHECK(ret);
 
     BluetoothManager::setup();
-    changeState(SYS_STATE_BOOT_PAIRING);
+    //xxx put back to pair: changeState(SYS_STATE_BOOT_PAIRING);
+    // Skip the pairing sandbox and boot directly into Ambient Art
+    selectedMenuIndex = 0; 
+    changeState(SYS_STATE_RUN_APP);
 #endif
 }
 
@@ -226,11 +230,16 @@ void CubeSystem::drawNumberOnFaces(uint8_t num, TextureState& tex) {
         for (int x = 0; x < 3; x++) {
             if (font[num][4 - y] & (1 << (2 - x))) {
                 CRGB color = tex.getColor(x, y, zOffset);
-                int fx = 5 - x; int inv_fx = x + 2; 
+                
+                // Dynamically center the 3-wide font on any X/Y width
+                int offset = (RNDR_X - 3) / 2;
+                int fx = offset + (2 - x); 
+                int inv_fx = offset + x; 
+                
                 setVoxel(fx, 0, y + zOffset, color);
-                setVoxel(inv_fx, 7, y + zOffset, color);
+                setVoxel(inv_fx, RNDR_Y - 1, y + zOffset, color);
                 setVoxel(0, inv_fx, y + zOffset, color);
-                setVoxel(7, fx, y + zOffset, color);
+                setVoxel(RNDR_X - 1, fx, y + zOffset, color);
             }
         }
     }
@@ -294,9 +303,8 @@ void CubeSystem::handlePairingSandbox() {
 
     if (p1) {
         int bZ = 0;
-        setVoxel(0, 0, bZ, CRGB::Red); setVoxel(0, 7, bZ, CRGB::Blue);
-        setVoxel(7, 0, bZ, CRGB::Green); setVoxel(7, 7, bZ, CRGB::White);
-
+        setVoxel(0, 0, bZ, CRGB::Red); setVoxel(0, RNDR_Y - 1, bZ, CRGB::Blue);
+        setVoxel(RNDR_X - 1, 0, bZ, CRGB::Green); setVoxel(RNDR_X - 1, RNDR_Y - 1, bZ, CRGB::White);
         auto draw2x2x4 = [&](int startX, int startY, CRGB col) {
             for(int x = startX; x <= startX + 1; x++) for(int y = startY; y <= startY + 1; y++) for(int z = 0; z <= 3; z++) setVoxel(x, y, bZ + z, col);
         };

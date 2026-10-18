@@ -364,23 +364,43 @@ namespace {
 
 namespace TestDemo {
 
-    void runHardwareWiringTest() {
+  void runHardwareWiringTest() {
         Serial.println("\n--- STARTING FAST BOOT DIAGNOSTIC ---");
-        CRGB testColors[8] = { CRGB::Red, CRGB::OrangeRed, CRGB::Yellow, CRGB::Green, CRGB::Blue, CRGB::Magenta, CRGB::DarkTurquoise, CRGB::White };
+        
+        // 16 distinct colors wrapping the hue wheel
+        CRGB testColors[16] = { 
+            CRGB::Red, CRGB::OrangeRed, CRGB::Orange, CRGB::Gold, 
+            CRGB::Yellow, CRGB::Chartreuse, CRGB::Green, CRGB::MediumSpringGreen, 
+            CRGB::Cyan, CRGB::DeepSkyBlue, CRGB::Blue, CRGB::Indigo, 
+            CRGB::DarkViolet, CRGB::Magenta, CRGB::DeepPink, CRGB::White
+        };
 
-        Serial.println("Test 1: Full Rainbow Hold (5 Seconds)...");
+        Serial.println("Test 1: Full Rainbow Hold (Infinite)...");
         clearAll(); 
         for (uint8_t x = 0; x < RNDR_X; x++) {
-            CRGB planeColor = testColors[x % 8];
+            CRGB planeColor = testColors[x % 16]; 
             for (uint8_t y = 0; y < RNDR_Y; y++) {
                 for (uint8_t z = 0; z < RNDR_Z; z++) setVoxel(x, y, z, planeColor); 
             }
         }
-        showCube(); delay(5000); 
+        showCube(); 
+        Serial.println("Test 1: Showcube rainbow hold start");
+        
+        delay(5000); 
 
+        // Trap the system here indefinitely for wiring inspection
+        /*
+        while (true) { 
+            delay(3000); 
+             Serial.println("infinite hold");
+        } */
+        
+        Serial.println("Test 1: End Rainbow hold...");
+        
+        // (Unreachable due to infinite loop, but modulo updated for future use)
         Serial.println("Test 2: Sweeping X-Planes (Left to Right)...");
         for (uint8_t x = 0; x < RNDR_X; x++) {
-            clearAll(); CRGB planeColor = testColors[x % 8];
+            clearAll(); CRGB planeColor = testColors[x % 16];
             for (uint8_t y = 0; y < RNDR_Y; y++) {
                 for (uint8_t z = 0; z < RNDR_Z; z++) setVoxel(x, y, z, planeColor); 
             }
@@ -391,15 +411,11 @@ namespace TestDemo {
     }
 
     void runEngine(bool isTestMode) {
-        /*const int ART_DECK_REPETITIONS       = 3;  //about 40 minutes
-        const int BILLBOARD_DECK_REPETITIONS = 2;  //about 5 minutes
-        const uint32_t DURATION_ART_MS       = 20000;  
-        const uint32_t DURATION_BILLBOARD_MS = 20000;  
-        */
+        
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
         const uint32_t DURATION_ART_MS       = 30000;  
-        const uint32_t DURATION_BILLBOARD_MS = 20000;  
+        const uint32_t DURATION_BILLBOARD_MS = 20000;          
         
         uint32_t durationMs;
 
