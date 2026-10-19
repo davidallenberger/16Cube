@@ -79,6 +79,12 @@ static const int TOTAL_APPS = sizeof(appRegistry) / sizeof(appRegistry[0]);
 void CubeSystem::setup() {
     Serial.println("Booting Cube OS...");
 
+    // 1. Expand the hidden hardware buffer from 128 bytes to 2048 bytes
+    // MUST be called before Serial2.begin()
+    Serial2.setRxBufferSize(2048);
+    // RECEIVER CONFIG (SOFTWARE CROSSOVER): RX = 27, TX = 14
+    Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+
     TestDemo::runHardwareWiringTest();
     //delay(500); 
     initAppMemory();

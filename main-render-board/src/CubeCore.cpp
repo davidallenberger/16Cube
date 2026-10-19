@@ -16,7 +16,9 @@
     #define PIN_0 4  // Brainboard LED 5 -> Right Sender Pair 1 (Ops 9, 10 / X=5, 6)
     #define PIN_1 5  // Brainboard LED 6 -> Right Sender Pair 2 (Ops 11, 12, 13 / X=7, 8, 9)
     #define PIN_2 0  // Brainboard LED 1 -> Left Sender Pair 1 (Ops 7, 8 / X=3, 4)
+    //Comment this out so can see serial monitor and switch PIN_3 to 14....
     #define PIN_3 1  // Brainboard LED 2 -> Left Sender Pair 2 (Ops 4, 5, 6 / X=0, 1, 2)
+    //#define PIN_3 14   // Brainboard LED 2 -> Left Sender Pair 2 (Ops 4, 5, 6 / X=0, 1, 2)
 
     // --- THE SAFETY PORTS (Unused LEDs) ---
     #define PIN_SAFE_1 2   // Brainboard LED 3
@@ -24,6 +26,7 @@
     #define PIN_SAFE_3 12  // Brainboard LED 7
     #define PIN_SAFE_4 13  // Brainboard LED 8
 
+    
     #define STRIP_LEN 480  // Max length: 3 planes * 10 strands * 16 LEDs = 480
     CRGB strip0[STRIP_LEN];
     CRGB strip1[STRIP_LEN];
@@ -45,7 +48,7 @@
     #define PIN_5 5    
     #define PIN_6 2    
     #define PIN_7 18   
-
+    
     #define STRIP0_LEN 544   
     #define STRIP1_LEN 544   
     #define STRIP2_LEN 544   
@@ -200,8 +203,16 @@ void showCube() {
     // 1. Push the pixels
     FastLED.show(); 
     
+    // --- 2. THE UNIVERSAL UART RECEIVER ---
+    // Drains the hardware buffer every single frame.
+    // Future: You will parse this string into a menu of options/structs here.
+    while (Serial2.available()) {
+        String incoming = Serial2.readStringUntil('\n');
+        Serial.print("UART Received: ");
+        Serial.println(incoming);
+    }
 #ifndef DISABLE_BLUETOOTH
-    // 2. Keep the Bluetooth radio breathing
+    // 3. Keep the Bluetooth radio breathing
     BluetoothManager::update(); 
     
     ControllerPtr p1 = BluetoothManager::getGamepad(ROLE_MASTER);

@@ -411,7 +411,6 @@ namespace TestDemo {
     }
 
     void runEngine(bool isTestMode) {
-        
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
         const uint32_t DURATION_ART_MS       = 30000;  
