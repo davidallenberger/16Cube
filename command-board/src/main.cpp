@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <esp_err.h>
+#include <math.h>
 #include <driver/i2s.h>
 #include <arduinoFFT.h>
 #define FASTLED_INTERNAL
@@ -21,7 +23,20 @@ float peakDot = 0.0; // Tracks the falling peak for the Noise Meter
 #define BTN_CAM  33  // Swapped from 23 to avoid I2S collision
 
 // --- I2S Mic/ADC Pins ---
-#define I2S_MCLK 4        // PCM1808 Master Clock
+#define I2S_MCLK 4        // Manually driven by LEDC PWM
+
+// Hardware contract: PCM1808 MD1=LOW, MD0=LOW (slave), FMT=LOW (I2S).
+// Set this true ONLY if the PCM1808 FMT pin is actually HIGH.
+constexpr bool PCM1808_LEFT_JUSTIFIED = false;
+constexpr bool PCM1808_USE_APLL = true;
+// Diagnostic mode matches the uploaded file: FFT/LED/UART audio disabled.
+// Set to 0 after validating input to enable the existing processing block.
+#define AUDIO_DIAGNOSTICS 0
+// ADC stereo DMA word to feed to the existing mono FFT (0 or 1).
+// Identify the desired input using the slot diagnostics; do not assume LIN.
+//xxxconstexpr size_t ADC_FFT_SLOT = 0; <--wrong slot?!!??!
+constexpr size_t ADC_FFT_SLOT = 1;
+static_assert(ADC_FFT_SLOT < 2, "ADC_FFT_SLOT must be 0 or 1");
 #define I2S_WS 23
 #define I2S_SCK 22
 #define I2S_SD_MIC 21     // Dedicated to INMP441
@@ -29,8 +44,7 @@ float peakDot = 0.0; // Tracks the falling peak for the Noise Meter
 
 // --- Audio & FFT Config ---
 #define SAMPLES 256              // Must be a power of 2
-//#define SAMPLING_FREQ 16000      // 16kHz is standard for voice/music sync
-#define SAMPLING_FREQ 48000      // 16kHz is standard for voice/music sync
+#define SAMPLING_FREQ 48000      // Requested LRCK; stereo BCK = 64 * fs
 #define I2S_PORT I2S_NUM_0
 
 unsigned long seqNum = 0;
@@ -49,7 +63,8 @@ struct __attribute__((packed)) WLEDAudioPayload {
 float uiGainMic = 0.2;       // Gain for INMP441 Microphone
 float uiGainADC = 1.0;       // Gain for PCM1808 Line-In
 float uiSquelchMic = 120.0;  // High gate to block typing/room noise
-float uiSquelchADC = 5.0;    // Low gate for clean line-in
+//xxxfloat uiSquelchADC = 5.0;    // Low gate for clean line-in
+float uiSquelchADC = 0.0;    // Low gate for clean line-in
 bool  uiAGCEnabled = true;   // Toggle Automatic Gain Control
 
 // Custom EQ: Deafens the lowest bins to desk thumping/typing, leaves the rest at 1.0 (100%)
@@ -78,47 +93,106 @@ unsigned long lastTransmission = 0;
 unsigned long lastButtonPress = 0;
 
 
-void configureI2SForMode(SystemMode mode) {
-    // Uninstall the existing driver before reconfiguring
-    i2s_driver_uninstall(I2S_PORT);
+bool i2sInstalled = false;
+bool i2sReady = false;
+unsigned long audioReadyAt = 0;
+unsigned long lastAudioDiagnostic = 0;
 
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-        .sample_rate = SAMPLING_FREQ,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, 
-        // NOTE: Global communication_format removed from here
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = 64,
-        .tx_desc_auto_clear = false,
-        .fixed_mclk = 0
-    };
-
-    i2s_pin_config_t pin_config = {
-        .bck_io_num = I2S_SCK,
-        .ws_io_num = I2S_WS,
-        .data_out_num = I2S_PIN_NO_CHANGE
-    };
-    if (mode == MODE_ADC) {
-        // PCM1808 Hardware Profile
-        //i2s_config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; 
-        i2s_config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT; // Flips phase to capture LIN
-        i2s_config.communication_format = I2S_COMM_FORMAT_STAND_MSB; // Reads Left-Justified
-        i2s_config.use_apll = false; // BYPASS APLL BUG: Force standard system clock         
-        //i2s_config.use_apll = true;             
-        pin_config.mck_io_num = I2S_MCLK;       
-        pin_config.data_in_num = I2S_SD_ADC;
-    } else { 
-        // INMP441 Hardware Profile (Default)
-        i2s_config.channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT; 
-        i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; // Reads Standard I2S
-        i2s_config.use_apll = false;            
-        pin_config.mck_io_num = I2S_PIN_NO_CHANGE; 
-        pin_config.data_in_num = I2S_SD_MIC;
+bool configureI2SForMode(SystemMode mode) {
+    i2sReady = false;
+    if (i2sInstalled) {
+        esp_err_t err = i2s_driver_uninstall(I2S_PORT);
+        if (err != ESP_OK) {
+            Serial.printf("I2S uninstall failed: %s\n", esp_err_to_name(err));
+            return false;
+        }
+        i2sInstalled = false;
     }
+    // No I2S driver needed in animation/game/camera modes.
+    if (mode != MODE_ADC && mode != MODE_I2S_MIC) return true;
 
-    i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
-    i2s_set_pin(I2S_PORT, &pin_config);
+    const bool adc = (mode == MODE_ADC);
+    i2s_config_t config = {};
+    config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
+    config.sample_rate = SAMPLING_FREQ;
+    config.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
+    // Capture BOTH ADC channels; retain the existing INMP441 right-slot setting.
+    // INMP441 L/R must be HIGH for ONLY_RIGHT (LOW requires ONLY_LEFT).
+    config.channel_format = adc ? I2S_CHANNEL_FMT_RIGHT_LEFT
+                                : I2S_CHANNEL_FMT_ONLY_RIGHT;
+    config.communication_format = (adc && PCM1808_LEFT_JUSTIFIED)
+        ? I2S_COMM_FORMAT_STAND_MSB : I2S_COMM_FORMAT_STAND_I2S;
+    config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+    config.dma_buf_count = 8;
+    config.dma_buf_len = 64;
+    config.use_apll = adc && PCM1808_USE_APLL;
+    config.tx_desc_auto_clear = false;
+    config.fixed_mclk = 0;
+    config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    config.bits_per_chan = I2S_BITS_PER_CHAN_32BIT;
+
+    i2s_pin_config_t pins = {};
+    //xxx pins.mck_io_num = adc ? I2S_MCLK : I2S_PIN_NO_CHANGE;
+    pins.mck_io_num = I2S_PIN_NO_CHANGE; // Disconnect buggy driver from clock
+    pins.bck_io_num = I2S_SCK;
+    pins.ws_io_num = I2S_WS;
+    pins.data_out_num = I2S_PIN_NO_CHANGE;
+    pins.data_in_num = adc ? I2S_SD_ADC : I2S_SD_MIC;
+
+    esp_err_t err = i2s_driver_install(I2S_PORT, &config, 0, nullptr);
+    if (err != ESP_OK) {
+        Serial.printf("I2S install failed: %s\n", esp_err_to_name(err));
+        return false;
+    }
+    i2sInstalled = true;
+    err = i2s_set_pin(I2S_PORT, &pins);
+    if (err != ESP_OK) {
+        Serial.printf("I2S pin setup failed: %s\n", esp_err_to_name(err));
+        // Keep installed tracking accurate if cleanup itself fails.
+        const esp_err_t cleanup = i2s_driver_uninstall(I2S_PORT);
+        i2sInstalled = (cleanup != ESP_OK);
+        return false;
+    }
+    // Drain continuously during ADC reset/fade-in; do not pause DMA reads.
+    audioReadyAt = millis() + 500;
+    lastAudioDiagnostic = millis();
+    i2sReady = true;
+    Serial.printf("I2S configured: %s, %s, requested fs=%d Hz\n",
+        adc ? "PCM1808 stereo" : "INMP441 right slot",
+        (adc && PCM1808_LEFT_JUSTIFIED) ? "left-justified" : "I2S",
+        SAMPLING_FREQ);
+    if (adc) {
+        Serial.printf("Clock targets: MCLK=%lu Hz on GPIO%d, BCK=%lu Hz, LRCK=%d Hz\n",
+            (unsigned long)SAMPLING_FREQ * 256, I2S_MCLK,
+            (unsigned long)SAMPLING_FREQ * 64, SAMPLING_FREQ);
+        Serial.println("Targets/configuration are not a measurement at the ADC pins.");
+    }
+    return true;
+}
+
+// 24-bit signed PCM occupies the upper 24 bits of each 32-bit DMA word.
+// Xtensa ESP32 uses arithmetic right shift for signed int32_t.
+void printAudioSlot(const int32_t* words, size_t frames,
+                    size_t stride, size_t slot) {
+    int32_t lo = INT32_MAX, hi = INT32_MIN;
+    double sum = 0.0, sumSquares = 0.0;
+    size_t badPadding = 0;
+    for (size_t i = 0; i < frames; ++i) {
+        const int32_t word = words[i * stride + slot];
+        const int32_t sample = word >> 8;
+        if (sample < lo) lo = sample;
+        if (sample > hi) hi = sample;
+        sum += sample;
+        sumSquares += (double)sample * sample;
+        if (((uint32_t)word & 0xffu) != 0) ++badPadding;
+    }
+    const double mean = sum / frames;
+    const double variance = sumSquares / frames - mean * mean;
+    const double acRms = sqrt(variance > 0.0 ? variance : 0.0);
+    Serial.printf("slot%u raw=0x%08lX signed24=%ld min=%ld max=%ld AC_RMS=%.1f pad!=0:%u/%u\n",
+        (unsigned)slot, (unsigned long)(uint32_t)words[slot],
+        (long)(words[slot] >> 8), (long)lo, (long)hi, acRms,
+        (unsigned)badPadding, (unsigned)frames);
 }
 
 void checkButtons() {
@@ -137,10 +211,8 @@ void checkButtons() {
         lastButtonPress = millis();
         Serial.printf("Mode Switched to: %d\n", currentMode);
         
-        // Reboot the I2S hardware if swapping between audio sources
-        if (currentMode == MODE_I2S_MIC || currentMode == MODE_ADC) {
-            configureI2SForMode(currentMode);
-        }
+        // Also release I2S when leaving an audio mode.
+        configureI2SForMode(currentMode);
     }
 }
 
@@ -154,7 +226,12 @@ void setup() {
     pinMode(BTN_GAME, INPUT_PULLUP);
     pinMode(BTN_CAM, INPUT_PULLUP);
 
-    configureI2SForMode(currentMode); // Initializes default state
+    // --- MANUALLY SYNTHESIZE MCLK (12.288 MHz) ---
+    ledcSetup(0, 12288000, 2);   
+    ledcAttachPin(I2S_MCLK, 0);  
+    ledcWrite(0, 2);
+
+    configureI2SForMode(currentMode); // No driver until an audio mode is selected
     FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
     FastLED.setBrightness(100); 
     FastLED.clear();
@@ -165,26 +242,43 @@ void setup() {
 void loop() {
     checkButtons();
 
-            if (currentMode == MODE_I2S_MIC || currentMode == MODE_ADC) {
-                size_t bytesIn = 0;
-                int32_t rawSample[SAMPLES] = {0}; 
-                
-                esp_err_t result = i2s_read(I2S_PORT, &rawSample, sizeof(int32_t) * SAMPLES, &bytesIn, portMAX_DELAY);
-                if (result == ESP_OK && bytesIn > 0) {
-                // --- RAW HARDWARE DIAGNOSTIC DUMPER ---
-                Serial.println("\n====================================");
-                Serial.printf("MODE: %s\n", (currentMode == MODE_ADC) ? "PCM1808 (ADC)" : "INMP441 (MIC)");
-                
-                // Print the first 4 raw 32-bit samples exactly as they arrive from the chip
-                for (int i = 0; i < 4; i++) {
-                    Serial.printf("Sample [%d]: HEX: 0x%08X  |  DEC: %11d\n", i, rawSample[i], rawSample[i]);
-                }
-                Serial.println("====================================");
-                
-                // Artificial delay so the serial monitor doesn't scroll at lightspeed
-                delay(300); 
+    if (currentMode == MODE_I2S_MIC || currentMode == MODE_ADC) {
+        if (!i2sReady) {
+            delay(1); // Configuration failure was printed; buttons still work.
+            return;
         }
-     /*   if (result == ESP_OK && bytesIn > 0) {
+        const size_t channels = (currentMode == MODE_ADC) ? 2 : 1;
+        int32_t words[SAMPLES * 2] = {};
+        size_t bytesIn = 0;
+        const size_t requested = SAMPLES * channels * sizeof(int32_t);
+        const esp_err_t result = i2s_read(I2S_PORT, words, requested,
+                                         &bytesIn, pdMS_TO_TICKS(50));
+        if (result != ESP_OK || bytesIn != requested) {
+            if (millis() - lastAudioDiagnostic >= 1000) {
+                Serial.printf("I2S read: %s, bytes=%u/%u\n",
+                    esp_err_to_name(result), (unsigned)bytesIn, (unsigned)requested);
+                lastAudioDiagnostic = millis();
+            }
+            return; // Never process unfilled samples as valid audio.
+        }
+        if ((int32_t)(millis() - audioReadyAt) < 0) return;
+
+#if AUDIO_DIAGNOSTICS
+        // Read continuously; throttle printing, not acquisition.
+        if (millis() - lastAudioDiagnostic >= 300) {
+            Serial.println(currentMode == MODE_ADC ? "PCM1808" : "INMP441");
+            for (size_t slot = 0; slot < channels; ++slot) {
+                printAudioSlot(words, SAMPLES, channels, slot);
+            }
+            lastAudioDiagnostic = millis();
+        }
+#else
+        int32_t rawSample[SAMPLES] = {};
+        for (size_t i = 0; i < SAMPLES; ++i) {
+            rawSample[i] = words[i * channels +
+                ((currentMode == MODE_ADC) ? ADC_FFT_SLOT : 0)];
+        }
+        {
             double mean = 0;
 
             // 1. DC Offset Removal
@@ -221,7 +315,8 @@ void loop() {
                     double mag = vReal[currentFftBin];
                     
                     // --- AC HUM KILLER ---
-                    // Subtract a heavy noise floor from the lowest bins to erase 120Hz EMI
+                    // Empirical low-bin noise gate; 48k/256 gives 187.5 Hz/bin.
+                    // This FFT cannot isolate a 120 Hz hum component.
                     double noiseFloor = 500.0;
                     if (useHumKiller && currentFftBin <= 4) {
                         noiseFloor = 2500.0; // Only applied to the Mic
@@ -341,11 +436,12 @@ void loop() {
             FastLED.show();
             // ==========================================
 
+            /*
             // 4. Transmit Binary over UART (and print text to Mac for debugging)
             if (millis() - lastTransmission > 25) { // Throttled to ~40fps
                 
                 // Blast the 21-byte binary struct to the Render Board
-                Serial2.write((uint8_t*)&payload, sizeof(payload)); 
+                //xxx Serial2.write((uint8_t*)&payload, sizeof(payload)); 
                 
                 // Print a clean summary to your Mac terminal so you can verify the math
                 Serial.printf("%s: | BEAT: %d | Raw: %3d | Sm: %3d | Avg: %3d | Bins: [%3d %3d %3d ...]\n", 
@@ -353,8 +449,26 @@ void loop() {
                               payload.beat, payload.volumeRaw, payload.volumeSm, payload.sampleAvg,
                               payload.fftResult[0], payload.fftResult[7], payload.fftResult[15]);
                 lastTransmission = millis();
+            }*/
+           // 4. Transmit Text String over UART for Debugging via Render Board
+            if (millis() - lastTransmission > 25) { // Throttled to ~40fps
+                
+                char debugStr[100];
+                snprintf(debugStr, sizeof(debugStr), "%s: | BEAT: %d | Raw: %3d | Sm: %3d | Avg: %3d | Bins: [%3d %3d %3d ...]", 
+                        (currentMode == MODE_ADC) ? "ADC" : "Mic",
+                        payload.beat, payload.volumeRaw, payload.volumeSm, payload.sampleAvg,
+                        payload.fftResult[0], payload.fftResult[7], payload.fftResult[15]);
+
+                // Send the text string to the Render Board (it will read and print this via readStringUntil)
+                Serial2.println(debugStr); 
+                
+                // Also print it locally to the Command Board's terminal just in case
+                Serial.println(debugStr);
+                
+                lastTransmission = millis();
             }
-        }*/
+        }
+#endif
     }
     else {
         // Heartbeat for non-audio modes
