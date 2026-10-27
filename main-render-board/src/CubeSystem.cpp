@@ -83,7 +83,9 @@ void CubeSystem::setup() {
     // MUST be called before Serial2.begin()
     Serial2.setRxBufferSize(2048);
     // RECEIVER CONFIG (SOFTWARE CROSSOVER): RX = 27, TX = 14
-    Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    #ifdef UART_RX_PIN
+        Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+    #endif
 
     TestDemo::runHardwareWiringTest();
     //delay(500); 

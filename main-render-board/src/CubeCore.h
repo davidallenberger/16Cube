@@ -50,8 +50,9 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 #endif
 
 #ifdef HARDWARE_BURNCUBE
-    //xxx #define UART_RX_PIN 27 <--need to figure out what
-    //xxx #define UART_TX_PIN 14
+///xxxx change to real values
+  //  #define UART_RX_PIN 27 
+    //#define UART_TX_PIN 14
 #else 
     #define UART_RX_PIN 27
     #define UART_TX_PIN 14
