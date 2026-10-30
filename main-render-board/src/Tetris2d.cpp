@@ -1,4 +1,5 @@
 #include "Tetris2d.h"
+#include "UARTReceiver.h"
 
 // Standard 2D bounding-box matrices (4x4)
 static const int8_t SHAPES_2D[7][4][4] = {
@@ -240,8 +241,8 @@ void Tetris2d::handleInput(GamepadState pad) {
     if (now - lastMoveTime > 150) {
         int8_t dx = 0;
         
-        bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
-        bool leftPressed  = pad.dpad & DPAD_LEFT || pad.axisX < -200;
+        bool rightPressed = pad.dpad & CubinaInput::DpadRight || pad.axisX > 200;
+        bool leftPressed  = pad.dpad & CubinaInput::DpadLeft || pad.axisX < -200;
 
 #ifdef HARDWARE_BURNCUBE
         if (rightPressed) dx = 1;
@@ -265,7 +266,7 @@ void Tetris2d::handleInput(GamepadState pad) {
     }
     
     // Hard Drop (Up on D-Pad)
-    if ((pad.dpad & DPAD_UP || pad.axisY < -200) && (now - lastInputTime > 300)) {
+    if ((pad.dpad & CubinaInput::DpadUp || pad.axisY < -200) && (now - lastInputTime > 300)) {
         while (tryMove(0, -1)) {}
         lastDropTime = 0; // Force immediate lock
         lastInputTime = now;
@@ -283,15 +284,15 @@ void Tetris2d::play() {
     lastInputTime = millis();
     
     while (true) {
-        GamepadState p1 = BluetoothManager::getState(ROLE_MASTER);
-        GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
+        GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+        GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
         GamepadState activePad = p1.connected ? p1 : p2;
 
         if (activePad.connected) handleInput(activePad);
 
         // Soft Drop gravity override (D-Pad Down, Left Stick Down, or ANY Front Bumper/Trigger)
         unsigned long currentDropInterval = 600;
-        if (activePad.connected && (activePad.dpad & DPAD_DOWN || activePad.axisY > 200 || 
+        if (activePad.connected && (activePad.dpad & CubinaInput::DpadDown || activePad.axisY > 200 || 
                           activePad.l1 || activePad.l2 || activePad.r1 || activePad.r2)) {
             currentDropInterval = 50; 
         }

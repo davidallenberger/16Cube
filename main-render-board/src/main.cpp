@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include "CubeCore.h"
-#include "BluetoothManager.h"
 #include "TestDemo.h"
 
 #include "Planes.h"

@@ -6,7 +6,6 @@
 // ========================================================
 #define LED_TYPE      WS2812
 
-
 #ifdef HARDWARE_BURNCUBE
     // --- BURN CUBE 2026 (Dig-Octa Brainboard) ---
     #define BRIGHTNESS 64  
@@ -199,46 +198,48 @@ void initCube() {
   seedAllRng();
 }
 
-void showCube() {
-    // 1. Push the pixels
-    FastLED.show(); 
-    
-    // --- 2. THE UNIVERSAL UART RECEIVER ---
-    // Drains the hardware buffer every single frame.
-    // Future: You will parse this string into a menu of options/structs here.
-    while (Serial2.available()) {
-        String incoming = Serial2.readStringUntil('\n');
-        Serial.print("UART Received: ");
-        Serial.println(incoming);
-    }
-#ifndef DISABLE_BLUETOOTH
-    // 3. Keep the Bluetooth radio breathing
-    BluetoothManager::update(); 
-    
-    ControllerPtr p1 = BluetoothManager::getGamepad(ROLE_MASTER);
-    ControllerPtr p2 = BluetoothManager::getGamepad(ROLE_PLAYER_2);
-    
-    // 3. THE BULLETPROOF TRIPWIRE (Hold for 500ms)
-    static uint32_t exitHoldStart = 0;
-    
-    // Check if either controller is holding a menu/system button
-    bool isExitPressed = (p1 && p1->miscButtons()) || (p2 && p2->miscButtons());
+void showCube () {
+    // This function runs on the animation task. Before showing another frame,
+    // act on remote mode demands and the held gamepad Home button.
+    // frameCheckpoint() may longjmp out of the current app, in which case
+    // the remainder of this function does not run.
+    //
+    // Snapshot accessors release their internal mutexes before returning.
+    // Callers must also avoid holding locks or objects requiring destructor
+    // cleanup across this call, because longjmp skips normal stack unwinding.
+    CubeSystem::frameCheckpoint (); //We need to check for an escape command
 
-    if (isExitPressed) {
-        if (exitHoldStart == 0) exitHoldStart = millis();
-        
-        // ONLY teleport if it has been held continuously for 500ms
-        if (millis() - exitHoldStart > 500) {
-            if (teleportArmed) {
-                exitHoldStart = 0; // Reset before jumping into the void
-                longjmp(engineJumpBuffer, 1); 
-            }
+    // Remember the start of the previous LED transmission. The unsigned
+    // subtraction below also handles the micros() counter wrapping around.
+    static uint32_t lastShow = 0;
+    const uint32_t elapsed = uint32_t (micros () - lastShow);
+
+    // Allow at most one frame start per 16,667 us (approximately 60 Hz).
+    // Rendering and the previous LED transfer have already used some of that
+    // interval. Wait only for the portion that remains.
+    if (elapsed < 16667) {
+        const uint32_t remaining = 16667 - elapsed;
+
+        // Yield whole milliseconds so other tasks can run while we wait.
+        if (remaining >= 1000) {
+            delay (remaining / 1000);
         }
-    } else {
-        exitHoldStart = 0; 
+
+        // Measure again: delay() may have waited longer than requested.
+        // Use a short microsecond delay only if time still remains.
+        const uint32_t waited = uint32_t (micros () - lastShow);
+
+        if (waited < 16667) {
+            delayMicroseconds (16667 - waited);
+        }
     }
-#endif
+
+    // Record the start BEFORE transmitting. LED-transfer time is part of
+    // the frame budget; it is not added to a fresh 16,667-us wait afterward.
+    lastShow = micros ();
+    FastLED.show ();
 }
+
 
 void clearAll() {
 #ifdef HARDWARE_BURNCUBE

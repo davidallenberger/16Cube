@@ -1,4 +1,5 @@
 #include "Asteroids3d.h"
+#include "UARTReceiver.h"
 
 // --- STATIC ALLOCATIONS ---
 float Asteroids3d::sPx = 0, Asteroids3d::sPy = 0, Asteroids3d::sPz = 0;
@@ -185,10 +186,10 @@ void Asteroids3d::handleInput(GamepadState pad) {
     uint32_t now = millis();
     float dt = 0.016f; // Assumption for input scaling
 
-    bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
-    bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
-    bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
-    bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+    bool upPressed    = pad.dpad & CubinaInput::DpadUp    || pad.axisY < -200;
+    bool downPressed  = pad.dpad & CubinaInput::DpadDown  || pad.axisY > 200;
+    bool leftPressed  = pad.dpad & CubinaInput::DpadLeft  || pad.axisX < -200;
+    bool rightPressed = pad.dpad & CubinaInput::DpadRight || pad.axisX > 200;
 
 #ifdef HARDWARE_BURNCUBE
     // 90-degree CW hardware rotation map (Up->Right, Right->Down, Down->Left, Left->Up)
@@ -565,8 +566,8 @@ void Asteroids3d::run() {
             lastFrameTime = now;
             if (dt > 0.05f) dt = 0.05f; // Prevent tunneling
 
-            GamepadState p1 = BluetoothManager::getState(ROLE_MASTER);
-            GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
+            GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+            GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
             GamepadState activePad = p1.connected ? p1 : p2; 
             
             if (activePad.connected && activePad.miscButtons) {

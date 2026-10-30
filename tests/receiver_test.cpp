@@ -13,12 +13,18 @@ static uint32_t clockMs=100;
 unsigned long millis(){return clockMs;}uint32_t micros(){return clockMs*1000;}
 void clearAll(){}void showCube(){}void initAppMemory(){}void setVoxel(uint8_t,uint8_t,uint8_t,const CRGB&){}
 namespace TestDemo{void runEngine(bool){}void runHardwareWiringTest(){}}
-namespace AudioTest{void run(){}void renderIcon(TextureState&){}}
-namespace DepthTest{void run(){}void renderIcon(TextureState&){}}
+void Audio::run(){}
+void Audio::renderIcon(TextureState&){}
+void Depth::run(){}
+void Depth::renderIcon(TextureState&){}
 int main(){
+    // Registry entry points remain wired to the correct input families.
+    assert (appRegistry[AUDIO_APP].run == &Audio::run);
+    assert (appRegistry[DEPTH_APP].run == &Depth::run);
+
     using namespace CubinaWire;RemoteInputs::begin();Packet p;
     p.session=1;p.modeRevision=1;p.sequence=1;p.mode=Mode::AudioBluetooth;p.flags=SOURCE_READY;
-    WLEDAudioPayload a={};a.mode=2;a.volumeRaw=100;writeAudio(p,a,10);accept(p);
+    AudioPayload a={};a.mode=2;a.volumeRaw=100;writeAudio(p,a,10);accept(p);
     assert(RemoteInputs::audio().values.volumeRaw==100);
     p.sequence=2;writeAudio(p,a,11);accept(p);assert(RemoteInputs::consumeBeat());assert(!RemoteInputs::consumeBeat());
     // Do not accept duplicate/stale data or contradictory same-revision modes.
@@ -48,8 +54,39 @@ int main(){
     // Home hold is a one-shot jump, and needs real held input, not tap latches.
     p={};p.session=2;p.sequence=2;p.modeRevision=2;p.mode=Mode::Game;
     p.flags=SOURCE_READY;p.type=Type::Gamepads;p.length=GAMEPAD_BYTES;
-    g.miscButtons=1;writePad(p.payload,g);writePad(p.payload+15,GamepadState());
-    accept(p);CubeSystem::frameCheckpoint();clockMs+=501;p.sequence=3;accept(p);
+    // Holding non-System extra buttons must never escape the game.
+    const uint8_t ordinaryExtras[] = {
+        CubinaInput::Select,
+        CubinaInput::Start,
+        CubinaInput::Capture
+    };
+    for (uint8_t extra : ordinaryExtras) {
+        g.miscButtons = extra;
+        writePad (p.payload, g);
+        writePad (p.payload + 15, GamepadState ());
+        ++p.sequence;
+        accept (p);
+        CubeSystem::frameCheckpoint ();
+        clockMs += 501;
+        ++p.sequence;
+        accept (p);
+        if (setjmp (engineJumpBuffer) == 0) {
+            teleportArmed = true;
+            CubeSystem::frameCheckpoint ();
+            teleportArmed = false;
+        } else {
+            assert (false && "Non-System button triggered menu exit");
+        }
+    }
+    g.miscButtons = 0;
+    writePad (p.payload, g);
+    ++p.sequence;
+    accept (p);
+    CubeSystem::frameCheckpoint ();
+    g.miscButtons = CubinaInput::System;
+    ++p.sequence;
+    writePad(p.payload,g);writePad(p.payload+15,GamepadState());
+    accept(p);CubeSystem::frameCheckpoint();clockMs+=501;++p.sequence;accept(p);
     if(setjmp(engineJumpBuffer)==0){teleportArmed=true;CubeSystem::frameCheckpoint();assert(false);}
     assert(!teleportArmed);
     teleportArmed=true;CubeSystem::frameCheckpoint(); // held Home must NOT jump twice

@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include "CubeCore.h"
-#include "BluetoothManager.h"
+#include "GamepadState.h"
 #include "TextureEngine.h"
 
 class Tetris {
@@ -70,7 +70,6 @@ private:
     // Collisions & Movement
     bool checkCollision(int8_t testX, int8_t testY, int8_t testZ, int8_t blocks[4][3]);
     bool tryMove(int8_t dx, int8_t dy, int8_t dz);
-    //void handleInput(ControllerPtr pad);
     void handleInput(GamepadState pad);
     
     // Rendering & State

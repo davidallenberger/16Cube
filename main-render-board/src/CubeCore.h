@@ -18,17 +18,10 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
 #define HARDWARE_DESKTOP     // The original 8-pin serpentine test layout
 
 // 2. SELECT YOUR RENDER CANVAS - For 8*8*16 (or 10*10*16) uncomment next two lines
-#define TARGET_2026_CUBOID     // 10x10x16 spatial rendering
+//#define TARGET_2026_CUBOID     // 10x10x16 spatial rendering
 
-// 3. COMPILE-TIME BLUETOOTH KILL SWITCH
-// Uncomment the line below to completely disable the Bluetooth radio, 
-// pairing menus, and background interrupts. The cube will boot directly 
-// into Ambient Art autonomously.
-//#define DISABLE_BLUETOOTH
-
-// 4. MULTI-THREADING OPTIMIZATION
-// Uncomment to pin the Bluetooth radio to Core 0, leaving Core 1 entirely to FastLED
-#define ENABLE_DUAL_CORE
+// The render board has NO Bluetooth radio/task. UARTReceiver owns Core 0;
+// animation and all FastLED calls stay on the Arduino Core 1 task.
 // =========================================================
 
 #ifdef TARGET_2026_CUBOID
@@ -49,13 +42,23 @@ constexpr uint8_t CUBE_MAX = CUBE_SIZE - 1;
     constexpr float RNDR_CZ = (CUBE_SIZE - 1) / 2.0f;
 #endif
 
+// Verify these two pins against the actual render PCB before flashing.
+// Desktop retains the supplied pin assignment; BurnCube must be assigned
+// explicitly rather than silently starting UART with LED output pins.
 #ifdef HARDWARE_BURNCUBE
-///xxxx change to real values
-  //  #define UART_RX_PIN 27 
-    //#define UART_TX_PIN 14
-#else 
-    #define UART_RX_PIN 27
-    #define UART_TX_PIN 14
+#ifndef UART_RX_PIN
+#error "Define UART_RX_PIN for the BurnCube UART input (check LED conflicts)"
+#endif
+#ifndef UART_TX_PIN
+#error "Define UART_TX_PIN for BurnCube, or -1 for receive-only"
+#endif
+#else
+#ifndef UART_RX_PIN
+#define UART_RX_PIN 27
+#endif
+#ifndef UART_TX_PIN
+#define UART_TX_PIN 14
+#endif
 #endif
 
 // Core Hardware Lifecycle

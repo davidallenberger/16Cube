@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "CubeCore.h"
-#include "BluetoothManager.h"
+#include "GamepadState.h"
 #include "TextureEngine.h"
 #include "AppMemory.h"
 
@@ -23,7 +23,6 @@ private:
     static bool runSubMenu();
     static void resetLevel();
     static void resetBall();
-    //static void handleInput(ControllerPtr pad);
     static void handleInput(GamepadState pad);
     static void updatePhysics();
     static void drawFrame();

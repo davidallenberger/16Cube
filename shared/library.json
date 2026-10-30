@@ -1,0 +1,7 @@
+{
+  "name": "CubinaSharedProtocol",
+  "version": "1.0.0",
+  "description": "Header-only Cubina command/render wire contract",
+  "build": {"includeDir": "."},
+  "headers": "SharedProtocol.h"
+}

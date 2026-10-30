@@ -1,10 +1,10 @@
-#include <nvs_flash.h>
 #include "CubeSystem.h"
 #include "AppMemory.h"
 #include "TestDemo.h"
 #include "Shapes.h"
-
-// --- GAME INCLUDES ---
+#include "Audio.h"
+#include "Depth.h"
+#include "UARTReceiver.h"
 #include "Tetris.h"
 #include "Tetris2d.h"
 #include "Rubiks.h"
@@ -14,323 +14,393 @@
 #include "Snake2d.h"
 #include "Asteroids3d.h"
 
-SystemState CubeSystem::currentState = SYS_STATE_BOOT_PAIRING;
+SystemState CubeSystem::currentState = SYS_STATE_RUN_APP;
 int16_t CubeSystem::selectedMenuIndex = 0;
 uint32_t CubeSystem::stateTimer = 0;
+
+// handleApp() establishes the return point in this buffer using setjmp().
+// Only the animation task may jump back to that point. The UART task must
+// never use this buffer: it has a different call stack.
 jmp_buf engineJumpBuffer;
+
+// True only while an app is running inside handleApp()'s active return point.
+// Checkpoints also run in the menu, where no app escape is needed.
 bool teleportArmed = false;
-static bool menuNeedsRedraw = true;
 
-// =========================================================================
-//                          THE APP REGISTRY
-// =========================================================================
+namespace {
+    bool menuNeedsRedraw = true;
 
-// Local Wrappers for system-level apps
-static void runAmbientArt() { 
-    while (true) {
-        TestDemo::runEngine(false);
-       //Forces in order testing TestDemo::runEngine(true); 
+    // These values remember the LAST command-board demand we have acted on.
+    // They are owned by the animation task; the receiver does not write them.
+    //
+    // appliedControl: Have we accepted any remote demand since render boot?
+    // appliedSession: Which boot of the command board issued that demand?
+    //                 The command board chooses a new session ID on reboot.
+    // appliedRevision: Which mode-button demand within that boot was applied?
+    //                  A new button demand increments the revision, even if
+    //                  it requests the same mode again.
+    //
+    // Repeated UART packets carry the same session/revision. Remembering this
+    // pair stops each heartbeat or audio packet from restarting the app.
+    bool appliedControl = false;
+    uint32_t appliedSession = 0;
+    uint32_t appliedRevision = 0;
+
+    // The command board's last accepted mode. This also determines whether
+    // a held gamepad Home button is allowed to return to the game menu.
+    CubinaWire::Mode demandedMode = CubinaWire::Mode::Animation;
+
+    void runAmbientArt () {
+        for (;;) {
+            TestDemo::runEngine (false);
+        }
+    }
+
+    void renderAmbientIcon (TextureState&) {
+        Shapes::animateStatic (
+            SHAPE_MERKABA,
+            10,
+            RENDER_SOLID,
+            MODE_SPATIAL_GRADIENT
+        );
+    }
+
+    void runDiagnostics () {
+        for (;;) {
+            CubeSystem::handlePairingSandbox ();
+        }
     }
 }
-static void renderAmbientIcon(TextureState& tex) { Shapes::animateStatic(SHAPE_MERKABA, 10, RENDER_SOLID, MODE_SPATIAL_GRADIENT); }
 
-static void runDiagnostics() {
-    // A self-contained blocking loop for the controller sandbox
-    while (true) {
-        BluetoothManager::update();
-        ControllerPtr p1 = BluetoothManager::getGamepad(ROLE_MASTER);
-        ControllerPtr p2 = BluetoothManager::getGamepad(ROLE_PLAYER_2);
-        
-        // Escape back to the OS menu
-        if ((p1 && p1->miscButtons()) || (p2 && p2->miscButtons())) {
-            break; 
+static void renderDiagIcon (TextureState& tex) {
+    uint8_t pulse = beatsin8 (50, 20, 255);
+    CRGB col = CRGB (pulse, 0, 0);
+
+    for (int z = 5; z <= 10; z++) {
+        setVoxel (3, 3, z, col);
+        setVoxel (4, 3, z, col);
+        setVoxel (3, 4, z, col);
+        setVoxel (4, 4, z, col);
+    }
+
+    for (int x = 1; x <= 6; x++) {
+        if (x == 3 || x == 4) {
+            continue;
         }
 
-        // Just piggyback on the existing drawing logic
-        CubeSystem::handlePairingSandbox(); 
-        delay(15);
+        setVoxel (x, 3, 7, col);
+        setVoxel (x, 4, 7, col);
+        setVoxel (x, 3, 8, col);
+        setVoxel (x, 4, 8, col);
+    }
+
+    for (int y = 1; y <= 6; y++) {
+        if (y == 3 || y == 4) {
+            continue;
+        }
+
+        setVoxel (3, y, 7, col);
+        setVoxel (4, y, 7, col);
+        setVoxel (3, y, 8, col);
+        setVoxel (4, y, 8, col);
     }
 }
-static void renderDiagIcon(TextureState& tex) {
-    uint8_t pulse = beatsin8(50, 20, 255);
-    CRGB col = CRGB(pulse, 0, 0); 
-    for(int z = 5; z <= 10; z++) { setVoxel(3, 3, z, col); setVoxel(4, 3, z, col); setVoxel(3, 4, z, col); setVoxel(4, 4, z, col); }
-    for(int x = 1; x <= 6; x++) { if(x == 3 || x == 4) continue; setVoxel(x, 3, 7, col); setVoxel(x, 4, 7, col); setVoxel(x, 3, 8, col); setVoxel(x, 4, 8, col); }
-    for(int y = 1; y <= 6; y++) { if(y == 3 || y == 4) continue; setVoxel(3, y, 7, col); setVoxel(4, y, 7, col); setVoxel(3, y, 8, col); setVoxel(4, y, 8, col); }
-}
 
-// -------------------------------------------------------------------------
-// ADD NEW GAMES HERE! The system will automatically absorb them.
+// Registry positions are also used by the mode-to-app mapping below.
+// If entries are reordered, update AUDIO_APP, DEPTH_APP, and the game default.
 static const CubeApp appRegistry[] = {
-    {"Ambient Art", renderAmbientIcon,    runAmbientArt},
-    {"Tetris 3D",   Tetris::renderIcon,   Tetris::run},
-    {"Tetris 2D",   Tetris2d::renderIcon, Tetris2d::run},
+    {"Ambient Art", renderAmbientIcon, runAmbientArt},
+    {"Tetris 3D", Tetris::renderIcon, Tetris::run},
+    {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
     {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
-    {"Breakout 3D", Breakout::renderIcon, Breakout::run},   
-    {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run}, 
-    {"Snake 3D",    Snake::renderIcon,    Snake::run},
-    {"Snake 2D",    Snake2d::renderIcon,  Snake2d::run},
-    {"Rubiks",      Rubiks::renderIcon,   Rubiks::run},
-    {"Diagnostics", renderDiagIcon,       runDiagnostics}
+    {"Breakout 3D", Breakout::renderIcon, Breakout::run},
+    {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run},
+    {"Snake 3D", Snake::renderIcon, Snake::run},
+    {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
+    {"Rubiks", Rubiks::renderIcon, Rubiks::run},
+    {"Diagnostics", renderDiagIcon, runDiagnostics},
+    {"Audio", Audio::renderIcon, Audio::run},
+    {"Depth Occupancy", Depth::renderIcon, Depth::run}
 };
-static const int TOTAL_APPS = sizeof(appRegistry) / sizeof(appRegistry[0]);
-// -------------------------------------------------------------------------
 
-void CubeSystem::setup() {
-    Serial.println("Booting Cube OS...");
+static constexpr int AUDIO_APP = 10;
+static constexpr int DEPTH_APP = 11;
 
-    // 1. Expand the hidden hardware buffer from 128 bytes to 2048 bytes
-    // MUST be called before Serial2.begin()
-    Serial2.setRxBufferSize(2048);
-    // RECEIVER CONFIG (SOFTWARE CROSSOVER): RX = 27, TX = 14
-    #ifdef UART_RX_PIN
-        Serial2.begin(115200, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    #endif
+void CubeSystem::setup () {
+    // The render board consumes UART input. Bluetooth pairing and acquisition
+    // belong to the command board; no Bluepad32/NVS setup is performed here.
+    RemoteInputs::begin ();
+    initAppMemory ();
 
-    TestDemo::runHardwareWiringTest();
-    //delay(500); 
-    initAppMemory();
+    selectedMenuIndex = 0;
+    changeState (SYS_STATE_RUN_APP);
 
-#ifdef DISABLE_BLUETOOTH
-    // THE FULL HATCHET: No NVS, No Bluetooth Stack, No Radio.
-    Serial.println("BLUETOOTH KILLED BY COMPILER. Skipping NVS. Booting autonomous art engine...");
-    selectedMenuIndex = 0; // Force Ambient Art
-    changeState(SYS_STATE_RUN_APP);
-#else
-    // NORMAL BOOT: Mount memory, spin up radio, wait for controllers.
-    Serial.println("Mounting NVS Flash Memory...");
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK(ret);
-
-    BluetoothManager::setup();
-    //xxx put back to pair: changeState(SYS_STATE_BOOT_PAIRING);
-    // Skip the pairing sandbox and boot directly into Ambient Art
-    selectedMenuIndex = 0; 
-    changeState(SYS_STATE_RUN_APP);
-#endif
+    // Normal boot starts Ambient Art, including when no UART is connected.
+    // Run TestDemo::runHardwareWiringTest() explicitly when commissioning.
 }
 
-void CubeSystem::changeState(SystemState newState) {
-    currentState = newState;
-    stateTimer = millis();
+void CubeSystem::changeState (SystemState s) {
+    currentState = s;
+    stateTimer = millis ();
     menuNeedsRedraw = true;
-    clearAll();
-    FastLED.show();
-    Serial.printf("System changed to State: %d\n", newState);
+    clearAll ();
+
+    Serial.printf ("Cube OS state=%u app=%d\n", unsigned (s), selectedMenuIndex);
 }
 
-void CubeSystem::loop() {
-#ifndef DISABLE_BLUETOOTH
-    BluetoothManager::update();
-#endif
+void CubeSystem::frameCheckpoint () {
+    // This is the ANIMATION TASK's checkpoint, not the UART receive loop.
+    //
+    // UART task: validate packets and store their latest values under a mutex.
+    // Animation task: copy those values here, choose the app, and escape from
+    // the old app if needed. longjmp must stay on the task that called setjmp.
+    //
+    // control() returns a value copy and releases its internal mutex before
+    // returning. Consequently no receiver mutex is held when we jump below.
+    const RemoteInputs::Control c = RemoteInputs::control ();
+
+    // A linked command is new to us if this is the first one, the command
+    // board rebooted (session changed), or another mode demand was issued
+    // (revision changed). Ordinary packets repeating the same pair do nothing.
+    if (c.linked &&
+        (!appliedControl ||
+         c.session != appliedSession ||
+         c.revision != appliedRevision)) {
+
+        // Mark the demand as handled BEFORE escaping the old app. Otherwise
+        // the next checkpoint would see it as new and jump again forever.
+        appliedControl = true;
+        appliedSession = c.session;
+        appliedRevision = c.revision;
+        demandedMode = c.mode;
+
+        // Command-board mode buttons have authority over the current app.
+        // All audio sources share the Puddles app; acquisition chooses which
+        // source supplies its audio. Game mode opens the local game menu.
+        if (CubinaWire::audioMode (c.mode)) {
+            selectedMenuIndex = AUDIO_APP;
+            changeState (SYS_STATE_RUN_APP);
+        } else if (c.mode == CubinaWire::Mode::Depth) {
+            selectedMenuIndex = DEPTH_APP;
+            changeState (SYS_STATE_RUN_APP);
+        } else if (c.mode == CubinaWire::Mode::Game) {
+            selectedMenuIndex = 5; // Initially highlight Breakout 2D.
+            changeState (SYS_STATE_MENU);
+        } else {
+            selectedMenuIndex = 0;
+            changeState (SYS_STATE_RUN_APP);
+        }
+
+        // Return to handleApp() with code 2. It leaves the state selected
+        // above intact, so the OS can launch the newly demanded mode.
+        // In a menu/between apps, no jump is needed: the normal loop sees it.
+        if (teleportArmed) {
+            teleportArmed = false;
+            longjmp (engineJumpBuffer, 2);
+        }
+    }
+
+    // Publish one frame's gamepad inputs, including latched short presses.
+    // The accessors manage their own mutexes; app code sees copied values.
+    RemoteInputs::beginFrame ();
+
+    static uint32_t homeStart = 0;
+    static bool homeConsumed = false;
+
+    // Home uses actual held state, rather than a latched momentary press,
+    // because returning to the menu requires holding it for 500 ms.
+    const GamepadState p1 = RemoteInputs::heldGamepad (ROLE_MASTER);
+    const GamepadState p2 = RemoteInputs::heldGamepad (ROLE_PLAYER_2);
+    const bool home =
+        (p1.connected && (p1.miscButtons & CubinaInput::System)) ||
+        (p2.connected && (p2.miscButtons & CubinaInput::System));
+
+    // Only System/Home starts this timer. Select, Start, and Capture remain
+    // available to games and cannot accidentally send the player to the menu.
+    if (!home) {
+        homeStart = 0;
+        homeConsumed = false;
+    } else if (demandedMode == CubinaWire::Mode::Game) {
+        if (!homeStart) {
+            homeStart = millis ();
+        }
+
+        if (!homeConsumed && uint32_t (millis () - homeStart) >= 500) {
+            // Consume before jumping: a continuously held button must not
+            // trigger another escape immediately when the menu appears.
+            homeConsumed = true;
+
+            if (teleportArmed) {
+                teleportArmed = false;
+                longjmp (engineJumpBuffer, 1);
+            }
+        }
+    }
+}
+
+void CubeSystem::loop () {
+    // Catch remote demands between app calls as well. While an app is inside
+    // its own loop, showCube() supplies the checkpoint for each shown frame.
+    if (currentState == SYS_STATE_RUN_APP) {
+        frameCheckpoint ();
+    }
 
     switch (currentState) {
-        case SYS_STATE_BOOT_PAIRING:   handlePairingSandbox(); break;
-        case SYS_STATE_MENU:           handleMenu();           break;
-        case SYS_STATE_RUN_APP:        handleApp();            break;
+        case SYS_STATE_BOOT_PAIRING:
+            handlePairingSandbox ();
+            break;
+
+        case SYS_STATE_MENU:
+            handleMenu ();
+            break;
+
+        case SYS_STATE_RUN_APP:
+            handleApp ();
+            break;
     }
 }
 
-// =========================================================================
-//                          MAIN MENU LAUNCHER
-// =========================================================================
-void CubeSystem::handleMenu() {
-    ControllerPtr p1 = BluetoothManager::getGamepad(ROLE_MASTER);
-    ControllerPtr p2 = BluetoothManager::getGamepad(ROLE_PLAYER_2);
-    
-    static uint8_t lastActiveCount = 0;
-    static uint32_t lastConnectionTime = 0;
-    uint8_t activeCount = (p1 ? 1 : 0) + (p2 ? 1 : 0);
+void CubeSystem::handleMenu () {
+    GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+    GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
+    static uint32_t lastInput = 0;
 
-    if (activeCount > lastActiveCount) lastConnectionTime = millis();
-    lastActiveCount = activeCount;
+    // The Game-mode menu offers games and diagnostics (indices 1 through 9).
+    // It does not change the audio source or the command board's chosen mode.
+    if (uint32_t (millis () - lastInput) > 200) {
+        bool down = (p1.dpad & (CubinaInput::DpadDown | CubinaInput::DpadRight)) ||
+                    p1.axisY > 200 || p1.axisX > 200 ||
+                    (p2.dpad & (CubinaInput::DpadDown | CubinaInput::DpadRight)) ||
+                    p2.axisY > 200 || p2.axisX > 200;
 
-    static uint32_t lastInputTime = 0;
-    
-    if ((millis() - lastConnectionTime > 1000) && (millis() - lastInputTime > 200)) { 
-        bool downPressed = (p1 && (p1->dpad() & (DPAD_DOWN | DPAD_RIGHT) || p1->axisY() > 200 || p1->axisX() > 200)) || 
-                           (p2 && (p2->dpad() & (DPAD_DOWN | DPAD_RIGHT) || p2->axisY() > 200 || p2->axisX() > 200));
-        
-        bool upPressed   = (p1 && (p1->dpad() & (DPAD_UP | DPAD_LEFT) || p1->axisY() < -200 || p1->axisX() < -200)) || 
-                           (p2 && (p2->dpad() & (DPAD_UP | DPAD_LEFT) || p2->axisY() < -200 || p2->axisX() < -200));
-                           
-        bool selectPressed = (p1 && (p1->a() || p1->b() || p1->x() || p1->y())) || 
-                             (p2 && (p2->a() || p2->b() || p2->x() || p2->y()));
+        bool up = (p1.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) ||
+                  p1.axisY < -200 || p1.axisX < -200 ||
+                  (p2.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) ||
+                  p2.axisY < -200 || p2.axisX < -200;
 
-        if (downPressed) {
-            selectedMenuIndex = (selectedMenuIndex + 1) % TOTAL_APPS;
-            lastInputTime = millis();
-            stateTimer = millis(); 
-            menuNeedsRedraw = true; // Tag for redraw
-        } else if (upPressed) {
-            selectedMenuIndex = (selectedMenuIndex - 1 + TOTAL_APPS) % TOTAL_APPS;
-            lastInputTime = millis();
-            stateTimer = millis(); 
-            menuNeedsRedraw = true; // Tag for redraw
-        }
-    
-        if (selectPressed) {
-            changeState(SYS_STATE_RUN_APP);
+        bool select = p1.a || p1.b || p1.x || p1.y ||
+                      p2.a || p2.b || p2.x || p2.y;
+
+        if (down || up) {
+            selectedMenuIndex += down ? 1 : -1;
+
+            if (selectedMenuIndex > 9) {
+                selectedMenuIndex = 1;
+            }
+
+            if (selectedMenuIndex < 1) {
+                selectedMenuIndex = 9;
+            }
+
+            lastInput = millis ();
+            menuNeedsRedraw = true;
+        } else if (select) {
+            lastInput = millis ();
+            changeState (SYS_STATE_RUN_APP);
             return;
         }
     }
 
-    if (millis() - stateTimer > 60000) {
-        Serial.println("Menu idle. Auto-starting ambient mode.");
-        selectedMenuIndex = 0; 
-        changeState(SYS_STATE_RUN_APP);
-        return;
-    }
-
-    // THE FIX: Event-Driven Rendering. 
-    // Only push data to the LEDs if the menu actually changed.
     if (menuNeedsRedraw) {
-        Serial.printf("DEBUG: Drawing Menu Icon for %s\n", appRegistry[selectedMenuIndex].name);
-        
-        clearAll();
-        static TextureState iconTex(MODE_UNIFORM_CYCLE, RainbowColors_p);
-        
-        appRegistry[selectedMenuIndex].renderIcon(iconTex);
-        FastLED.show();
-        
-        menuNeedsRedraw = false; // Lock the canvas to protect against interrupts
-    }
-    
-    delay(15);
-}
-
-void CubeSystem::handleApp() {
-    clearAll();
-    
-    if (setjmp(engineJumpBuffer) != 0) {
-        teleportArmed = false; 
-        Serial.println("App aborted via Home button trap. Returning to menu.");
-        changeState(SYS_STATE_MENU);
-        return; 
+        clearAll ();
+        static TextureState tex (MODE_UNIFORM_CYCLE, RainbowColors_p);
+        appRegistry[selectedMenuIndex].renderIcon (tex);
+        menuNeedsRedraw = false;
     }
 
-    teleportArmed = true; 
-    
-    Serial.printf("Launching App: %s\n", appRegistry[selectedMenuIndex].name);
-    
-    // Fire the selected app's engine. Code blocks here until the app returns naturally or traps out.
-    appRegistry[selectedMenuIndex].run();
-
-    teleportArmed = false; 
-    changeState(SYS_STATE_MENU); 
+    // Even an unchanged icon must service remote mode demands regularly.
+    showCube ();
 }
 
-// =========================================================================
-//                   THE BOOT PAIRING SANDBOX
-// =========================================================================
-void CubeSystem::drawNumberOnFaces(uint8_t num, TextureState& tex) {
+void CubeSystem::handleApp () {
+    clearAll ();
+
+    // Establish this task's escape destination BEFORE calling the app.
+    // setjmp returns 0 initially; a later longjmp makes it return 1 or 2.
+    //
+    // This legacy mechanism bypasses normal stack unwinding. App code must
+    // not hold mutexes or automatic objects requiring nontrivial destruction
+    // across showCube()/frameCheckpoint(), since longjmp skips that cleanup.
+    switch (setjmp (engineJumpBuffer)) {
+        case 1:
+            // A held gamepad Home button requested the game menu.
+            teleportArmed = false;
+            changeState (SYS_STATE_MENU);
+            return;
+
+        case 2:
+            // A command-board mode demand already selected the next state.
+            teleportArmed = false;
+            return;
+
+        default:
+            break;
+    }
+
+    teleportArmed = true;
+    Serial.printf ("Launching %s\n", appRegistry[selectedMenuIndex].name);
+    appRegistry[selectedMenuIndex].run ();
+
+    // An app can also return normally, without going through the checkpoint.
+    teleportArmed = false;
+    changeState (SYS_STATE_MENU);
+}
+
+void CubeSystem::drawNumberOnFaces (uint8_t num, TextureState& tex) {
     uint8_t font[3][5] = {
         {0b111, 0b101, 0b101, 0b101, 0b111}, // 0
         {0b010, 0b110, 0b010, 0b010, 0b111}, // 1
         {0b111, 0b001, 0b111, 0b100, 0b111}  // 2
     };
-    uint8_t zOffset = 5; 
+    uint8_t zOffset = 5;
+
     for (int y = 0; y < 5; y++) {
         for (int x = 0; x < 3; x++) {
             if (font[num][4 - y] & (1 << (2 - x))) {
-                CRGB color = tex.getColor(x, y, zOffset);
-                
-                // Dynamically center the 3-wide font on any X/Y width
+                CRGB color = tex.getColor (x, y, zOffset);
+
+                // Center the three-pixel-wide digit; mirrored coordinates
+                // make the digit readable on the opposing cube faces.
                 int offset = (RNDR_X - 3) / 2;
-                int fx = offset + (2 - x); 
-                int inv_fx = offset + x; 
-                
-                setVoxel(fx, 0, y + zOffset, color);
-                setVoxel(inv_fx, RNDR_Y - 1, y + zOffset, color);
-                setVoxel(0, inv_fx, y + zOffset, color);
-                setVoxel(RNDR_X - 1, fx, y + zOffset, color);
+                int fx = offset + (2 - x);
+                int inv_fx = offset + x;
+
+                setVoxel (fx, 0, y + zOffset, color);
+                setVoxel (inv_fx, RNDR_Y - 1, y + zOffset, color);
+                setVoxel (0, inv_fx, y + zOffset, color);
+                setVoxel (RNDR_X - 1, fx, y + zOffset, color);
             }
         }
     }
 }
 
-void CubeSystem::handlePairingSandbox() {
-    uint32_t elapsed = millis() - stateTimer;
-    ControllerPtr p1 = BluetoothManager::getGamepad(ROLE_MASTER);
-    ControllerPtr p2 = BluetoothManager::getGamepad(ROLE_PLAYER_2);
-    
-    uint8_t activeCount = (p1 ? 1 : 0) + (p2 ? 1 : 0);
-    static uint8_t lastActiveCount = 0;
-    static uint32_t lastConnectionTime = 0;
-    
-    if (activeCount > lastActiveCount) lastConnectionTime = millis();
-    lastActiveCount = activeCount;
+void CubeSystem::handlePairingSandbox () {
+    // The historical name is retained, but this now displays received
+    // controller state. Pairing itself happens only on the command board.
+    const GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+    const GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
 
-    if (millis() - lastConnectionTime > 1000) {
-        if ((p1 && p1->miscButtons()) || (p2 && p2->miscButtons())) {
-            changeState(SYS_STATE_MENU);
-            return;
+    clearAll ();
+    static TextureState tex (MODE_UNIFORM_CYCLE, RainbowColors_p);
+    drawNumberOnFaces (unsigned (p1.connected) + unsigned (p2.connected), tex);
+
+    if (p1.connected) {
+        if (p1.a) {
+            setVoxel (0, 0, 0, CRGB::Blue);
+        }
+
+        if (p1.b) {
+            setVoxel (1, 0, 0, CRGB::Red);
+        }
+
+        if (p1.x) {
+            setVoxel (2, 0, 0, CRGB::Green);
+        }
+
+        if (p1.y) {
+            setVoxel (3, 0, 0, CRGB::Yellow);
         }
     }
-    
-    if (elapsed > 30000) {
-        if (activeCount == 0) {
-            selectedMenuIndex = 0; // Ambient
-            changeState(SYS_STATE_RUN_APP);
-        } else {
-            changeState(SYS_STATE_MENU);
-        }
-        return;
-    }
 
-    static uint32_t wipeTimer = 0;
-    if (p1 && p1->a()) {
-        if (wipeTimer == 0 || wipeTimer < stateTimer) wipeTimer = millis();
-        if (millis() - wipeTimer > 5000) { 
-            Serial.println("EXECUTING BLUETOOTH NVM WIPE...");
-            BP32.forgetBluetoothKeys();
-            wipeTimer = 0;
-            for (int i = 0; i < 3; i++) {
-                clearAll();
-                for(int x=0; x<RNDR_X; x++) for(int y=0; y<RNDR_Y; y++) for(int z=0; z<RNDR_Z; z++) setVoxel(x,y,z, CRGB::Red);
-                FastLED.show(); delay(150); clearAll(); FastLED.show(); delay(150);
-            }
-            ESP.restart(); 
-        }
-    } else {
-        wipeTimer = 0;
-    }
-
-    static uint32_t lastFrameTime = 0;
-    if (millis() - lastFrameTime < 100) return; 
-    lastFrameTime = millis();
-
-    clearAll();
-    static TextureState bootTex(MODE_UNIFORM_CYCLE, RainbowColors_p);
-    bootTex.advance(15);
-    drawNumberOnFaces(activeCount, bootTex);
-
-    if (p1) {
-        int bZ = 0;
-        setVoxel(0, 0, bZ, CRGB::Red); setVoxel(0, RNDR_Y - 1, bZ, CRGB::Blue);
-        setVoxel(RNDR_X - 1, 0, bZ, CRGB::Green); setVoxel(RNDR_X - 1, RNDR_Y - 1, bZ, CRGB::White);
-        auto draw2x2x4 = [&](int startX, int startY, CRGB col) {
-            for(int x = startX; x <= startX + 1; x++) for(int y = startY; y <= startY + 1; y++) for(int z = 0; z <= 3; z++) setVoxel(x, y, bZ + z, col);
-        };
-
-        if (p1->a()) draw2x2x4(0, 0, CRGB::Blue);
-        if (p1->b()) draw2x2x4(0, 2, CRGB::Red);
-        if (p1->y()) draw2x2x4(0, 4, CRGB::Yellow);
-        if (p1->x()) draw2x2x4(2, 2, CRGB::Purple);
-
-        if (p1->miscButtons() & 0x08) draw2x2x4(4, 0, CRGB::White);
-        if (p1->miscButtons() & 0x01) draw2x2x4(2, 0, CRGB::White);
-        if (p1->miscButtons() & 0x02) draw2x2x4(4, 4, CRGB::White);
-        if (p1->miscButtons() & 0x04) draw2x2x4(2, 4, CRGB::White);
-
-        if ((p1->dpad() & DPAD_DOWN)  || p1->axisY() > 200)   draw2x2x4(6, 0, CRGB::Green);
-        if ((p1->dpad() & DPAD_LEFT)  || p1->axisX() < -200)  draw2x2x4(6, 2, CRGB::Green); 
-        if ((p1->dpad() & DPAD_UP)    || p1->axisY() < -200)  draw2x2x4(6, 4, CRGB::Green);
-        if ((p1->dpad() & DPAD_RIGHT) || p1->axisX() > 200)   draw2x2x4(4, 2, CRGB::Green);
-    }
-    FastLED.show();
+    showCube ();
 }

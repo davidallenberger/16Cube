@@ -1,4 +1,5 @@
 #include "Breakout.h"
+#include "UARTReceiver.h"
 
 // --- STATIC ALLOCATIONS ---
 BreakoutMode Breakout::currentMode = MODE_CLASSIC;
@@ -39,16 +40,16 @@ bool Breakout::runSubMenu() {
     uint32_t lastInputTime = millis();
 
     while (true) {
-        GamepadState p1 = BluetoothManager::getState(ROLE_MASTER);
-        GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
+        GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+        GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
         GamepadState activePad = p1.connected ? p1 : p2;
 
         if (activePad.connected && millis() - lastInputTime > 200) {
             
-            if (activePad.dpad & (DPAD_RIGHT | DPAD_DOWN) || activePad.axisX > 200 || activePad.axisY > 200) {
+            if (activePad.dpad & (CubinaInput::DpadRight | CubinaInput::DpadDown) || activePad.axisX > 200 || activePad.axisY > 200) {
                 menuIndex = (menuIndex + 1) % TOTAL_MODES;
                 lastInputTime = millis();
-            } else if (activePad.dpad & (DPAD_LEFT | DPAD_UP) || activePad.axisX < -200 || activePad.axisY < -200) {
+            } else if (activePad.dpad & (CubinaInput::DpadLeft | CubinaInput::DpadUp) || activePad.axisX < -200 || activePad.axisY < -200) {
                 menuIndex = (menuIndex - 1 + TOTAL_MODES) % TOTAL_MODES;
                 lastInputTime = millis();
             }
@@ -451,8 +452,8 @@ void Breakout::run() {
     while (true) {
         if (millis() - lastFrame >= FRAME_DELAY) {
             
-            GamepadState p1 = BluetoothManager::getState(ROLE_MASTER);
-            GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
+            GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+            GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
             GamepadState activePad = p1.connected ? p1 : p2; 
             
             if (activePad.connected && activePad.miscButtons) {

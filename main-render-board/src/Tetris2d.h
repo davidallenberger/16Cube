@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 #include "CubeCore.h"
-#include "BluetoothManager.h"
+#include "GamepadState.h"
 #include "TextureEngine.h"
 
 class Tetris2d {
@@ -37,7 +37,6 @@ private:
     bool checkCollision(int8_t testX, int8_t testY, int8_t matrix[4][4]);
     bool tryMove(int8_t dx, int8_t dy);
     
-    //static void handleInput(ControllerPtr pad);
     void handleInput(GamepadState pad);
     
     void drawMirrored(int lx, int ly, CRGB color);

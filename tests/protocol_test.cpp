@@ -29,16 +29,16 @@ int main(){
     assert(good==2);
     // Presses + axes encode the existing GamepadState field by field.
     p={};p.mode=Mode::Game;p.type=Type::Gamepads;p.length=GAMEPAD_BYTES;
-    GamepadState g;g.connected=true;g.axisX=-511;g.axisY=512;g.a=true;g.l2=true;g.dpad=PAD_LEFT;g.miscButtons=4;
+    GamepadState g;g.connected=true;g.axisX=-511;g.axisY=512;g.a=true;g.l2=true;g.dpad=CubinaInput::DpadLeft;g.miscButtons=4;
     writePad(p.payload,g);writePad(p.payload+15,GamepadState());put32(p.payload+30,buttons(g));
     bytes=frame(p);assert(decode(bytes.data(),bytes.size()-1,q));auto back=readPad(q.payload);
-    assert(back.axisX==-511&&back.axisY==512&&back.a&&back.l2&&back.dpad==PAD_LEFT);
+    assert(back.axisX==-511&&back.axisY==512&&back.a&&back.l2&&back.dpad==CubinaInput::DpadLeft);
     auto invalid=p;invalid.payload[6]=2;assert(!encode(invalid,bytes.data(),bytes.size()));
     g.a=false;applyPresses(g,1);assert(g.a);
     uint8_t bits[512]={};setVoxelBit(bits,15,15,15);assert(bits[511]==128);assert(voxel(bits,15,15,15));
     setVoxelBit(bits,15,15,15,false);assert(!voxel(bits,15,15,15));
     // All source modes and all byte values (including embedded zero) round-trip.
-    for(unsigned mode=1;mode<=4;++mode){p={};p.mode=Mode(mode);WLEDAudioPayload a={};a.mode=mode==1?1:mode==3?3:2;
+    for(unsigned mode=1;mode<=4;++mode){p={};p.mode=Mode(mode);AudioPayload a={};a.mode=mode==1?1:mode==3?3:2;
         a.beat=1;a.volumeRaw=255;for(int i=0;i<16;++i)a.fftResult[i]=i*17;writeAudio(p,a,1234);
         bytes=frame(p);assert(decode(bytes.data(),bytes.size()-1,q));assert(readAudio(q).volumeRaw==255&&get32(q.payload+21)==1234);}
     printf("Protocol tests passed: CRC, maximum frames, corruption, resync, timeout, source modes, gamepads, voxel ordering. Max frame=%zu bytes.\n",MAX_FRAME);

@@ -1,7 +1,7 @@
 #pragma once
 #include <Arduino.h>
 #include "CubeCore.h"
-#include "BluetoothManager.h"
+#include "GamepadState.h"
 #include "TextureEngine.h"
 #include "AppMemory.h"
 

@@ -1,4 +1,5 @@
 #include "Tetris.h"
+#include "UARTReceiver.h"
 
 static const int8_t SHAPES[7][4][3] = {
     {{0, 1, 0}, {1, 1, 0}, {2, 1, 0}, {3, 1, 0}}, // I (ID: 0)
@@ -154,8 +155,8 @@ void Tetris::play() {
             showCube();
         }
 
-        GamepadState p1 = BluetoothManager::getState(ROLE_MASTER);
-        GamepadState p2 = BluetoothManager::getState(ROLE_PLAYER_2);
+        GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
+        GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
         GamepadState activePad = p1.connected ? p1 : p2;
 
         erasePiece();
@@ -191,10 +192,10 @@ void Tetris::handleInput(GamepadState pad) {
     if (now - lastMoveTime > 150) {
         int8_t dx = 0, dy = 0;
         
-        bool upPressed    = pad.dpad & DPAD_UP    || pad.axisY < -200;
-        bool downPressed  = pad.dpad & DPAD_DOWN  || pad.axisY > 200;
-        bool leftPressed  = pad.dpad & DPAD_LEFT  || pad.axisX < -200;
-        bool rightPressed = pad.dpad & DPAD_RIGHT || pad.axisX > 200;
+        bool upPressed    = pad.dpad & CubinaInput::DpadUp    || pad.axisY < -200;
+        bool downPressed  = pad.dpad & CubinaInput::DpadDown  || pad.axisY > 200;
+        bool leftPressed  = pad.dpad & CubinaInput::DpadLeft  || pad.axisX < -200;
+        bool rightPressed = pad.dpad & CubinaInput::DpadRight || pad.axisX > 200;
 
 #ifdef HARDWARE_BURNCUBE
         // 90-degree CW hardware rotation map
