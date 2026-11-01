@@ -1,7 +1,6 @@
 #include "CubeSystem.h"
 #include "AppMemory.h"
 #include "TestDemo.h"
-#include "WildMouseIsolation.h"
 #include "Shapes.h"
 #include "Audio.h"
 #include "Depth.h"
@@ -14,29 +13,6 @@
 #include "Snake.h"
 #include "Snake2d.h"
 #include "Asteroids3d.h"
-
-// TEMPORARY FLICKER INVESTIGATION. No frame-rate setting changes here.
-// 1: Boot/Animation button runs fixed BPM instead of the TestDemo playlist.
-// 0: Restore the normal Animation path. Build flags can override this value.
-#ifndef CUBINA_BPM_DIAGNOSTIC
-#define CUBINA_BPM_DIAGNOSTIC 0
-#endif
-
-// Start at 0 to collect real audio BPM diagnostics first.
-// Set to 1 (or use a build flag) for the controlled comparison: audio modes
-// show the SAME fixed BPM as Animation while the command board still captures
-// audio and transmits it normally. UARTReceiver still validates/publishes it.
-#ifndef CUBINA_AUDIO_FIXED_BPM
-#define CUBINA_AUDIO_FIXED_BPM 0
-#endif
-
-#if CUBINA_AUDIO_FIXED_BPM && !CUBINA_BPM_DIAGNOSTIC
-#error "CUBINA_AUDIO_FIXED_BPM requires CUBINA_BPM_DIAGNOSTIC=1"
-#endif
-
-#if CUBINA_BPM_DIAGNOSTIC
-#include "BpmDiagnostic.h"
-#endif
 
 SystemState CubeSystem::currentState = SYS_STATE_RUN_APP;
 int16_t CubeSystem::selectedMenuIndex = 0;
@@ -75,23 +51,12 @@ namespace {
     CubinaWire::Mode demandedMode = CubinaWire::Mode::Animation;
 
     void runAmbientArt() {
-        // BEGIN WILD MOUSE ISOLATION -- original route retained below.
-#if CUBINA_WILD_MOUSE_ISOLATION
-        WildMouseIsolation::run();
-#else
-
-#if CUBINA_BPM_DIAGNOSTIC
-        // A direct temporary route to a known timed BPM visual. showCube's
-        // normal checkpoint still processes mode buttons and app escapes.
-        BpmDiagnostic::run();
-#else
+        // Normal unattended playback uses the shuffled art/billboard decks.
+        // TestDemo::runEngine(true) remains available for an intentional
+        // ordered, ten-second-per-scene test; no diagnostic redirects live here.
         for (;;) {
-            TestDemo::runEngine(true);
+            TestDemo::runEngine(false);
         }
-#endif
-    
-#endif
-        // END WILD MOUSE ISOLATION
     }
 
     void renderAmbientIcon(TextureState &) {
@@ -142,26 +107,19 @@ static void renderDiagIcon(TextureState &tex) {
 // Registry positions are also used by the mode-to-app mapping below.
 // If entries are reordered, update AUDIO_APP, DEPTH_APP, and the game default.
 static const CubeApp appRegistry[] = {
-#if CUBINA_BPM_DIAGNOSTIC
-                                      {"BPM Diagnostic", renderAmbientIcon, runAmbientArt},
-#else
-                                      {"Ambient Art", renderAmbientIcon, runAmbientArt},
-#endif
-                                      {"Tetris 3D", Tetris::renderIcon, Tetris::run},
-                                      {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
-                                      {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
-                                      {"Breakout 3D", Breakout::renderIcon, Breakout::run},
-                                      {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run},
-                                      {"Snake 3D", Snake::renderIcon, Snake::run},
-                                      {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
-                                      {"Rubiks", Rubiks::renderIcon, Rubiks::run},
-                                      {"Diagnostics", renderDiagIcon, runDiagnostics},
-#if CUBINA_AUDIO_FIXED_BPM
-                                      {"Audio", Audio::renderIcon, BpmDiagnostic::run},
-#else
-                                      {"Audio", Audio::renderIcon, Audio::run},
-#endif
-                                      {"Depth Occupancy", Depth::renderIcon, Depth::run}};
+    {"Ambient Art", renderAmbientIcon, runAmbientArt},
+    {"Tetris 3D", Tetris::renderIcon, Tetris::run},
+    {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
+    {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
+    {"Breakout 3D", Breakout::renderIcon, Breakout::run},
+    {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run},
+    {"Snake 3D", Snake::renderIcon, Snake::run},
+    {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
+    {"Rubiks", Rubiks::renderIcon, Rubiks::run},
+    {"Diagnostics", renderDiagIcon, runDiagnostics},
+    {"Audio", Audio::renderIcon, Audio::run},
+    {"Depth Occupancy", Depth::renderIcon, Depth::run}
+};
 
 static constexpr int AUDIO_APP = 10;
 static constexpr int DEPTH_APP = 11;
@@ -175,8 +133,7 @@ void CubeSystem::setup() {
     selectedMenuIndex = 0;
     changeState(SYS_STATE_RUN_APP);
 
-    // Entry 0 is normal Ambient Art, or the temporary fixed BPM diagnostic
-    // when its switch is enabled. Either also works without UART connected.
+    // Entry 0 starts normal Ambient Art, including without UART connected.
     // Run TestDemo::runHardwareWiringTest() explicitly when commissioning.
 }
 
@@ -229,9 +186,7 @@ void CubeSystem::frameCheckpoint() {
             if (advanceAudioRoutine) {
                 // Advance BEFORE the jump: the replacement Audio::run() must
                 // launch the next entry, not restart the previous one.
-#if !CUBINA_AUDIO_FIXED_BPM
                 Audio::nextRoutine();
-#endif
             }
 
             selectedMenuIndex = AUDIO_APP;
@@ -243,9 +198,7 @@ void CubeSystem::frameCheckpoint() {
             selectedMenuIndex = 5; // Initially highlight Breakout 2D.
             changeState(SYS_STATE_MENU);
         } else {
-            // Entry 0 uses the ordinary animation playlist unless the fixed
-            // BPM diagnostic switch redirects it. Restarting the diagnostic
-            // repeats the same comparison pattern, without changing TestDemo.
+            // Animation demands select the ordinary Ambient Art playlist.
             selectedMenuIndex = 0;
             changeState(SYS_STATE_RUN_APP);
         }

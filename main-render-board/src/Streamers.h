@@ -2,7 +2,6 @@
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "AppMemory.h"
-#include "PlaylistMemoryProbe.h"
 #include "BpmRenderer.h"
 #include "GeometryEngine.h"
 
@@ -962,97 +961,170 @@ class Streamers {
     // THE WILD MOUSE (Internal Engine)
     // ==========================================
     static void animateWildMouse(uint32_t durationMs, uint32_t speedMs) {
-        uint32_t startTime = millis(), lastFrame = millis(); 
+        uint32_t startTime = millis();
+        uint32_t lastFrame = millis();
         float masterPhase = 0.0f;
-        
-        int numMice = min(max(1, (RNDR_X * RNDR_Y * RNDR_Z) / 512), 16); 
-        const uint8_t MAX_TAIL = 64; 
-        uint8_t tailLength = min((int)(RNDR_X * 3), (int)MAX_TAIL);
-        
-        uint8_t hx[16][MAX_TAIL], hy[16][MAX_TAIL], hz[16][MAX_TAIL]; 
-        int headPtr[16], x[16], y[16], z[16], dir[16], axis[16];
-        
-        // Array to hold unique palettes for each mouse
-        CRGBPalette16 mousePals[16];
 
-        for (int m = 0; m < numMice; m++) { 
-            x[m] = random8(RNDR_X); y[m] = random8(RNDR_Y); z[m] = random8(RNDR_Z); 
-            dir[m] = (random8(2) == 0) ? 1 : -1; 
-            axis[m] = random8(3); 
-            headPtr[m] = 0; 
-            
-            // 50/50 mix: Solid vibrant colors OR flowing organic gradients
+        // Preserve the original density and tail-length rules. The cube
+        // dimensions are compile-time constants, so the arrays can reserve
+        // exactly the slots this configuration uses, without heap allocation.
+        // On 16x16x16 this is eight mice with 48 positions per tail, rather
+        // than reserving sixteen mice with 64 positions each.
+        constexpr int REQUESTED_MICE = (RNDR_X * RNDR_Y * RNDR_Z) / 512;
+        constexpr int NUM_MICE = REQUESTED_MICE < 1 ? 1 :
+                                 (REQUESTED_MICE > 16 ? 16 : REQUESTED_MICE);
+        constexpr int MAX_TAIL = 64;
+        constexpr int TAIL_LENGTH = RNDR_X * 3 < MAX_TAIL ? RNDR_X * 3 : MAX_TAIL;
+
+        // All state remains local to this invocation on the animation task.
+        // No static storage, shared-arena space, or receiver mutex is added.
+        uint8_t hx[NUM_MICE][TAIL_LENGTH];
+        uint8_t hy[NUM_MICE][TAIL_LENGTH];
+        uint8_t hz[NUM_MICE][TAIL_LENGTH];
+        int headPtr[NUM_MICE];
+        int x[NUM_MICE];
+        int y[NUM_MICE];
+        int z[NUM_MICE];
+        int dir[NUM_MICE];
+        int axis[NUM_MICE];
+        CRGBPalette16 mousePals[NUM_MICE];
+
+        for (int m = 0; m < NUM_MICE; m++) {
+            x[m] = random8(RNDR_X);
+            y[m] = random8(RNDR_Y);
+            z[m] = random8(RNDR_Z);
+            dir[m] = (random8(2) == 0) ? 1 : -1;
+            axis[m] = random8(3);
+            headPtr[m] = 0;
+
+            // Each mouse keeps its own solid color or flowing palette.
             if (random8(2) == 0) {
                 mousePals[m] = CRGBPalette16(PaletteUtils::getRandomVibrantColor());
             } else {
                 mousePals[m] = PaletteUtils::getRandomOrganicPalette();
             }
 
-            for (int i = 0; i < tailLength; i++) { 
-                hx[m][i] = x[m]; hy[m][i] = y[m]; hz[m][i] = z[m]; 
-            } 
+            for (int i = 0; i < TAIL_LENGTH; i++) {
+                hx[m][i] = x[m];
+                hy[m][i] = y[m];
+                hz[m][i] = z[m];
+            }
         }
-
-        // PLAYLIST MEMORY: one observation after the original arrays are live.
-#if CUBINA_PLAYLIST_MEMORY_DIAGNOSTICS
-        PlaylistMemoryProbe::mouseInitialized(
-            sizeof(hx) + sizeof(hy) + sizeof(hz) + sizeof(headPtr) +
-            sizeof(x) + sizeof(y) + sizeof(z) + sizeof(dir) +
-            sizeof(axis) + sizeof(mousePals)
-        );
-#endif
 
         while (millis() - startTime < durationMs) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now; masterPhase += 0.133f * deltaMs; 
-            
-            for (int m = 0; m < numMice; m++) {
-                switch(axis[m]) {
-                    case 0: if (dir[m] == 1) { x[m]++; if (x[m] >= RNDR_X - 1) { x[m] = RNDR_X - 1; axis[m] = 1; dir[m] = (y[m] < RNDR_CY) ? 1 : -1; } } else { x[m]--; if (x[m] <= 0) { x[m] = 0; axis[m] = 2; dir[m] = (z[m] < RNDR_CZ) ? 1 : -1; } } if (random8(5) == 0) axis[m] = (random8(2) == 0) ? 1 : 2; break;
-                    case 1: if (dir[m] == 1) { y[m]++; if (y[m] >= RNDR_Y - 1) { y[m] = RNDR_Y - 1; axis[m] = 2; dir[m] = (z[m] < RNDR_CZ) ? 1 : -1; } } else { y[m]--; if (y[m] <= 0) { y[m] = 0; axis[m] = 0; dir[m] = (x[m] < RNDR_CX) ? 1 : -1; } } if (random8(5) == 0) axis[m] = (random8(2) == 0) ? 2 : 0; break;
-                    case 2: if (dir[m] == 1) { z[m]++; if (z[m] >= RNDR_Z - 1) { z[m] = RNDR_Z - 1; axis[m] = 0; dir[m] = (x[m] < RNDR_CX) ? 1 : -1; } } else { z[m]--; if (z[m] <= 0) { z[m] = 0; axis[m] = 1; dir[m] = (y[m] < RNDR_CY) ? 1 : -1; } } if (random8(5) == 0) axis[m] = (random8(2) == 0) ? 0 : 1; break;
-                }
-                headPtr[m] = (headPtr[m] + 1) % tailLength; hx[m][headPtr[m]] = x[m]; hy[m][headPtr[m]] = y[m]; hz[m][headPtr[m]] = z[m];
-            }
-            
-            clearAll();
-            
-            for (int m = 0; m < numMice; m++) { 
-                for (int i = 0; i < tailLength; i++) { 
-                    int age = (headPtr[m] - i + tailLength) % tailLength; 
-                    uint8_t px = hx[m][i], py = hy[m][i], pz = hz[m][i]; 
-                    uint8_t colorIndex = (px * 16) + (py * 16) + (pz * 16) + (uint32_t)masterPhase; 
-                    
-                    // Pull color from this specific mouse's assigned palette array
-                    CRGB color = ColorFromPalette(mousePals[m], colorIndex, 255, LINEARBLEND); 
-                    
-                    uint8_t brightness = 255 - (age * (255 / tailLength)); 
-                    if (brightness > 10) { 
-                        color.nscale8(brightness); 
-                        
-                        // Additive blending allows beams to mix white-hot when crossing paths
-                        setVoxel(px, py, pz, getVoxel(px, py, pz) + color); 
-                    } 
-                } 
-            }
-            
-            showCube(); 
-            if (speedMs > 0) delay(speedMs); else yield();
-        }
+            uint32_t now = millis();
+            uint32_t deltaMs = now - lastFrame;
+            lastFrame = now;
+            masterPhase += 0.133f * deltaMs;
 
-        // PLAYLIST MEMORY: sample before releasing this function's arrays.
-#if CUBINA_PLAYLIST_MEMORY_DIAGNOSTICS
-        PlaylistMemoryProbe::mouseLeaving();
-        PlaylistMemoryProbe::keepAlive(hx);
-        PlaylistMemoryProbe::keepAlive(hy);
-        PlaylistMemoryProbe::keepAlive(hz);
-        PlaylistMemoryProbe::keepAlive(headPtr);
-        PlaylistMemoryProbe::keepAlive(x);
-        PlaylistMemoryProbe::keepAlive(y);
-        PlaylistMemoryProbe::keepAlive(z);
-        PlaylistMemoryProbe::keepAlive(dir);
-        PlaylistMemoryProbe::keepAlive(axis);
-        PlaylistMemoryProbe::keepAlive(mousePals);
-#endif
+            for (int m = 0; m < NUM_MICE; m++) {
+                // Move one voxel along the current axis. At a wall, turn
+                // toward the cube interior. Occasional random turns retain
+                // the original wandering paths and random-number call order.
+                switch (axis[m]) {
+                case 0:
+                    if (dir[m] == 1) {
+                        x[m]++;
+                        if (x[m] >= RNDR_X - 1) {
+                            x[m] = RNDR_X - 1;
+                            axis[m] = 1;
+                            dir[m] = (y[m] < RNDR_CY) ? 1 : -1;
+                        }
+                    } else {
+                        x[m]--;
+                        if (x[m] <= 0) {
+                            x[m] = 0;
+                            axis[m] = 2;
+                            dir[m] = (z[m] < RNDR_CZ) ? 1 : -1;
+                        }
+                    }
+                    if (random8(5) == 0) {
+                        axis[m] = (random8(2) == 0) ? 1 : 2;
+                    }
+                    break;
+
+                case 1:
+                    if (dir[m] == 1) {
+                        y[m]++;
+                        if (y[m] >= RNDR_Y - 1) {
+                            y[m] = RNDR_Y - 1;
+                            axis[m] = 2;
+                            dir[m] = (z[m] < RNDR_CZ) ? 1 : -1;
+                        }
+                    } else {
+                        y[m]--;
+                        if (y[m] <= 0) {
+                            y[m] = 0;
+                            axis[m] = 0;
+                            dir[m] = (x[m] < RNDR_CX) ? 1 : -1;
+                        }
+                    }
+                    if (random8(5) == 0) {
+                        axis[m] = (random8(2) == 0) ? 2 : 0;
+                    }
+                    break;
+
+                case 2:
+                    if (dir[m] == 1) {
+                        z[m]++;
+                        if (z[m] >= RNDR_Z - 1) {
+                            z[m] = RNDR_Z - 1;
+                            axis[m] = 0;
+                            dir[m] = (x[m] < RNDR_CX) ? 1 : -1;
+                        }
+                    } else {
+                        z[m]--;
+                        if (z[m] <= 0) {
+                            z[m] = 0;
+                            axis[m] = 1;
+                            dir[m] = (y[m] < RNDR_CY) ? 1 : -1;
+                        }
+                    }
+                    if (random8(5) == 0) {
+                        axis[m] = (random8(2) == 0) ? 0 : 1;
+                    }
+                    break;
+                }
+
+                // Circular history: overwrite the oldest tail position with
+                // this frame's new head position, without shifting the array.
+                headPtr[m] = (headPtr[m] + 1) % TAIL_LENGTH;
+                hx[m][headPtr[m]] = x[m];
+                hy[m][headPtr[m]] = y[m];
+                hz[m][headPtr[m]] = z[m];
+            }
+
+            clearAll();
+
+            for (int m = 0; m < NUM_MICE; m++) {
+                for (int i = 0; i < TAIL_LENGTH; i++) {
+                    int age = (headPtr[m] - i + TAIL_LENGTH) % TAIL_LENGTH;
+                    uint8_t px = hx[m][i];
+                    uint8_t py = hy[m][i];
+                    uint8_t pz = hz[m][i];
+                    uint8_t colorIndex = (px * 16) + (py * 16) + (pz * 16) +
+                                         static_cast<uint32_t>(masterPhase);
+                    CRGB color = ColorFromPalette(mousePals[m], colorIndex, 255, LINEARBLEND);
+
+                    // Retain the existing brightness falloff so reducing
+                    // unused storage does not change the visible tail.
+                    uint8_t brightness = 255 - (age * (255 / TAIL_LENGTH));
+                    if (brightness > 10) {
+                        color.nscale8(brightness);
+
+                        // Additive blending mixes colors where trails cross.
+                        setVoxel(px, py, pz, getVoxel(px, py, pz) + color);
+                    }
+                }
+            }
+
+            showCube();
+            if (speedMs > 0) {
+                delay(speedMs);
+            } else {
+                yield();
+            }
+        }
     }
 
     // ==========================================

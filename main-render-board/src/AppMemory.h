@@ -4,7 +4,7 @@
 #include <cstddef>
 #include "CubeCore.h"
 
-// Fixed shared scratch budget for the CURRENT stability test on either cube.
+// Fixed shared scratch budget for animations on either cube.
 // This is the same 8,192 bytes the original allocator actually reserved.
 // Animation pools must fit this budget; cube dimensions do not increase it.
 // Changing this value requires a separate memory-budget review and test.

@@ -64,11 +64,9 @@ class Audio {
     // Call regularly to drain its bounded USB queue. Internal static buffers
     // belong only to this method and survive an app's nonlocal exit safely.
     static void debug();
-    // A routine may append a short diagnostic description. For BPM this
-    // reports measured work time, showCube time, and the actual frame rate.
-    // The description is copied into the report immediately, never retained
-    // as a pointer after this call. Existing debug(audio) calls still work.
-    static void debug(const RemoteInputs::Audio &audio, const char *details = nullptr);
+    // Reuse the routine's existing snapshot so the report describes the
+    // same audio values that produced this frame, without another mutex copy.
+    static void debug(const RemoteInputs::Audio &audio);
 
   private:
     struct Routine {

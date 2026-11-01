@@ -22,7 +22,7 @@ fi
 work="$(mktemp -d "${TMPDIR:-/tmp}/cubina-host-tests.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/command" "$work/render"
-# Isolate the migration modules from the full project's unrelated SDK headers.
+# Isolate the board modules from the full project's unrelated SDK headers.
 # These are byte-for-byte source copies. Firmware builds remain separate.
 stage() {
     local src="$1" inc="$2" dest="$3" file
@@ -44,7 +44,7 @@ stage "$command_src" "$command_include" "$work/command" \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    UARTReceiver.cpp UARTReceiver.h Audio.cpp Audio.h BpmRenderer.h BpmDiagnostic.h Depth.cpp Depth.h
+    UARTReceiver.cpp UARTReceiver.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
 common=(-std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"
@@ -54,36 +54,32 @@ for bt in 0 1; do
         -I "$work/command" "$work/command/"*.cpp
 done
 "$CXX" "${common[@]}" -fsyntax-only -I "$work/render" "$work/render/"*.cpp
-for fixed in 0 1; do
-    "$CXX" "${common[@]}" -fsyntax-only -I "$work/render" \
-        -DCUBINA_BPM_DIAGNOSTIC=1 -DCUBINA_AUDIO_FIXED_BPM=$fixed \
-        "$work/render/CubeSystem.cpp"
-done
 echo 'Host syntax checks passed (API stubs, not a firmware/toolchain build).'
 "$CXX" "${common[@]}" -pthread -I "$work/command" tests/state_test.cpp -o "$work/state_test"
 "$work/state_test"
-"$CXX" "${common[@]}" -pthread -DCUBINA_BPM_DIAGNOSTIC=0 \
+"$CXX" "${common[@]}" -pthread \
     -I "$work/render" tests/receiver_test.cpp -o "$work/receiver_test"
 "$work/receiver_test"
-
-"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
-    tests/bpm_diagnostic_test.cpp -o "$work/bpm_diagnostic_test"
-ASAN_OPTIONS=detect_leaks=0 "$work/bpm_diagnostic_test"
 
 "$CXX" "${common[@]}" -I "$work/render" tests/receiver_startup_test.cpp -o "$work/receiver_startup_test"
 "$work/receiver_startup_test"
 
 # Exercise the real physical LED arrays/mapping, rather than setVoxel stubs.
-# Repeat with the full 16-cube canvas without changing a user's hardware file.
-"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
-    tests/bpm_output_test.cpp -o "$work/bpm_output_test"
-ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_test"
+# Check both supported canvases using only a temporary header copy; the real
+# project's hardware selection stays untouched.
 sed '/^#define TARGET_2026_CUBOID/d' "$work/render/CubeCore.h" > "$work/render/CubeCore.full.h"
 mv "$work/render/CubeCore.h" "$work/render/CubeCore.saved.h"
 mv "$work/render/CubeCore.full.h" "$work/render/CubeCore.h"
-"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
-    tests/bpm_output_test.cpp -o "$work/bpm_output_full_test"
-ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_full_test"
+for canvas in full cuboid; do
+    canvas_flags=()
+    if [[ "$canvas" == cuboid ]]; then
+        canvas_flags=(-DTARGET_2026_CUBOID)
+    fi
+    "$CXX" "${common[@]}" "${canvas_flags[@]}" -I "$work/render" \
+        -fsanitize=address,undefined -g tests/bpm_output_test.cpp \
+        -o "$work/bpm_output_$canvas"
+    ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_$canvas"
+done
 mv "$work/render/CubeCore.saved.h" "$work/render/CubeCore.h"
 
 "$CXX" "${common[@]}" -I "$work/command" tests/mode_button_test.cpp -o "$work/mode_button_test"

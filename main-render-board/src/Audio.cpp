@@ -8,7 +8,7 @@
 #define AUDIO_SERIAL_DEBUG 1
 #endif
 
-// This is the temporary audio playlist. Add each future routine here in the
+// This is the audio routine list. Add each future routine here in the
 // desired button order, with its readable name and static method address.
 // Calling a named method directly still works; it does not change this list's
 // selection. Each animation continues to own its own local working state.
@@ -95,7 +95,7 @@ void Audio::debug() {
     debug(RemoteInputs::audio());
 }
 
-void Audio::debug(const RemoteInputs::Audio &audio, const char *details) {
+void Audio::debug(const RemoteInputs::Audio &audio) {
 #if AUDIO_SERIAL_DEBUG
     // Render task only. No printing in UARTReceiver and no lock held during TX.
     // Static storage survives a nonlocal app exit; no resource-owning locals.
@@ -150,7 +150,7 @@ void Audio::debug(const RemoteInputs::Audio &audio, const char *details) {
             snprintf(text, sizeof(text),
                      "Audio: source=%s routine=%s linked=%u valid=%u session=%lu rev=%lu age=%ldms "
                      "VRaw=%u VSm=%u VAvg=%u Kicks=%lu BPM=%.1f Phase=%u%% Conf=%u%% Rhythm=%s RXok=%lu "
-                     "RXbad=%lu%s%s\r\nBins:[",
+                     "RXbad=%lu\r\nBins:[",
                      source, currentRoutineName(), unsigned(control.linked), unsigned(audio.valid),
                      (unsigned long)control.session, (unsigned long)control.revision, age,
                      unsigned(audio.values.volumeRaw), unsigned(audio.values.volumeSm),
@@ -159,8 +159,7 @@ void Audio::debug(const RemoteInputs::Audio &audio, const char *details) {
                      unsigned(audio.values.tempoPhase) * 100 / 65536,
                      unsigned(audio.values.tempoConfidence) * 100 / 255,
                      rhythmState,
-                     (unsigned long)stats.accepted, (unsigned long)stats.rejected,
-                     details && details[0] ? " " : "", details ? details : "");
+                     (unsigned long)stats.accepted, (unsigned long)stats.rejected);
         if (n <= 0 || size_t(n) >= sizeof(text)) {
             return;
         }
@@ -418,30 +417,12 @@ void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
     float rate = IDLE_BPM;
     bool previouslyLocked = false;
 
-    // These measurements belong only to this invocation on the render task.
-    // They do not touch the UART payload or share state with the receiver.
-    //
-    // WorkMax: maximum time spent reading inputs, preparing diagnostics,
-    // calculating the breath, and writing voxel colors in this window.
-    // ShowMax: maximum time inside showCube(), INCLUDING its frame-cap wait,
-    // checkpoint, and FastLED.show(). It is not purely LED transfer time.
-    // FPS: completed frames divided by actual elapsed time in this window.
-    //
-    // These are elapsed wall times, not CPU-utilization measurements or DMA
-    // underrun counters. A fast frame can still suffer a late LED interrupt.
-    uint32_t timingStart = micros();
-    uint32_t timingFrames = 0;
-    uint32_t maximumWorkUs = 0;
-    uint32_t maximumShowUs = 0;
-    char timingText[96] = {};
-
     for (;;) {
-        const uint32_t workStart = micros();
         const uint32_t now = millis();
         const float seconds = min(0.25f, float(uint32_t(now - lastFrame)) / 1000.0f);
         lastFrame = now;
         const RemoteInputs::Audio audio = RemoteInputs::audio();
-        Audio::debug(audio, timingText);
+        Audio::debug(audio);
         const bool active = audio.valid && (audio.values.tempoFlags & CubinaWire::AUDIO_ACTIVE);
         const bool locked = active && (audio.values.tempoFlags & CubinaWire::TEMPO_LOCKED);
         const float estimate = float(audio.values.tempoBpm100) / 100.0f;
@@ -479,25 +460,6 @@ void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
         BpmRenderer::draw(phaseMap, RainbowColors_p, uint8_t(beat - travel), uint8_t(now / 40),
                           level);
 
-        const uint32_t showStart = micros();
-        maximumWorkUs = max(maximumWorkUs, uint32_t(showStart - workStart));
         showCube();
-        const uint32_t showEnd = micros();
-        maximumShowUs = max(maximumShowUs, uint32_t(showEnd - showStart));
-        ++timingFrames;
-
-        const uint32_t timingElapsed = uint32_t(showEnd - timingStart);
-        if (timingElapsed >= 1000000) {
-            // Summarize once per second; debug() adds this to its ordinary
-            // bounded USB report. No extra stream is sent over Serial2.
-            const double fps = double(timingFrames) * 1000000.0 / timingElapsed;
-            snprintf(timingText, sizeof(timingText),
-                     "Perf[WorkMax=%luus ShowMax=%luus FPS=%.1f]",
-                     (unsigned long)maximumWorkUs, (unsigned long)maximumShowUs, fps);
-            timingStart = showEnd;
-            timingFrames = 0;
-            maximumWorkUs = 0;
-            maximumShowUs = 0;
-        }
     }
 }
