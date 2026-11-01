@@ -2,6 +2,9 @@
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "AppMemory.h"
+#include "PlaylistMemoryProbe.h"
+#include "BpmRenderer.h"
+#include "GeometryEngine.h"
 
 enum BlackHoleOrbit {
     ORBIT_SYNC = 0,    // One majestic Saturn ring (All stars share the exact same 3D plane)
@@ -11,12 +14,6 @@ enum BlackHoleOrbit {
     // ==========================================
     // 3D BPM ENGINE (Volumetric Density Waves)
     // ==========================================
-    enum BpmSpatialMode {
-        BPM_CHECKERBOARD = 0, // 2D serpentine scatter extruded to columns
-        BPM_SPHERE = 1,       // 3D radial expansion from the core
-        BPM_DIAGONAL = 2,     // 3D angled slicing planes
-        BPM_HELIX = 3         // 3D twisting spiral staircase
-    };
 
     // ==========================================
     // 3D CHUNCHUN (Volumetric Swarms)
@@ -161,11 +158,20 @@ class Streamers {
         float minX = RNDR_X * 0.25f, maxX = RNDR_X * 0.75f;
         float minY = RNDR_Y * 0.25f, maxY = RNDR_Y * 0.75f;
 
-        const int MAX_PARTICLES = min(((RNDR_X * RNDR_Y * RNDR_Z) / 7), 170);
-        
-        //static KineticParticle pool[MAX_PARTICLES];
-        KineticParticle* pool = (KineticParticle*)SharedAppMemory;
-        for(int i = 0; i < MAX_PARTICLES; i++) pool[i].active = false;
+        // Keep the existing visual target, but never let the particle pool
+        // exceed the shared 8 KB arena. sizeof includes structure padding.
+        // With the current 48-byte particles, the capacity is 170 particles.
+        constexpr int PARTICLE_CAPACITY =
+            SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
+        static_assert(PARTICLE_CAPACITY > 0, "No kinetic particle fits the arena");
+
+        const int requestedParticles = min(((RNDR_X * RNDR_Y * RNDR_Z) / 7), 170);
+        const int MAX_PARTICLES = min(requestedParticles, PARTICLE_CAPACITY);
+        KineticParticle* pool = reinterpret_cast<KineticParticle*>(SharedAppMemory);
+
+        for (int i = 0; i < MAX_PARTICLES; i++) {
+            pool[i].active = false;
+        }
 
         bool keepRunning = true;
 
@@ -281,10 +287,21 @@ class Streamers {
         State state = SPIRAL_IN;
         uint32_t stateTimer = millis();
 
-        const int MAX_EMBERS = (RNDR_X * RNDR_Y * RNDR_Z) / 12;
-        //static KineticParticle embers[MAX_EMBERS];
-        KineticParticle* embers = (KineticParticle*)SharedAppMemory;
-        for(int i = 0; i < MAX_EMBERS; i++) embers[i].active = false;
+        // The old dimension-only count requested 341 particles on a 16-cube
+        // (16,368 bytes), although this arena contains only 8,192 bytes.
+        // Bound the count by the REAL byte budget before even clearing active.
+        // Every spawn, physics and liveness loop below uses this same count.
+        constexpr int EMBER_CAPACITY =
+            SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
+        static_assert(EMBER_CAPACITY > 0, "No kinetic particle fits the arena");
+
+        const int requestedEmbers = (RNDR_X * RNDR_Y * RNDR_Z) / 12;
+        const int MAX_EMBERS = min(requestedEmbers, EMBER_CAPACITY);
+        KineticParticle* embers = reinterpret_cast<KineticParticle*>(SharedAppMemory);
+
+        for (int i = 0; i < MAX_EMBERS; i++) {
+            embers[i].active = false;
+        }
 
         float masterPhase = 0.0f;
         int currentCycle = 0;
@@ -976,6 +993,15 @@ class Streamers {
             } 
         }
 
+        // PLAYLIST MEMORY: one observation after the original arrays are live.
+#if CUBINA_PLAYLIST_MEMORY_DIAGNOSTICS
+        PlaylistMemoryProbe::mouseInitialized(
+            sizeof(hx) + sizeof(hy) + sizeof(hz) + sizeof(headPtr) +
+            sizeof(x) + sizeof(y) + sizeof(z) + sizeof(dir) +
+            sizeof(axis) + sizeof(mousePals)
+        );
+#endif
+
         while (millis() - startTime < durationMs) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now; masterPhase += 0.133f * deltaMs; 
             
@@ -1012,6 +1038,21 @@ class Streamers {
             showCube(); 
             if (speedMs > 0) delay(speedMs); else yield();
         }
+
+        // PLAYLIST MEMORY: sample before releasing this function's arrays.
+#if CUBINA_PLAYLIST_MEMORY_DIAGNOSTICS
+        PlaylistMemoryProbe::mouseLeaving();
+        PlaylistMemoryProbe::keepAlive(hx);
+        PlaylistMemoryProbe::keepAlive(hy);
+        PlaylistMemoryProbe::keepAlive(hz);
+        PlaylistMemoryProbe::keepAlive(headPtr);
+        PlaylistMemoryProbe::keepAlive(x);
+        PlaylistMemoryProbe::keepAlive(y);
+        PlaylistMemoryProbe::keepAlive(z);
+        PlaylistMemoryProbe::keepAlive(dir);
+        PlaylistMemoryProbe::keepAlive(axis);
+        PlaylistMemoryProbe::keepAlive(mousePals);
+#endif
     }
 
     // ==========================================
@@ -1124,20 +1165,24 @@ class Streamers {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
 
-        // 1. DYNAMIC MEMORY SCALING
-        // SharedAppMemory allows 8192 bytes (8x8x16) or 29000 bytes (16^3).
-        // Each ball struct is 12 bytes. 
-        // 8x8 requires 64 columns. Max balls = 8192 / (64 * 12) = 10 balls per col.
-        // 16x16 requires 256 columns. Max balls = 29000 / (256 * 12) = 9 balls per col.
-        // 8x8 uses 10 (640 balls). 10x10 uses 6 (600 balls). 16x16 uses 9 (2304 balls in 29KB memory).
-        const int MAX_BALLS_PER_COL = (RNDR_X == 10) ? 6 : ((RNDR_X > 10) ? 9 : 10);
-        
-        const int TOTAL_COLS = RNDR_X * RNDR_Y;
-        
-        // Cast the global arena
-        BouncingBall* balls = (BouncingBall*)SharedAppMemory;
+        // 1. FIT ALL COLUMNS INSIDE THE FIXED SHARED ARENA
+        // Each column owns MAX_BALLS_PER_COL slots. This is also the stride
+        // in both indexing loops below: c * MAX_BALLS_PER_COL + i.
+        // Reducing only numBalls would leave the old large stride in place
+        // and would STILL write beyond the arena on the later columns.
+        constexpr int TOTAL_COLS = RNDR_X * RNDR_Y;
+        constexpr int BALLS_PER_COL_CAPACITY =
+            SHARED_APP_MEMORY_BYTES / (TOTAL_COLS * sizeof(BouncingBall));
+        static_assert(BALLS_PER_COL_CAPACITY > 0, "One ball per column does not fit the arena");
 
-        // Map the 0-255 parameter to actual ball counts based on memory limits
+        const int requestedMaxBallsPerCol = (RNDR_X == 10) ? 6 : ((RNDR_X > 10) ? 9 : 10);
+        const int MAX_BALLS_PER_COL = min(requestedMaxBallsPerCol, BALLS_PER_COL_CAPACITY);
+
+        // With the current 12-byte structure: 16x16 permits 2 balls/column;
+        // 10x10 retains 6; 8x8 retains 10. No larger allocation is requested.
+        BouncingBall* balls = reinterpret_cast<BouncingBall*>(SharedAppMemory);
+
+        // The input knob still selects between one ball and the safe maximum.
         unsigned numBalls = (numBallsParam * (MAX_BALLS_PER_COL - 1)) / 255 + 1;
 
         // 2. WLED PHYSICS TRANSLATION
@@ -1215,99 +1260,26 @@ class Streamers {
         }
     }
     
-    static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
-        // Map the 0-255 speed parameter to a usable FastLED BPM range (10 to 120 BPM)
-        uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
-        
-        // -------------------------------------------------------------------------
-        // 1. THE PRE-COMPUTATION ENGINE (HEAP-FREE)
-        // Map the phase array directly to the global scratchpad. Zero fragmentation.
-        // -------------------------------------------------------------------------
-        uint8_t* phaseMap = (uint8_t*)SharedAppMemory;
-        
-        float cx = RNDR_CX;
-        float cy = RNDR_CY;
-        float cz = RNDR_CZ;
-        float maxDist = sqrtf(cx*cx + cy*cy + cz*cz);
-        if (maxDist < 1.0f) maxDist = 1.0f; 
-        
-        uint8_t zStep = 256 / RNDR_Z;
-        uint8_t diagStep = 256 / (RNDR_X + RNDR_Y + RNDR_Z);
+    static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p,
+                                     uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
+        // Preserve the original timed animation. The audio wrapper shares its
+        // geometry renderer, but supplies an independently tracked music phase.
+        const uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
+        uint8_t *phaseMap = reinterpret_cast<uint8_t *>(SharedAppMemory);
+        BpmRenderer::prepare(phaseMap, mode);
+        const uint32_t startTime = millis();
 
-        uint32_t idx = 0;
-        for (uint8_t z = 0; z < RNDR_Z; z++) {
-            for (uint8_t y = 0; y < RNDR_Y; y++) {
-                for (uint8_t x = 0; x < RNDR_X; x++) {
-                    uint8_t spatialPhase = 0;
-                    
-                    if (mode == BPM_CHECKERBOARD) {
-                        bool isEven = ((x + y) % 2 == 0);
-                        spatialPhase = isEven ? (z * zStep) : (256 - (z * zStep));
-                    } 
-                    else if (mode == BPM_SPHERE) {
-                        float dx = (float)x - cx; 
-                        float dy = (float)y - cy; 
-                        float dz = (float)z - cz;
-                        float dist = sqrtf(dx*dx + dy*dy + dz*dz);
-                        spatialPhase = (uint8_t)((dist / maxDist) * 255.0f);
-                    }
-                    else if (mode == BPM_DIAGONAL) {
-                        spatialPhase = (uint8_t)((x + y + z) * diagStep);
-                    }
-                    else if (mode == BPM_HELIX) {
-                        float angle = atan2f((float)y - cy, (float)x - cx);
-                        uint8_t anglePhase = (uint8_t)((angle + 3.14159f) * 40.74f); 
-                        spatialPhase = anglePhase + (z * zStep);
-                    }
-                    
-                    phaseMap[idx++] = spatialPhase;
-                }
-            }
-        }
-
-
-       // -------------------------------------------------------------------------
-        // 2. THE RENDER ENGINE
-        // -------------------------------------------------------------------------
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-
-        while (millis() - startTime < durationMs) {
-            uint32_t now = millis();
-            if (now - lastFrame == 0) { yield(); continue; }
-            lastFrame = now;
-
-            uint8_t beat = beatsin8(bpm, 64, 255);
-            uint8_t timeBase = now / 15; 
-
-            idx = 0; // Reset lookup index for the new frame
-            
-            for (uint8_t z = 0; z < RNDR_Z; z++) {
-                // yield(); <-- REMOVED: Do not context-switch 16 times per frame!
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    for (uint8_t x = 0; x < RNDR_X; x++) {
-                        
-                        // O(1) Memory Lookup replaces all branching and float math
-                        uint8_t spatialPhase = phaseMap[idx++];
-                        
-                        uint8_t brightness = beat - timeBase + spatialPhase;
-                        brightness = qsub8(brightness, 32);     
-                        brightness = qadd8(brightness, brightness); 
-                        
-                        // BIT SHIFT: Divides by 2 directly in the ALU
-                        uint8_t colorIndex = timeBase + (spatialPhase >> 1);
-                        
-                        CRGB finalColor = ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND);
-                        setVoxel(x, y, z, finalColor);
-                    }
-                }
-            }
+        while (uint32_t(millis() - startTime) < durationMs) {
+            const uint32_t now = millis();
+            const uint8_t beat = beatsin8(bpm, 64, 255);
+            const uint8_t timeBase = now / 15;
+            BpmRenderer::draw(phaseMap, pal, uint8_t(beat - timeBase), timeBase);
+            // showCube() owns frame pacing and the mode-change checkpoint.
+            // A second delay here needlessly adds to LED transfer time.
             showCube();
-            delay(15);
         }
     }
-    
-    
+
     static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();

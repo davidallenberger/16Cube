@@ -1,6 +1,7 @@
 #include "CubeSystem.h"
 #include "AppMemory.h"
 #include "TestDemo.h"
+#include "WildMouseIsolation.h"
 #include "Shapes.h"
 #include "Audio.h"
 #include "Depth.h"
@@ -13,6 +14,29 @@
 #include "Snake.h"
 #include "Snake2d.h"
 #include "Asteroids3d.h"
+
+// TEMPORARY FLICKER INVESTIGATION. No frame-rate setting changes here.
+// 1: Boot/Animation button runs fixed BPM instead of the TestDemo playlist.
+// 0: Restore the normal Animation path. Build flags can override this value.
+#ifndef CUBINA_BPM_DIAGNOSTIC
+#define CUBINA_BPM_DIAGNOSTIC 0
+#endif
+
+// Start at 0 to collect real audio BPM diagnostics first.
+// Set to 1 (or use a build flag) for the controlled comparison: audio modes
+// show the SAME fixed BPM as Animation while the command board still captures
+// audio and transmits it normally. UARTReceiver still validates/publishes it.
+#ifndef CUBINA_AUDIO_FIXED_BPM
+#define CUBINA_AUDIO_FIXED_BPM 0
+#endif
+
+#if CUBINA_AUDIO_FIXED_BPM && !CUBINA_BPM_DIAGNOSTIC
+#error "CUBINA_AUDIO_FIXED_BPM requires CUBINA_BPM_DIAGNOSTIC=1"
+#endif
+
+#if CUBINA_BPM_DIAGNOSTIC
+#include "BpmDiagnostic.h"
+#endif
 
 SystemState CubeSystem::currentState = SYS_STATE_RUN_APP;
 int16_t CubeSystem::selectedMenuIndex = 0;
@@ -50,37 +74,46 @@ namespace {
     // a held gamepad Home button is allowed to return to the game menu.
     CubinaWire::Mode demandedMode = CubinaWire::Mode::Animation;
 
-    void runAmbientArt () {
+    void runAmbientArt() {
+        // BEGIN WILD MOUSE ISOLATION -- original route retained below.
+#if CUBINA_WILD_MOUSE_ISOLATION
+        WildMouseIsolation::run();
+#else
+
+#if CUBINA_BPM_DIAGNOSTIC
+        // A direct temporary route to a known timed BPM visual. showCube's
+        // normal checkpoint still processes mode buttons and app escapes.
+        BpmDiagnostic::run();
+#else
         for (;;) {
-            TestDemo::runEngine (false);
+            TestDemo::runEngine(true);
+        }
+#endif
+    
+#endif
+        // END WILD MOUSE ISOLATION
+    }
+
+    void renderAmbientIcon(TextureState &) {
+        Shapes::animateStatic(SHAPE_MERKABA, 10, RENDER_SOLID, MODE_SPATIAL_GRADIENT);
+    }
+
+    void runDiagnostics() {
+        for (;;) {
+            CubeSystem::handlePairingSandbox();
         }
     }
+} // namespace
 
-    void renderAmbientIcon (TextureState&) {
-        Shapes::animateStatic (
-            SHAPE_MERKABA,
-            10,
-            RENDER_SOLID,
-            MODE_SPATIAL_GRADIENT
-        );
-    }
-
-    void runDiagnostics () {
-        for (;;) {
-            CubeSystem::handlePairingSandbox ();
-        }
-    }
-}
-
-static void renderDiagIcon (TextureState& tex) {
-    uint8_t pulse = beatsin8 (50, 20, 255);
-    CRGB col = CRGB (pulse, 0, 0);
+static void renderDiagIcon(TextureState &tex) {
+    uint8_t pulse = beatsin8(50, 20, 255);
+    CRGB col = CRGB(pulse, 0, 0);
 
     for (int z = 5; z <= 10; z++) {
-        setVoxel (3, 3, z, col);
-        setVoxel (4, 3, z, col);
-        setVoxel (3, 4, z, col);
-        setVoxel (4, 4, z, col);
+        setVoxel(3, 3, z, col);
+        setVoxel(4, 3, z, col);
+        setVoxel(3, 4, z, col);
+        setVoxel(4, 4, z, col);
     }
 
     for (int x = 1; x <= 6; x++) {
@@ -88,10 +121,10 @@ static void renderDiagIcon (TextureState& tex) {
             continue;
         }
 
-        setVoxel (x, 3, 7, col);
-        setVoxel (x, 4, 7, col);
-        setVoxel (x, 3, 8, col);
-        setVoxel (x, 4, 8, col);
+        setVoxel(x, 3, 7, col);
+        setVoxel(x, 4, 7, col);
+        setVoxel(x, 3, 8, col);
+        setVoxel(x, 4, 8, col);
     }
 
     for (int y = 1; y <= 6; y++) {
@@ -99,56 +132,64 @@ static void renderDiagIcon (TextureState& tex) {
             continue;
         }
 
-        setVoxel (3, y, 7, col);
-        setVoxel (4, y, 7, col);
-        setVoxel (3, y, 8, col);
-        setVoxel (4, y, 8, col);
+        setVoxel(3, y, 7, col);
+        setVoxel(4, y, 7, col);
+        setVoxel(3, y, 8, col);
+        setVoxel(4, y, 8, col);
     }
 }
 
 // Registry positions are also used by the mode-to-app mapping below.
 // If entries are reordered, update AUDIO_APP, DEPTH_APP, and the game default.
 static const CubeApp appRegistry[] = {
-    {"Ambient Art", renderAmbientIcon, runAmbientArt},
-    {"Tetris 3D", Tetris::renderIcon, Tetris::run},
-    {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
-    {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
-    {"Breakout 3D", Breakout::renderIcon, Breakout::run},
-    {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run},
-    {"Snake 3D", Snake::renderIcon, Snake::run},
-    {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
-    {"Rubiks", Rubiks::renderIcon, Rubiks::run},
-    {"Diagnostics", renderDiagIcon, runDiagnostics},
-    {"Audio", Audio::renderIcon, Audio::run},
-    {"Depth Occupancy", Depth::renderIcon, Depth::run}
-};
+#if CUBINA_BPM_DIAGNOSTIC
+                                      {"BPM Diagnostic", renderAmbientIcon, runAmbientArt},
+#else
+                                      {"Ambient Art", renderAmbientIcon, runAmbientArt},
+#endif
+                                      {"Tetris 3D", Tetris::renderIcon, Tetris::run},
+                                      {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
+                                      {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
+                                      {"Breakout 3D", Breakout::renderIcon, Breakout::run},
+                                      {"Breakout 2D", Breakout2d::renderIcon, Breakout2d::run},
+                                      {"Snake 3D", Snake::renderIcon, Snake::run},
+                                      {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
+                                      {"Rubiks", Rubiks::renderIcon, Rubiks::run},
+                                      {"Diagnostics", renderDiagIcon, runDiagnostics},
+#if CUBINA_AUDIO_FIXED_BPM
+                                      {"Audio", Audio::renderIcon, BpmDiagnostic::run},
+#else
+                                      {"Audio", Audio::renderIcon, Audio::run},
+#endif
+                                      {"Depth Occupancy", Depth::renderIcon, Depth::run}};
 
 static constexpr int AUDIO_APP = 10;
 static constexpr int DEPTH_APP = 11;
 
-void CubeSystem::setup () {
+void CubeSystem::setup() {
     // The render board consumes UART input. Bluetooth pairing and acquisition
     // belong to the command board; no Bluepad32/NVS setup is performed here.
-    RemoteInputs::begin ();
-    initAppMemory ();
+    RemoteInputs::begin();
+    initAppMemory();
 
     selectedMenuIndex = 0;
-    changeState (SYS_STATE_RUN_APP);
+    changeState(SYS_STATE_RUN_APP);
 
-    // Normal boot starts Ambient Art, including when no UART is connected.
+    // Entry 0 is normal Ambient Art, or the temporary fixed BPM diagnostic
+    // when its switch is enabled. Either also works without UART connected.
     // Run TestDemo::runHardwareWiringTest() explicitly when commissioning.
 }
 
-void CubeSystem::changeState (SystemState s) {
+void CubeSystem::changeState(SystemState s) {
     currentState = s;
-    stateTimer = millis ();
+    stateTimer = millis();
     menuNeedsRedraw = true;
-    clearAll ();
+    clearAll();
 
-    Serial.printf ("Cube OS state=%u app=%d\n", unsigned (s), selectedMenuIndex);
+    Serial.printf("Cube OS state=%u app=%d\n", unsigned(s), selectedMenuIndex);
 }
 
-void CubeSystem::frameCheckpoint () {
+void CubeSystem::frameCheckpoint() {
     // This is the ANIMATION TASK's checkpoint, not the UART receive loop.
     //
     // UART task: validate packets and store their latest values under a mutex.
@@ -157,15 +198,22 @@ void CubeSystem::frameCheckpoint () {
     //
     // control() returns a value copy and releases its internal mutex before
     // returning. Consequently no receiver mutex is held when we jump below.
-    const RemoteInputs::Control c = RemoteInputs::control ();
+    const RemoteInputs::Control c = RemoteInputs::control();
 
     // A linked command is new to us if this is the first one, the command
     // board rebooted (session changed), or another mode demand was issued
     // (revision changed). Ordinary packets repeating the same pair do nothing.
     if (c.linked &&
-        (!appliedControl ||
-         c.session != appliedSession ||
-         c.revision != appliedRevision)) {
+        (!appliedControl || c.session != appliedSession || c.revision != appliedRevision)) {
+
+        // Another demand for the SAME audio source means "next visual" only
+        // when audio is already the active app. First contact, command-board
+        // reboot, and switching audio sources select/restart the current
+        // visual instead. Compare against the OLD demand before updating it.
+        const bool advanceAudioRoutine =
+            appliedControl && c.session == appliedSession && c.revision != appliedRevision &&
+            c.mode == demandedMode && CubinaWire::audioMode(c.mode) &&
+            currentState == SYS_STATE_RUN_APP && selectedMenuIndex == AUDIO_APP;
 
         // Mark the demand as handled BEFORE escaping the old app. Otherwise
         // the next checkpoint would see it as new and jump again forever.
@@ -175,20 +223,31 @@ void CubeSystem::frameCheckpoint () {
         demandedMode = c.mode;
 
         // Command-board mode buttons have authority over the current app.
-        // All audio sources share the Puddles app; acquisition chooses which
-        // source supplies its audio. Game mode opens the local game menu.
-        if (CubinaWire::audioMode (c.mode)) {
+        // All audio sources share the Audio app; acquisition chooses which
+        // source supplies its data. Game mode opens the local game menu.
+        if (CubinaWire::audioMode(c.mode)) {
+            if (advanceAudioRoutine) {
+                // Advance BEFORE the jump: the replacement Audio::run() must
+                // launch the next entry, not restart the previous one.
+#if !CUBINA_AUDIO_FIXED_BPM
+                Audio::nextRoutine();
+#endif
+            }
+
             selectedMenuIndex = AUDIO_APP;
-            changeState (SYS_STATE_RUN_APP);
+            changeState(SYS_STATE_RUN_APP);
         } else if (c.mode == CubinaWire::Mode::Depth) {
             selectedMenuIndex = DEPTH_APP;
-            changeState (SYS_STATE_RUN_APP);
+            changeState(SYS_STATE_RUN_APP);
         } else if (c.mode == CubinaWire::Mode::Game) {
             selectedMenuIndex = 5; // Initially highlight Breakout 2D.
-            changeState (SYS_STATE_MENU);
+            changeState(SYS_STATE_MENU);
         } else {
+            // Entry 0 uses the ordinary animation playlist unless the fixed
+            // BPM diagnostic switch redirects it. Restarting the diagnostic
+            // repeats the same comparison pattern, without changing TestDemo.
             selectedMenuIndex = 0;
-            changeState (SYS_STATE_RUN_APP);
+            changeState(SYS_STATE_RUN_APP);
         }
 
         // Return to handleApp() with code 2. It leaves the state selected
@@ -196,24 +255,23 @@ void CubeSystem::frameCheckpoint () {
         // In a menu/between apps, no jump is needed: the normal loop sees it.
         if (teleportArmed) {
             teleportArmed = false;
-            longjmp (engineJumpBuffer, 2);
+            longjmp(engineJumpBuffer, 2);
         }
     }
 
     // Publish one frame's gamepad inputs, including latched short presses.
     // The accessors manage their own mutexes; app code sees copied values.
-    RemoteInputs::beginFrame ();
+    RemoteInputs::beginFrame();
 
     static uint32_t homeStart = 0;
     static bool homeConsumed = false;
 
     // Home uses actual held state, rather than a latched momentary press,
     // because returning to the menu requires holding it for 500 ms.
-    const GamepadState p1 = RemoteInputs::heldGamepad (ROLE_MASTER);
-    const GamepadState p2 = RemoteInputs::heldGamepad (ROLE_PLAYER_2);
-    const bool home =
-        (p1.connected && (p1.miscButtons & CubinaInput::System)) ||
-        (p2.connected && (p2.miscButtons & CubinaInput::System));
+    const GamepadState p1 = RemoteInputs::heldGamepad(ROLE_MASTER);
+    const GamepadState p2 = RemoteInputs::heldGamepad(ROLE_PLAYER_2);
+    const bool home = (p1.connected && (p1.miscButtons & CubinaInput::System)) ||
+                      (p2.connected && (p2.miscButtons & CubinaInput::System));
 
     // Only System/Home starts this timer. Select, Start, and Capture remain
     // available to games and cannot accidentally send the player to the menu.
@@ -222,64 +280,62 @@ void CubeSystem::frameCheckpoint () {
         homeConsumed = false;
     } else if (demandedMode == CubinaWire::Mode::Game) {
         if (!homeStart) {
-            homeStart = millis ();
+            homeStart = millis();
         }
 
-        if (!homeConsumed && uint32_t (millis () - homeStart) >= 500) {
+        if (!homeConsumed && uint32_t(millis() - homeStart) >= 500) {
             // Consume before jumping: a continuously held button must not
             // trigger another escape immediately when the menu appears.
             homeConsumed = true;
 
             if (teleportArmed) {
                 teleportArmed = false;
-                longjmp (engineJumpBuffer, 1);
+                longjmp(engineJumpBuffer, 1);
             }
         }
     }
 }
 
-void CubeSystem::loop () {
+void CubeSystem::loop() {
     // Catch remote demands between app calls as well. While an app is inside
     // its own loop, showCube() supplies the checkpoint for each shown frame.
     if (currentState == SYS_STATE_RUN_APP) {
-        frameCheckpoint ();
+        frameCheckpoint();
     }
 
     switch (currentState) {
-        case SYS_STATE_BOOT_PAIRING:
-            handlePairingSandbox ();
-            break;
+    case SYS_STATE_BOOT_PAIRING:
+        handlePairingSandbox();
+        break;
 
-        case SYS_STATE_MENU:
-            handleMenu ();
-            break;
+    case SYS_STATE_MENU:
+        handleMenu();
+        break;
 
-        case SYS_STATE_RUN_APP:
-            handleApp ();
-            break;
+    case SYS_STATE_RUN_APP:
+        handleApp();
+        break;
     }
 }
 
-void CubeSystem::handleMenu () {
-    GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
-    GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
+void CubeSystem::handleMenu() {
+    GamepadState p1 = RemoteInputs::gamepad(ROLE_MASTER);
+    GamepadState p2 = RemoteInputs::gamepad(ROLE_PLAYER_2);
     static uint32_t lastInput = 0;
 
     // The Game-mode menu offers games and diagnostics (indices 1 through 9).
     // It does not change the audio source or the command board's chosen mode.
-    if (uint32_t (millis () - lastInput) > 200) {
+    if (uint32_t(millis() - lastInput) > 200) {
         bool down = (p1.dpad & (CubinaInput::DpadDown | CubinaInput::DpadRight)) ||
                     p1.axisY > 200 || p1.axisX > 200 ||
                     (p2.dpad & (CubinaInput::DpadDown | CubinaInput::DpadRight)) ||
                     p2.axisY > 200 || p2.axisX > 200;
 
-        bool up = (p1.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) ||
-                  p1.axisY < -200 || p1.axisX < -200 ||
-                  (p2.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) ||
+        bool up = (p1.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) || p1.axisY < -200 ||
+                  p1.axisX < -200 || (p2.dpad & (CubinaInput::DpadUp | CubinaInput::DpadLeft)) ||
                   p2.axisY < -200 || p2.axisX < -200;
 
-        bool select = p1.a || p1.b || p1.x || p1.y ||
-                      p2.a || p2.b || p2.x || p2.y;
+        bool select = p1.a || p1.b || p1.x || p1.y || p2.a || p2.b || p2.x || p2.y;
 
         if (down || up) {
             selectedMenuIndex += down ? 1 : -1;
@@ -292,28 +348,28 @@ void CubeSystem::handleMenu () {
                 selectedMenuIndex = 9;
             }
 
-            lastInput = millis ();
+            lastInput = millis();
             menuNeedsRedraw = true;
         } else if (select) {
-            lastInput = millis ();
-            changeState (SYS_STATE_RUN_APP);
+            lastInput = millis();
+            changeState(SYS_STATE_RUN_APP);
             return;
         }
     }
 
     if (menuNeedsRedraw) {
-        clearAll ();
-        static TextureState tex (MODE_UNIFORM_CYCLE, RainbowColors_p);
-        appRegistry[selectedMenuIndex].renderIcon (tex);
+        clearAll();
+        static TextureState tex(MODE_UNIFORM_CYCLE, RainbowColors_p);
+        appRegistry[selectedMenuIndex].renderIcon(tex);
         menuNeedsRedraw = false;
     }
 
     // Even an unchanged icon must service remote mode demands regularly.
-    showCube ();
+    showCube();
 }
 
-void CubeSystem::handleApp () {
-    clearAll ();
+void CubeSystem::handleApp() {
+    clearAll();
 
     // Establish this task's escape destination BEFORE calling the app.
     // setjmp returns 0 initially; a later longjmp makes it return 1 or 2.
@@ -321,32 +377,32 @@ void CubeSystem::handleApp () {
     // This legacy mechanism bypasses normal stack unwinding. App code must
     // not hold mutexes or automatic objects requiring nontrivial destruction
     // across showCube()/frameCheckpoint(), since longjmp skips that cleanup.
-    switch (setjmp (engineJumpBuffer)) {
-        case 1:
-            // A held gamepad Home button requested the game menu.
-            teleportArmed = false;
-            changeState (SYS_STATE_MENU);
-            return;
+    switch (setjmp(engineJumpBuffer)) {
+    case 1:
+        // A held gamepad Home button requested the game menu.
+        teleportArmed = false;
+        changeState(SYS_STATE_MENU);
+        return;
 
-        case 2:
-            // A command-board mode demand already selected the next state.
-            teleportArmed = false;
-            return;
+    case 2:
+        // A command-board mode demand already selected the next state.
+        teleportArmed = false;
+        return;
 
-        default:
-            break;
+    default:
+        break;
     }
 
     teleportArmed = true;
-    Serial.printf ("Launching %s\n", appRegistry[selectedMenuIndex].name);
-    appRegistry[selectedMenuIndex].run ();
+    Serial.printf("Launching %s\n", appRegistry[selectedMenuIndex].name);
+    appRegistry[selectedMenuIndex].run();
 
     // An app can also return normally, without going through the checkpoint.
     teleportArmed = false;
-    changeState (SYS_STATE_MENU);
+    changeState(SYS_STATE_MENU);
 }
 
-void CubeSystem::drawNumberOnFaces (uint8_t num, TextureState& tex) {
+void CubeSystem::drawNumberOnFaces(uint8_t num, TextureState &tex) {
     uint8_t font[3][5] = {
         {0b111, 0b101, 0b101, 0b101, 0b111}, // 0
         {0b010, 0b110, 0b010, 0b010, 0b111}, // 1
@@ -357,7 +413,7 @@ void CubeSystem::drawNumberOnFaces (uint8_t num, TextureState& tex) {
     for (int y = 0; y < 5; y++) {
         for (int x = 0; x < 3; x++) {
             if (font[num][4 - y] & (1 << (2 - x))) {
-                CRGB color = tex.getColor (x, y, zOffset);
+                CRGB color = tex.getColor(x, y, zOffset);
 
                 // Center the three-pixel-wide digit; mirrored coordinates
                 // make the digit readable on the opposing cube faces.
@@ -365,42 +421,42 @@ void CubeSystem::drawNumberOnFaces (uint8_t num, TextureState& tex) {
                 int fx = offset + (2 - x);
                 int inv_fx = offset + x;
 
-                setVoxel (fx, 0, y + zOffset, color);
-                setVoxel (inv_fx, RNDR_Y - 1, y + zOffset, color);
-                setVoxel (0, inv_fx, y + zOffset, color);
-                setVoxel (RNDR_X - 1, fx, y + zOffset, color);
+                setVoxel(fx, 0, y + zOffset, color);
+                setVoxel(inv_fx, RNDR_Y - 1, y + zOffset, color);
+                setVoxel(0, inv_fx, y + zOffset, color);
+                setVoxel(RNDR_X - 1, fx, y + zOffset, color);
             }
         }
     }
 }
 
-void CubeSystem::handlePairingSandbox () {
+void CubeSystem::handlePairingSandbox() {
     // The historical name is retained, but this now displays received
     // controller state. Pairing itself happens only on the command board.
-    const GamepadState p1 = RemoteInputs::gamepad (ROLE_MASTER);
-    const GamepadState p2 = RemoteInputs::gamepad (ROLE_PLAYER_2);
+    const GamepadState p1 = RemoteInputs::gamepad(ROLE_MASTER);
+    const GamepadState p2 = RemoteInputs::gamepad(ROLE_PLAYER_2);
 
-    clearAll ();
-    static TextureState tex (MODE_UNIFORM_CYCLE, RainbowColors_p);
-    drawNumberOnFaces (unsigned (p1.connected) + unsigned (p2.connected), tex);
+    clearAll();
+    static TextureState tex(MODE_UNIFORM_CYCLE, RainbowColors_p);
+    drawNumberOnFaces(unsigned(p1.connected) + unsigned(p2.connected), tex);
 
     if (p1.connected) {
         if (p1.a) {
-            setVoxel (0, 0, 0, CRGB::Blue);
+            setVoxel(0, 0, 0, CRGB::Blue);
         }
 
         if (p1.b) {
-            setVoxel (1, 0, 0, CRGB::Red);
+            setVoxel(1, 0, 0, CRGB::Red);
         }
 
         if (p1.x) {
-            setVoxel (2, 0, 0, CRGB::Green);
+            setVoxel(2, 0, 0, CRGB::Green);
         }
 
         if (p1.y) {
-            setVoxel (3, 0, 0, CRGB::Yellow);
+            setVoxel(3, 0, 0, CRGB::Yellow);
         }
     }
 
-    showCube ();
+    showCube();
 }

@@ -1,4 +1,5 @@
 #include "TestDemo.h"
+#include "PlaylistMemoryProbe.h"
 #include "Planes.h"
 #include "Letters.h"
 #include "Icons.h"
@@ -300,7 +301,13 @@ namespace {
                 case CONCEPT_SCENE_RANDOM_FALL:    Streamers::animateRandomFall(durationMs, SPEED_SCENE_RANDOM_FALL, SPEED_SCENE_RANDOM_FALL * 2.0f); break;
                 case CONCEPT_SCENE_FIREWORKS:      Streamers::animateFireworks(durationMs); break;
                 case CONCEPT_SCENE_PIPES:          Streamers::animateVerticalPipes(durationMs, SPEED_SCENE_PIPES); break;
-                case CONCEPT_SCENE_WILD_MOUSE:     Streamers::animateWildMouse(durationMs, SPEED_SCENE_WILD_MOUSE); break;
+                case CONCEPT_SCENE_WILD_MOUSE:
+                    // Keep the actual dispatcher and direct animation call.
+                    // Probe output is deferred until the routine has returned.
+                    PlaylistMemoryProbe::begin();
+                    Streamers::animateWildMouse(durationMs, SPEED_SCENE_WILD_MOUSE);
+                    PlaylistMemoryProbe::finish();
+                    break;
                 case CONCEPT_SCENE_ATOM_SMASHER:   Streamers::animateAtomSmasher(durationMs); break;
                 case CONCEPT_SCENE_WOBBLING_DISH:  Surfaces::animateWobblingDish(durationMs, false, SPEED_SCENE_WOBBLING_DISH); break;
                 case CONCEPT_SCENE_HELIX:          Streamers::animateWhatTheHelix(durationMs, SPEED_SCENE_HELIX); break;
@@ -413,8 +420,12 @@ namespace TestDemo {
     void runEngine(bool isTestMode) {
         const int ART_DECK_REPETITIONS       = 1;  
         const int BILLBOARD_DECK_REPETITIONS = 1;  
-        const uint32_t DURATION_ART_MS       = 30000;  
-        const uint32_t DURATION_BILLBOARD_MS = 20000;          
+        //const uint32_t DURATION_ART_MS       = 30000;  
+        //const uint32_t DURATION_BILLBOARD_MS = 20000;          
+
+        const uint32_t DURATION_ART_MS       = 10000;  
+        const uint32_t DURATION_BILLBOARD_MS = 10000;          
+        
         
         uint32_t durationMs;
 

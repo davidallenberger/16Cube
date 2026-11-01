@@ -15,6 +15,10 @@ void clearAll(){}void showCube(){}void initAppMemory(){}void setVoxel(uint8_t,ui
 namespace TestDemo{void runEngine(bool){}void runHardwareWiringTest(){}}
 void Audio::run(){}
 void Audio::renderIcon(TextureState&){}
+static unsigned audioAdvanceRequests = 0;
+void Audio::nextRoutine() {
+    ++audioAdvanceRequests;
+}
 void Depth::run(){}
 void Depth::renderIcon(TextureState&){}
 int main(){
@@ -24,8 +28,15 @@ int main(){
 
     using namespace CubinaWire;RemoteInputs::begin();Packet p;
     p.session=1;p.modeRevision=1;p.sequence=1;p.mode=Mode::AudioBluetooth;p.flags=SOURCE_READY;
-    AudioPayload a={};a.mode=2;a.volumeRaw=100;writeAudio(p,a,10);accept(p);
+    AudioPayload a={};a.mode=2;a.volumeRaw=100;
+    a.tempoBpm100 = 12800;
+    a.tempoPhase = 16384;
+    a.tempoConfidence = 220;
+    a.tempoFlags = AUDIO_ACTIVE | TEMPO_LOCKED;
+    writeAudio(p,a,10);accept(p);
     assert(RemoteInputs::audio().values.volumeRaw==100);
+    assert(RemoteInputs::audio().values.tempoBpm100 == 12800);
+    assert(RemoteInputs::audio().values.tempoPhase == 16384);
     p.sequence=2;writeAudio(p,a,11);accept(p);assert(RemoteInputs::consumeBeat());assert(!RemoteInputs::consumeBeat());
     // Do not accept duplicate/stale data or contradictory same-revision modes.
     accept(p);assert(RemoteInputs::stats().duplicates==1);
@@ -95,5 +106,76 @@ int main(){
     p.session=3;p.sequence=0xfffffffeu;p.modeRevision=0xfffffffeu;accept(p);
     p.sequence=0xffffffffu;accept(p);p.sequence=0;p.modeRevision=0;accept(p);
     assert(RemoteInputs::control().revision==0);
+
+    // First entry into audio selects the current routine, never "next".
+    p = {};
+    p.session = 10;
+    p.sequence = 1;
+    p.modeRevision = 1;
+    p.mode = Mode::AudioMic;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 0);
+    assert(CubeSystem::selectedMenuIndex == AUDIO_APP);
+
+    // Ordinary data/heartbeat packets must not act like another button press.
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 0);
+
+    // A repeated source demand advances BEFORE the app escape, exactly once.
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
+    if (setjmp(engineJumpBuffer) == 0) {
+        teleportArmed = true;
+        CubeSystem::frameCheckpoint();
+        assert(false && "Repeated audio demand did not escape the current app");
+    }
+    assert(audioAdvanceRequests == 1);
+    assert(!teleportArmed);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 1);
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 1);
+
+    // Changing sources preserves the visualization instead of advancing it.
+    ++p.sequence;
+    ++p.modeRevision;
+    p.mode = Mode::AudioDJ;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 1);
+    assert(demandedMode == Mode::AudioDJ);
+
+    // A command-board reboot is a mode demand, not an intentional next press.
+    p.session = 11;
+    p.sequence = 1;
+    p.modeRevision = 1;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 1);
+
+    // Returning to audio from another app/menu also preserves its selection.
+    CubeSystem::changeState(SYS_STATE_MENU);
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(CubeSystem::currentState == SYS_STATE_RUN_APP);
+    assert(audioAdvanceRequests == 1);
+
+    // Same-session/same-revision reconnection must not advance the routine.
+    clockMs += 1001;
+    assert(!RemoteInputs::control().linked);
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioAdvanceRequests == 1);
+
     puts("Receiver/OS tests passed: stale input, session reboot, edge latches, beat latches, direct dispatch, one-shot mode tripwire.");
+    puts("Audio dispatch tests passed: repeated source advances once; heartbeat, source switch, reboot, menu return, and reconnect preserve selection.");
 }

@@ -14,6 +14,22 @@ int main(){
     // New tap during a sender write survives into the NEXT snapshot.
     a.a=true;CommandState::publishGamepads(a,b);assert(CommandState::takeForSend().presses[0]&1);
     CommandState::selectMode(Mode::AudioBluetooth);assert(!CommandState::snapshot().ready);
+    AudioPayload live = {};
+    live.mode = 2;
+    live.volumeRaw = 80;
+    for (auto &band : live.fftResult) {
+        band = live.volumeRaw;
+    }
+    CommandState::publishAudio(live, 7);
+    const CommandSnapshot beforeRepeat = CommandState::snapshot();
+    CommandState::repeatModeDemand();
+    const CommandSnapshot afterRepeat = CommandState::snapshot();
+    assert(afterRepeat.revision == beforeRepeat.revision + 1);
+    assert(afterRepeat.mode == beforeRepeat.mode);
+    assert(afterRepeat.ready == beforeRepeat.ready);
+    assert(afterRepeat.capturedMs == beforeRepeat.capturedMs);
+    assert(afterRepeat.beats == beforeRepeat.beats);
+    assert(afterRepeat.audio.volumeRaw == 80);
     // Exercise the real CommandState mutex with concurrent publication/read.
     std::thread writer([]{for(int n=0;n<5000;++n){AudioPayload v={};v.mode=2;v.volumeRaw=n%256;
         for(auto& x:v.fftResult)x=v.volumeRaw;CommandState::publishAudio(v,n);}});

@@ -369,6 +369,21 @@ void accept(const Packet& p) {
 }
 
 void task(void*) {
+    // This task is pinned to Core 0. Install the UART driver HERE, rather
+    // than in begin(), which CubeSystem calls from the animation task.
+    //
+    // On ESP32, installing a peripheral driver also assigns its interrupt
+    // handler to the core doing the installation. Pinning only this parser
+    // task does not move an interrupt that was already installed on Core 1.
+    // Keeping both UART reception and its interrupt on Core 0 avoids that
+    // unnecessary competition with FastLED's I2S output interrupt on Core 1.
+    configASSERT(xPortGetCoreID() == 0);
+    Serial2.setRxBufferSize(8192);
+    Serial2.begin(BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+
+    Serial.printf("UARTReceiver: UART2 initialized on Core %u; receiver task on Core %u\r\n",
+                  unsigned(xPortGetCoreID()), unsigned(xPortGetCoreID()));
+
     static Parser parser;
     static Packet packet;
     uint32_t lastRejected = 0;
@@ -399,9 +414,11 @@ void RemoteInputs::begin() {
 
     mutex = xSemaphoreCreateMutex();
     configASSERT(mutex);
-    Serial2.setRxBufferSize(8192);
-    Serial2.begin(BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
+    // Create shared storage before starting the task. It is safe for an
+    // accessor to run before the task has initialized UART2: the initial
+    // snapshots are simply unlinked/invalid until the first valid packet.
+    // Do not put Serial2.begin() here; this caller is on the render core.
     BaseType_t ok = xTaskCreatePinnedToCore(
         task, "UARTReceiver", 6144, nullptr, 2, nullptr, 0);
     configASSERT(ok == pdPASS);

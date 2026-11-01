@@ -59,10 +59,10 @@ int main () {
 
     CubinaWire::Packet packet = makePacket (source, true, false, 42);
     assert (packet.type == CubinaWire::Type::Audio);
-    assert (packet.length == 25 && packet.sequence == 42);
+    assert (packet.length == CubinaWire::AUDIO_BYTES && packet.sequence == 42);
     uint8_t bytes[CubinaWire::MAX_FRAME];
     const size_t length = CubinaWire::encode (packet, bytes, sizeof (bytes));
-    assert (length && length <= 51);
+    assert (length && length <= 57);
     CubinaWire::Packet decoded;
     assert (CubinaWire::decode (bytes, length - 1, decoded));
     assert (CubinaWire::readAudio (decoded).fftResult[5] == 200);

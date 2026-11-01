@@ -135,6 +135,10 @@
  *   sampleAvg     Slower average of the same bounded volume.
  *   fftResult[16] Calibrated/compressed/smoothed band levels, low to high.
  *   beat          Whether an acquisition kick event awaits this publication.
+ *   tempoBpm100   Estimated musical tempo * 100; zero before an estimate.
+ *   tempoPhase    Position within the predicted beat, 0..65535.
+ *   tempoConfidence Heuristic rhythm confidence, 0..255 (not probability).
+ *   tempoFlags    Audio-active and rhythm-locked bits; separate from kicks.
  *
  * A field called Raw is unsmoothed DISPLAY level, not a raw PCM sample.
  * A frequency band's number identifies its range; its value identifies its
@@ -161,7 +165,8 @@
  * CommandState::publishAudio() copies the completed payload/count under its
  * mutex and records local publication time. UARTSender takes a latest-state
  * snapshot without holding that mutex during transmission. SharedProtocol
- * wraps 21 payload bytes plus the four-byte beat count in an Audio packet.
+ * wraps 21 legacy display bytes, the four-byte kick count and six explicit
+ * tempo bytes in a 31-byte Audio payload (protocol version 2).
  * The outer header includes version/type, demanded mode, readiness, boot
  * session, mode revision, sequence, and capturedMs. COBS frames it and CRC-16
  * checks integrity. The inner source label mode is NOT the outer Mode enum.
@@ -178,10 +183,17 @@
  * or reveal how old already-buffered audio is. Host tests cannot establish
  * actual ESP32 throughput. The design uses no additional processing board.
  *
- * No AGC, bin peak holding, or musical beat tracker is implemented here.
+ * TempoTracker reuses linear band RMS before display EQ/gamma/smoothing.
+ * Positive log-band changes form a novelty curve; a fixed 8.4-second history
+ * supports an incremental autocorrelation search over roughly 60-200 BPM.
+ * Onsets pull the predicted phase near beats, and confidence decays on silence.
+ * A calibrated volume floor of 5 distinguishes activity from tiny idle noise.
+ * This is an experimental musical clock: half/double-time ambiguity, weak
+ * percussion and rapid tempo changes remain limitations. WorkMax includes it.
+ * No AGC or spectrum peak holding is implemented.
  */
 
-/*
+ /*
  * PCM1808 — EXECUTIVE SUMMARY
  *
  * The PCM1808 converts left and right analog audio voltages into digital
@@ -198,7 +210,7 @@
  * reads and normalizes the samples before calculating the visual summaries.
  */
 
- /*
+/*
 PCM1808 PRIMER -- THIS BOARD, THIS WIRING, THIS FIRMWARE
 
 1. What the ADC does, and what its power pins mean
@@ -419,10 +431,12 @@ https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x
 #include <freertos/task.h>
 #include "SignalAcquisition.h"
 #include "AudioAnalysis.h"
+#include "TempoTracker.h"
 #include "CommandState.h"
 #include "BoardConfig.h"
 #include "BluetoothManager.h"
 #include "SourceAdapters.h"
+#include "ModeButton.h"
 #include <esp_err.h>
 #include <math.h>
 #include <driver/i2s.h>
@@ -518,7 +532,7 @@ uint32_t beatCount = 0; // Monotonic during this boot, including between prints
 uint32_t lastBeatEventMs = 0;
 bool beatPending = false; // Cleared after publishing the acquired block
 
-void recordKickEvent (uint32_t nowMs) {
+void recordKickEvent(uint32_t nowMs) {
     ++beatCount;
     lastBeatEventMs = nowMs;
     beatPending = true;
@@ -533,10 +547,10 @@ struct BassBiquad {
     float a2 = 0;
     float z1 = 0;
     float z2 = 0;
-    void configure (float fs, float hz, bool highpass) {
+    void configure(float fs, float hz, bool highpass) {
         const float w = 6.283185307179586f * hz / fs;
-        const float c = cosf (w);
-        const float alpha = sinf (w) / (2.0f * 0.70710678118f);
+        const float c = cosf(w);
+        const float alpha = sinf(w) / (2.0f * 0.70710678118f);
         const float invA0 = 1.0f / (1.0f + alpha);
         const float numerator = highpass ? (1.0f + c) : (1.0f - c);
         b0 = 0.5f * numerator * invA0;
@@ -547,7 +561,7 @@ struct BassBiquad {
         z1 = 0.0f;
         z2 = 0.0f;
     }
-    float process (float x) {
+    float process(float x) {
         const float y = b0 * x + z1;
         z1 = b1 * x - a1 * y + z2;
         z2 = b2 * x - a2 * y;
@@ -561,12 +575,12 @@ class BassKickDetector {
     float onsetRatio = 0.0f; // Fast bass power / recent bass power; steady tone ~= 1
     float triggerRatio = 1.7f;
 
-    void begin (float fs) {
+    void begin(float fs) {
         sampleRate = fs;
-        highpass.configure (fs, KICK_LOW_HZ, true);
-        lowpass.configure (fs, KICK_HIGH_HZ, false);
-        fastAlpha = 1.0f - expf (-1.0f / (fs * 0.020f));
-        slowAlpha = 1.0f - expf (-1.0f / (fs * 0.350f));
+        highpass.configure(fs, KICK_LOW_HZ, true);
+        lowpass.configure(fs, KICK_HIGH_HZ, false);
+        fastAlpha = 1.0f - expf(-1.0f / (fs * 0.020f));
+        slowAlpha = 1.0f - expf(-1.0f / (fs * 0.350f));
         fastPower = 0.0f;
         slowPower = 0.0f;
         samplesSeen = 0;
@@ -577,8 +591,8 @@ class BassKickDetector {
     }
 
     // Feed continuous normalized samples BEFORE per-block mean removal or FFT.
-    void processSample (float sample) {
-        const float y = lowpass.process (highpass.process (sample));
+    void processSample(float sample) {
+        const float y = lowpass.process(highpass.process(sample));
         const float power = y * y;
         fastPower += fastAlpha * (power - fastPower);
         slowPower += slowAlpha * (power - slowPower);
@@ -586,12 +600,12 @@ class BassKickDetector {
     }
 
     // Inspect every audio block, not merely when a debug line is printed.
-    bool finishBlock (float sensitivity, float minRms) {
-        const float floorRms = max (0.0000001f, minRms);
-        const float reference = max (slowPower, floorRms * floorRms);
-        bassRms = sqrtf (max (0.0f, fastPower));
-        onsetRatio = min (1000.0f, max (0.0f, fastPower / reference));
-        triggerRatio = max (1.15f, 1.0f + 0.7f / max (0.05f, sensitivity));
+    bool finishBlock(float sensitivity, float minRms) {
+        const float floorRms = max(0.0000001f, minRms);
+        const float reference = max(slowPower, floorRms * floorRms);
+        bassRms = sqrtf(max(0.0f, fastPower));
+        onsetRatio = min(1000.0f, max(0.0f, fastPower / reference));
+        triggerRatio = max(1.15f, 1.0f + 0.7f / max(0.05f, sensitivity));
         // Let filters and the recent-power reference settle after a source change.
         if (samplesSeen < (uint64_t)(sampleRate * 0.5f)) {
             return false;
@@ -600,7 +614,7 @@ class BassKickDetector {
             armed = false;
             return false;
         }
-        const float rearmRatio = min (1.20f, 1.0f + 0.4f * (triggerRatio - 1.0f));
+        const float rearmRatio = min(1.20f, 1.0f + 0.4f * (triggerRatio - 1.0f));
         if (onsetRatio < rearmRatio || bassRms < floorRms) {
             armed = true;
         }
@@ -639,36 +653,38 @@ float vReal[SAMPLES];
 float vImag[SAMPLES];
 float hopLeft[AUDIO_HOP_SAMPLES];
 float hopRight[AUDIO_HOP_SAMPLES];
-ArduinoFFT<float> FFT (vReal, vImag, SAMPLES, SAMPLING_FREQ);
+ArduinoFFT<float> FFT(vReal, vImag, SAMPLES, SAMPLING_FREQ);
 
 // --- System State ---
 enum SystemMode { MODE_ANIMATION, MODE_I2S_MIC, MODE_ADC, MODE_VIDEOGAME, MODE_MOCAP };
 SystemMode currentMode = MODE_ANIMATION;
 
 bool i2sInstalled = false;
+TempoTracker tempoTracker; // Acquisition task only; fixed storage, no heap.
 bool i2sReady = false;
 unsigned long audioReadyAt = 0;
 unsigned long lastAudioDiagnostic = 0;
 
-bool configureI2SForMode (SystemMode mode) {
+bool configureI2SForMode(SystemMode mode) {
     i2sReady = false;
     // Never combine samples from different sources or across a source reset.
-    audioWindow.reset ();
+    audioWindow.reset();
+    tempoTracker.reset();
     // Do not carry smoothing/AGC values from another source or a previous mode.
     volumeSmFloat = 0.0f;
     sampleAvgFloat = 0.0f;
     for (int i = 0; i < 16; ++i) {
         binSm[i] = 0.0f;
     }
-    kickDetector.begin (SAMPLING_FREQ);
-    kickDetectorRight.begin (SAMPLING_FREQ);
+    kickDetector.begin(SAMPLING_FREQ);
+    kickDetectorRight.begin(SAMPLING_FREQ);
     audioHealth = {};
-    audioHealth.startedMs = millis ();
+    audioHealth.startedMs = millis();
     beatPending = false;
     if (i2sInstalled) {
-        esp_err_t err = i2s_driver_uninstall (I2S_PORT);
+        esp_err_t err = i2s_driver_uninstall(I2S_PORT);
         if (err != ESP_OK) {
-            Serial.printf ("I2S uninstall failed: %s\n", esp_err_to_name (err));
+            Serial.printf("I2S uninstall failed: %s\n", esp_err_to_name(err));
             return false;
         }
         i2sInstalled = false;
@@ -708,35 +724,35 @@ bool configureI2SForMode (SystemMode mode) {
     pins.data_out_num = I2S_PIN_NO_CHANGE;
     pins.data_in_num = adc ? I2S_SD_ADC : I2S_SD_MIC;
 
-    esp_err_t err = i2s_driver_install (I2S_PORT, &config, 0, nullptr);
+    esp_err_t err = i2s_driver_install(I2S_PORT, &config, 0, nullptr);
     if (err != ESP_OK) {
-        Serial.printf ("I2S install failed: %s\n", esp_err_to_name (err));
+        Serial.printf("I2S install failed: %s\n", esp_err_to_name(err));
         return false;
     }
     i2sInstalled = true;
-    err = i2s_set_pin (I2S_PORT, &pins);
+    err = i2s_set_pin(I2S_PORT, &pins);
     if (err != ESP_OK) {
-        Serial.printf ("I2S pin setup failed: %s\n", esp_err_to_name (err));
+        Serial.printf("I2S pin setup failed: %s\n", esp_err_to_name(err));
         // Keep installed tracking accurate if cleanup itself fails.
-        const esp_err_t cleanup = i2s_driver_uninstall (I2S_PORT);
+        const esp_err_t cleanup = i2s_driver_uninstall(I2S_PORT);
         i2sInstalled = (cleanup != ESP_OK);
         return false;
     }
     // Drain continuously during ADC reset/fade-in; do not pause DMA reads.
-    audioReadyAt = millis () + 500;
-    lastAudioDiagnostic = millis ();
+    audioReadyAt = millis() + 500;
+    lastAudioDiagnostic = millis();
     i2sReady = true;
-    Serial.printf ("I2S configured: %s, %s, requested fs=%d Hz\n",
-                   adc ? "PCM1808 stereo" : "INMP441 right slot",
-                   (adc && PCM1808_LEFT_JUSTIFIED) ? "left-justified" : "I2S", SAMPLING_FREQ);
+    Serial.printf("I2S configured: %s, %s, requested fs=%d Hz\n",
+                  adc ? "PCM1808 stereo" : "INMP441 right slot",
+                  (adc && PCM1808_LEFT_JUSTIFIED) ? "left-justified" : "I2S", SAMPLING_FREQ);
     if (adc) {
-        Serial.printf ("Clock targets: MCLK=%lu Hz on GPIO%d, BCK=%lu Hz, LRCK=%d Hz\n",
-                       (unsigned long)SAMPLING_FREQ * 256, I2S_MCLK,
-                       (unsigned long)SAMPLING_FREQ * 64, SAMPLING_FREQ);
-        Serial.println ("Targets/configuration are not a measurement at the ADC pins.");
+        Serial.printf("Clock targets: MCLK=%lu Hz on GPIO%d, BCK=%lu Hz, LRCK=%d Hz\n",
+                      (unsigned long)SAMPLING_FREQ * 256, I2S_MCLK,
+                      (unsigned long)SAMPLING_FREQ * 64, SAMPLING_FREQ);
+        Serial.println("Targets/configuration are not a measurement at the ADC pins.");
     }
-    Serial.printf ("FFT: %u samples (16.384 ms), hop=%u samples (8.192 ms), 50%% overlap\n",
-                   unsigned (SAMPLES), unsigned (AUDIO_HOP_SAMPLES));
+    Serial.printf("FFT: %u samples (16.384 ms), hop=%u samples (8.192 ms), 50%% overlap\n",
+                  unsigned(SAMPLES), unsigned(AUDIO_HOP_SAMPLES));
     return true;
 }
 
@@ -748,14 +764,14 @@ static size_t audioDebugSent = 0;
 static uint32_t lastAudioSummary = 0;
 static uint32_t lastSlotSummary = 0;
 
-static const char *modeName (CubinaWire::Mode mode) {
+static const char *modeName(CubinaWire::Mode mode) {
     switch (mode) {
     case CubinaWire::Mode::Animation:
         return "Animation";
     case CubinaWire::Mode::AudioMic:
-        return "AudioMic";
+        return "Mic";
     case CubinaWire::Mode::AudioBluetooth:
-        return "AudioBluetooth";
+        return "ADC";
     case CubinaWire::Mode::AudioSD:
         return "AudioSD";
     case CubinaWire::Mode::AudioDJ:
@@ -768,24 +784,24 @@ static const char *modeName (CubinaWire::Mode mode) {
     return "Unknown";
 }
 
-static void serviceAudioDebug () {
+static void serviceAudioDebug() {
 #if COMMAND_AUDIO_DEBUG
     if (audioDebugSent >= audioDebugLength) {
         return;
     }
-    const int space = Serial.availableForWrite ();
+    const int space = Serial.availableForWrite();
     if (space <= 0) {
         return;
     }
-    size_t chunk = min (size_t (space), audioDebugLength - audioDebugSent);
-    chunk = min (chunk, size_t (128));
+    size_t chunk = min(size_t(space), audioDebugLength - audioDebugSent);
+    chunk = min(chunk, size_t(128));
     audioDebugSent +=
-        Serial.write (reinterpret_cast<uint8_t *> (audioDebugText + audioDebugSent), chunk);
+        Serial.write(reinterpret_cast<uint8_t *>(audioDebugText + audioDebugSent), chunk);
 #endif
 }
 
-static size_t formatAudioSlot (char *text, size_t capacity, const int32_t *words, size_t frames,
-                               size_t stride, size_t slot) {
+static size_t formatAudioSlot(char *text, size_t capacity, const int32_t *words, size_t frames,
+                              size_t stride, size_t slot) {
     int32_t lo = INT32_MAX;
     int32_t hi = INT32_MIN;
     double sum = 0.0;
@@ -794,199 +810,213 @@ static size_t formatAudioSlot (char *text, size_t capacity, const int32_t *words
     for (size_t i = 0; i < frames; ++i) {
         const int32_t word = words[i * stride + slot];
         const int32_t sample = word >> 8;
-        lo = min (lo, sample);
-        hi = max (hi, sample);
+        lo = min(lo, sample);
+        hi = max(hi, sample);
         sum += sample;
-        squares += double (sample) * sample;
-        if ((uint32_t (word) & 0xffu) != 0) {
+        squares += double(sample) * sample;
+        if ((uint32_t(word) & 0xffu) != 0) {
             ++badPadding;
         }
     }
     const double mean = sum / frames;
-    const double rms = sqrt (max (0.0, squares / frames - mean * mean));
+    const double rms = sqrt(max(0.0, squares / frames - mean * mean));
     const int n =
-        snprintf (text, capacity,
-                  "slot%u signed24=[%ld %ld %ld %ld] min=%ld max=%ld AC_RMS=%.1f pad!=0:%u/%u\r\n",
-                  unsigned (slot), long (words[slot] >> 8), long (words[stride + slot] >> 8),
-                  long (words[2 * stride + slot] >> 8), long (words[3 * stride + slot] >> 8),
-                  long (lo), long (hi), rms, unsigned (badPadding), unsigned (frames));
-    return n > 0 && size_t (n) < capacity ? size_t (n) : 0;
+        snprintf(text, capacity,
+                 "slot%u signed24=[%ld %ld %ld %ld] min=%ld max=%ld AC_RMS=%.1f pad!=0:%u/%u\r\n",
+                 unsigned(slot), long(words[slot] >> 8), long(words[stride + slot] >> 8),
+                 long(words[2 * stride + slot] >> 8), long(words[3 * stride + slot] >> 8), long(lo),
+                 long(hi), rms, unsigned(badPadding), unsigned(frames));
+    return n > 0 && size_t(n) < capacity ? size_t(n) : 0;
 }
 
-static void queueAudioDebug (const int32_t *words, size_t frames, size_t channels,
-                             const AudioPayload &audio, float inputLevel) {
+static void queueAudioDebug(const int32_t *words, size_t frames, size_t channels,
+                            const AudioPayload &audio, float inputLevel, float measuredRMS) {
 #if COMMAND_AUDIO_DEBUG
-    const uint32_t now = millis ();
-    if (audioDebugSent < audioDebugLength || uint32_t (now - lastAudioSummary) < 500) {
+    const uint32_t now = millis();
+    if (audioDebugSent < audioDebugLength || uint32_t(now - lastAudioSummary) < 500) {
         return;
     }
     lastAudioSummary = now;
     audioDebugLength = 0;
     audioDebugSent = 0;
-    const char *source = audio.mode == 1 ? "AudioMic" : audio.mode == 3 ? "AudioSD" : "PCM1808";
+    const char *source = audio.mode == 1 ? "Mic" : "ADC";
+    const float sourceGain = audio.mode == 1 ? uiInputGainMic : uiInputGainADC;
     int n =
-        snprintf (audioDebugText, sizeof (audioDebugText),
-                  "%s: Sens=%.2f VIn=%.1f VRaw=%u VSm=%u VAvg=%u Beats=%lu BassRMS=%.5f Bins:[",
-                  source, double (uiMasterSensitivity), double (inputLevel),
-                  unsigned (audio.volumeRaw), unsigned (audio.volumeSm), unsigned (audio.sampleAvg),
-                  (unsigned long)beatCount, double (kickDetector.bassRms));
-    if (n <= 0 || size_t (n) >= sizeof (audioDebugText)) {
+        snprintf(audioDebugText, sizeof(audioDebugText),
+                 "%s: InRMS=%.7f Gain=%.3f Sens=%.2f VIn=%.1f VRaw=%u VSm=%u VAvg=%u Beats=%lu "
+                 "BassRMS=%.5f Bins:[",
+                 source, double(measuredRMS), double(sourceGain), double(uiMasterSensitivity),
+                 double(inputLevel), unsigned(audio.volumeRaw), unsigned(audio.volumeSm),
+                 unsigned(audio.sampleAvg), (unsigned long)beatCount, double(kickDetector.bassRms));
+    if (n <= 0 || size_t(n) >= sizeof(audioDebugText)) {
         return;
     }
-    audioDebugLength = size_t (n);
+    audioDebugLength = size_t(n);
     for (size_t i = 0; i < 16; ++i) {
-        n = snprintf (audioDebugText + audioDebugLength, sizeof (audioDebugText) - audioDebugLength,
-                      i == 15 ? "%u]\r\n" : "%u ", unsigned (audio.fftResult[i]));
-        if (n <= 0 || size_t (n) >= sizeof (audioDebugText) - audioDebugLength) {
+        n = snprintf(audioDebugText + audioDebugLength, sizeof(audioDebugText) - audioDebugLength,
+                     i == 15 ? "%u]\r\n" : "%u ", unsigned(audio.fftResult[i]));
+        if (n <= 0 || size_t(n) >= sizeof(audioDebugText) - audioDebugLength) {
             audioDebugLength = 0;
             return;
         }
-        audioDebugLength += size_t (n);
+        audioDebugLength += size_t(n);
     }
-    const uint32_t healthMs = uint32_t (millis () - audioHealth.startedMs);
+    const uint32_t healthMs = uint32_t(millis() - audioHealth.startedMs);
     const unsigned samplesPerSecond =
-        healthMs ? unsigned (uint64_t (audioHealth.hops) * AUDIO_HOP_SAMPLES * 1000 / healthMs) : 0;
-    n = snprintf (audioDebugText + audioDebugLength, sizeof (audioDebugText) - audioDebugLength,
-                  "Health: samples/s=%u WorkMax=%luus readErrors=%lu\r\n", samplesPerSecond,
-                  (unsigned long)audioHealth.maxDSPUs, (unsigned long)audioHealth.readErrors);
-    if (n > 0 && size_t (n) < sizeof (audioDebugText) - audioDebugLength) {
-        audioDebugLength += size_t (n);
+        healthMs ? unsigned(uint64_t(audioHealth.hops) * AUDIO_HOP_SAMPLES * 1000 / healthMs) : 0;
+    n = snprintf(audioDebugText + audioDebugLength, sizeof(audioDebugText) - audioDebugLength,
+                 "Health: samples/s=%u WorkMax=%luus readErrors=%lu\r\n", samplesPerSecond,
+                 (unsigned long)audioHealth.maxDSPUs, (unsigned long)audioHealth.readErrors);
+    if (n > 0 && size_t(n) < sizeof(audioDebugText) - audioDebugLength) {
+        audioDebugLength += size_t(n);
     }
 
 #if COMMAND_AUDIO_SLOT_DEBUG
-    if (uint32_t (now - lastSlotSummary) >= 1000) {
+    if (uint32_t(now - lastSlotSummary) >= 1000) {
         lastSlotSummary = now;
         for (size_t slot = 0; slot < channels; ++slot) {
-            audioDebugLength += formatAudioSlot (audioDebugText + audioDebugLength,
-                                                 sizeof (audioDebugText) - audioDebugLength, words,
-                                                 frames, channels, slot);
+            audioDebugLength += formatAudioSlot(audioDebugText + audioDebugLength,
+                                                sizeof(audioDebugText) - audioDebugLength, words,
+                                                frames, channels, slot);
         }
     }
 #endif
 #endif
 }
 
-static void acquireAudio (bool sd) {
+static void acquireAudio(bool sd) {
 
     if (!sd && !i2sReady) {
-        delay (1); // Configuration failure was printed; buttons still work.
+        delay(1); // Configuration failure was printed; buttons still work.
         return;
     }
     const size_t channels = (currentMode == MODE_ADC) ? 2 : 1;
     int32_t words[AUDIO_HOP_SAMPLES * 2] = {};
     size_t bytesIn = 0;
-    const size_t requested = AUDIO_HOP_SAMPLES * channels * sizeof (int32_t);
+    const size_t requested = AUDIO_HOP_SAMPLES * channels * sizeof(int32_t);
     esp_err_t result = ESP_OK;
 
     if (sd) {
-        bytesIn = SourceAdapters::readSD (words, AUDIO_HOP_SAMPLES) ? requested : 0;
+        bytesIn = SourceAdapters::readSD(words, AUDIO_HOP_SAMPLES) ? requested : 0;
     } else {
-        result = i2s_read (I2S_PORT, words, requested, &bytesIn, pdMS_TO_TICKS (10));
+        result = i2s_read(I2S_PORT, words, requested, &bytesIn, pdMS_TO_TICKS(10));
     }
     if (result != ESP_OK || bytesIn != requested) {
         // A gap invalidates continuous filter history; re-warm the detector.
         // Retain any event already waiting for transmission.
-        audioWindow.reset ();
-        kickDetector.begin (SAMPLING_FREQ);
-        kickDetectorRight.begin (SAMPLING_FREQ);
+        audioWindow.reset();
+        tempoTracker.reset();
+        kickDetector.begin(SAMPLING_FREQ);
+        kickDetectorRight.begin(SAMPLING_FREQ);
         ++audioHealth.readErrors;
         volumeSmFloat = 0.0f;
         sampleAvgFloat = 0.0f;
         for (float &level : binSm) {
             level = 0.0f;
         }
-        if (millis () - lastAudioDiagnostic >= 1000) {
-            Serial.printf ("I2S read: %s, bytes=%u/%u\n", esp_err_to_name (result),
-                           (unsigned)bytesIn, (unsigned)requested);
-            lastAudioDiagnostic = millis ();
+        if (millis() - lastAudioDiagnostic >= 1000) {
+            Serial.printf("I2S read: %s, bytes=%u/%u\n", esp_err_to_name(result), (unsigned)bytesIn,
+                          (unsigned)requested);
+            lastAudioDiagnostic = millis();
         }
         return; // Never process unfilled samples as valid audio.
     }
-    if ((int32_t)(millis () - audioReadyAt) < 0) {
+    if ((int32_t)(millis() - audioReadyAt) < 0) {
         // Drain reset/fade-in data without mixing it into the first window.
-        audioWindow.reset ();
+        audioWindow.reset();
         return;
     }
 
-    const uint32_t dspStart = micros ();
+    const uint32_t dspStart = micros();
     const bool adcMode = (currentMode == MODE_ADC);
     if (audioHealth.hops == 0) {
         // Begin throughput accounting after startup settling, not before it.
-        audioHealth.startedMs = millis () - 8;
+        audioHealth.startedMs = millis() - 8;
     }
     ++audioHealth.hops;
     for (size_t i = 0; i < AUDIO_HOP_SAMPLES; ++i) {
         // The driver supplies signed, upper-aligned 32-bit PCM containers.
         // Converting each channel independently avoids integer overflow/mixing.
-        hopLeft[i] = float (words[i * channels]) / 2147483648.0f;
-        hopRight[i] = channels == 2 ? float (words[i * channels + 1]) / 2147483648.0f : hopLeft[i];
-        kickDetector.processSample (hopLeft[i]);
+        hopLeft[i] = float(words[i * channels]) / 2147483648.0f;
+        hopRight[i] = channels == 2 ? float(words[i * channels + 1]) / 2147483648.0f : hopLeft[i];
+        kickDetector.processSample(hopLeft[i]);
         if (channels == 2) {
-            kickDetectorRight.processSample (hopRight[i]);
+            kickDetectorRight.processSample(hopRight[i]);
         }
     }
-    const bool kickLeft = kickDetector.finishBlock (uiKickSensitivity, uiKickMinRMS);
+    const bool kickLeft = kickDetector.finishBlock(uiKickSensitivity, uiKickMinRMS);
     const bool kickRight =
-        channels == 2 && kickDetectorRight.finishBlock (uiKickSensitivity, uiKickMinRMS);
+        channels == 2 && kickDetectorRight.finishBlock(uiKickSensitivity, uiKickMinRMS);
     if ((kickLeft || kickRight) &&
-        (beatCount == 0 || uint32_t (millis () - lastBeatEventMs) >= KICK_MIN_INTERVAL_MS)) {
+        (beatCount == 0 || uint32_t(millis() - lastBeatEventMs) >= KICK_MIN_INTERVAL_MS)) {
         // Two channel detections of one hit remain ONE transported event.
-        recordKickEvent (millis ());
+        recordKickEvent(millis());
     }
-    if (!audioWindow.appendHop (hopLeft, hopRight, channels == 2)) {
+    if (!audioWindow.appendHop(hopLeft, hopRight, channels == 2)) {
         return;
     }
 
     // RMS uses BOTH channel powers. The spectrum uses one intact dominant
     // channel per complete window, so we still perform only one float FFT.
-    const float measuredRMS = audioWindow.copyForFFT (vReal, vImag);
-    spectrumWindow.apply (vReal);
-    FFT.compute (FFTDirection::Forward);
-    FFT.complexToMagnitude ();
+    const float measuredRMS = audioWindow.copyForFFT(vReal, vImag);
+    spectrumWindow.apply(vReal);
+    FFT.compute(FFTDirection::Forward);
+    FFT.complexToMagnitude();
     ++audioHealth.analyses;
 
     // Same processing for every source; only input calibration/noise differ.
     const float inputGain = adcMode ? uiInputGainADC : uiInputGainMic;
     const float gateRMS = adcMode ? uiNoiseFloorRMSADC : uiNoiseFloorRMSMic;
-    const float sensitivity = max (0.0f, uiMasterSensitivity) * max (0.0f, inputGain);
-    const float scale = 255.0f * sensitivity / max (0.000001f, uiFullScaleRMS);
+    const float sensitivity = max(0.0f, uiMasterSensitivity) * max(0.0f, inputGain);
+    const float scale = 255.0f * sensitivity / max(0.000001f, uiFullScaleRMS);
     const bool audible =
-        (!isnan (measuredRMS) && !isinf (measuredRMS)) && measuredRMS > max (0.0f, gateRMS);
+        (!isnan(measuredRMS) && !isinf(measuredRMS)) && measuredRMS > max(0.0f, gateRMS);
     const float volumeInputFloat = audible ? measuredRMS * scale : 0.0f;
-    const float volumeRawFloat = AudioAnalysis::boundedLevel (volumeInputFloat);
+    const float volumeRawFloat = AudioAnalysis::boundedLevel(volumeInputFloat);
 
     AudioPayload payload = {}; // Complete summary for our shared binary contract.
     payload.mode = sd ? 3 : (adcMode ? 2 : 1);
+    float tempoBands[16] = {};
     for (unsigned band = 0; band < 16; ++band) {
-        float level =
-            audible ? spectrumWindow.bandRMS (vReal, band) * scale * max (0.0f, binEQ[band]) : 0.0f;
-        level = AudioAnalysis::boundedLevel (level);
+        tempoBands[band] = spectrumWindow.bandRMS(vReal, band);
+        float level = audible ? tempoBands[band] * scale * max(0.0f, binEQ[band]) : 0.0f;
+        level = AudioAnalysis::boundedLevel(level);
         if (level > 0.0f) {
-            level = 255.0f * powf (level / 255.0f, max (0.1f, uiSpectrumGamma));
+            level = 255.0f * powf(level / 255.0f, max(0.1f, uiSpectrumGamma));
         }
         // Bound BEFORE smoothing on every source: no invisible >255 state.
-        binSm[band] = AudioAnalysis::smoothLevel (binSm[band], level, AudioAnalysis::HopSeconds,
-                                                  uiBandAttackMs, uiBandReleaseMs);
-        payload.fftResult[band] = uint8_t (binSm[band] < 1.0f ? 0 : lroundf (binSm[band]));
+        binSm[band] = AudioAnalysis::smoothLevel(binSm[band], level, AudioAnalysis::HopSeconds,
+                                                 uiBandAttackMs, uiBandReleaseMs);
+        payload.fftResult[band] = uint8_t(binSm[band] < 1.0f ? 0 : lroundf(binSm[band]));
     }
+    // Rhythm uses pre-EQ/pre-gamma bands. A modest calibrated activity floor
+    // keeps a tiny electrical baseline from counting as music during silence.
+    const TempoTracker::Result rhythm = tempoTracker.process(
+        tempoBands, audible && volumeRawFloat >= 5.0f, AudioAnalysis::HopSeconds);
+    payload.tempoBpm100 = uint16_t(lroundf(rhythm.bpm * 100.0f));
+    payload.tempoPhase = uint16_t(rhythm.phase * 65536.0f);
+    payload.tempoConfidence = uint8_t(lroundf(rhythm.confidence * 255.0f));
+    payload.tempoFlags = (rhythm.active ? CubinaWire::AUDIO_ACTIVE : 0) |
+                         (rhythm.locked ? CubinaWire::TEMPO_LOCKED : 0);
+
     volumeSmFloat =
-        AudioAnalysis::smoothLevel (volumeSmFloat, volumeRawFloat, AudioAnalysis::HopSeconds,
-                                    uiVolumeAttackMs, uiVolumeReleaseMs);
-    sampleAvgFloat = AudioAnalysis::smoothLevel (
+        AudioAnalysis::smoothLevel(volumeSmFloat, volumeRawFloat, AudioAnalysis::HopSeconds,
+                                   uiVolumeAttackMs, uiVolumeReleaseMs);
+    sampleAvgFloat = AudioAnalysis::smoothLevel(
         sampleAvgFloat, volumeRawFloat, AudioAnalysis::HopSeconds, uiAverageMs, uiAverageMs);
-    payload.volumeRaw = uint8_t (lroundf (volumeRawFloat));
-    payload.volumeSm = uint8_t (lroundf (volumeSmFloat));
-    payload.sampleAvg = uint8_t (lroundf (sampleAvgFloat));
+    payload.volumeRaw = uint8_t(lroundf(volumeRawFloat));
+    payload.volumeSm = uint8_t(lroundf(volumeSmFloat));
+    payload.sampleAvg = uint8_t(lroundf(sampleAvgFloat));
     payload.beat = beatPending ? 1 : 0;
     const bool beatPulseActive =
-        beatCount > 0 && uint32_t (millis () - lastBeatEventMs) < KICK_LED_HOLD_MS;
-    const float masterSensitivity = max (0.0f, uiMasterSensitivity);
+        beatCount > 0 && uint32_t(millis() - lastBeatEventMs) < KICK_LED_HOLD_MS;
+    const float masterSensitivity = max(0.0f, uiMasterSensitivity);
 
-    FastLED.clear ();
+    FastLED.clear();
 
     // LEDs 1-14 show smoothed volume; LED 15 is reserved for kicks.
     constexpr int volumeLedCount = NUM_LEDS - 1;
-    int litLeds = map (payload.volumeSm, 0, 255, 0, volumeLedCount);
+    int litLeds = map(payload.volumeSm, 0, 255, 0, volumeLedCount);
     if (litLeds > volumeLedCount) {
         litLeds = volumeLedCount;
     }
@@ -1008,144 +1038,134 @@ static void acquireAudio (bool sd) {
     if (beatPulseActive && masterSensitivity > 0.0f) {
         leds[NUM_LEDS - 1] = CRGB::White;
     }
-    FastLED.show ();
+    FastLED.show();
     // ==========================================
 
     // Acquisition publishes frequently; UARTSender independently samples
     // the latest complete result at a nominal 60 Hz. No UART work under this mutex.
-    CommandState::publishAudio (payload, beatCount);
+    CommandState::publishAudio(payload, beatCount);
     beatPending = false;
-    queueAudioDebug (words, AUDIO_HOP_SAMPLES, channels, payload, volumeInputFloat);
-    // Includes FFT, display, publication, and queuing diagnostic text, but not
+    queueAudioDebug(words, AUDIO_HOP_SAMPLES, channels, payload, volumeInputFloat, measuredRMS);
+    // Includes FFT, tempo analysis, display, publication, and diagnostics, but not
     // the blocking I2S read or the task's outside polling/yield operations.
-    audioHealth.maxDSPUs = max (audioHealth.maxDSPUs, uint32_t (micros () - dspStart));
+    audioHealth.maxDSPUs = max(audioHealth.maxDSPUs, uint32_t(micros() - dspStart));
 }
 
 namespace {
+    using CommandButtons::ModeButton;
     using CubinaWire::Mode;
-    struct ModeButton {
-        int pin;
-        bool raw = false;
-        bool stable = false;
-        uint32_t changed = 0;
-        explicit ModeButton (int p) : pin (p) {
-        }
-        bool pressed () {
-            if (pin < 0) {
-                return false;
-            }
-            bool now = digitalRead (pin) == LOW;
-            if (now != raw) {
-                raw = now;
-                changed = millis ();
-            }
-            if (now != stable && uint32_t (millis () - changed) >= 30) {
-                stable = now;
-                return stable;
-            }
-            return false;
-        }
+    ModeButton buttons[] = {
+        ModeButton(COMMAND_BTN_ANIMATION), ModeButton(COMMAND_BTN_MIC),
+        ModeButton(COMMAND_BTN_ADC),      ModeButton(COMMAND_BTN_GAME),
+        ModeButton(COMMAND_BTN_DEPTH),
     };
-    ModeButton buttons[] = {ModeButton (COMMAND_BTN_ANIMATION), ModeButton (COMMAND_BTN_MIC),
-                            ModeButton (COMMAND_BTN_LINE),      ModeButton (COMMAND_BTN_GAME),
-                            ModeButton (COMMAND_BTN_DEPTH),     ModeButton (COMMAND_BTN_SD),
-                            ModeButton (COMMAND_BTN_DJ)};
     Mode selected = Mode::Animation;
     uint32_t lastDepthRead = 0;
-    void demand (Mode m) {
+    void demand(Mode m) {
+        // Only the two physical audio inputs are exposed by this build.
+        // AudioBluetooth is the existing wire value 2 for the PCM1808 path;
+        // it does not imply an ESP32 Bluetooth audio connection or a relay.
+        // Keep old SD/DJ requests on that SAME wired ADC input as well.
+        if (m == Mode::AudioSD || m == Mode::AudioDJ) {
+            m = Mode::AudioBluetooth;
+        }
+
         // Avoid interleaving a new mode message into a partially drained debug line.
         if (audioDebugSent > 0 && audioDebugSent < audioDebugLength) {
-            Serial.println ("");
+            Serial.println("");
         }
         audioDebugSent = 0;
         audioDebugLength = 0;
-        selected = m;
-        CommandState::selectMode (m);
-        // Close/reset the old audio source before switching anything external.
-        configureI2SForMode (MODE_ANIMATION);
-        currentMode = MODE_ANIMATION;
-        bool ready = SourceAdapters::select (m);
-        if (m == Mode::AudioMic || m == Mode::AudioBluetooth || m == Mode::AudioDJ) {
-            currentMode = m == Mode::AudioMic ? MODE_I2S_MIC : MODE_ADC;
-            ready = ready && configureI2SForMode (currentMode);
-        } else if (m == Mode::AudioSD) {
-            currentMode = MODE_ADC;
+
+        if (m == selected && CubinaWire::audioMode(m) && i2sReady) {
+            // Next visual: keep the I2S driver, clocks, DMA, filter history,
+            // and live measurements intact. Only a real source change needs
+            // the teardown/reinstall below. A failed setup still gets retried.
+            CommandState::repeatModeDemand();
+            Serial.printf("Demand next audio routine: %s; I2S kept running\r\n", modeName(m));
+            return;
         }
-        CommandState::setReady (ready && !CubinaWire::audioMode (m) && m != Mode::Depth);
-        Serial.printf ("Demand mode: %s (%u)\r\n", modeName (m), unsigned (m));
+
+        selected = m;
+        CommandState::selectMode(m);
+        // Close/reset the old audio source before switching anything external.
+        configureI2SForMode(MODE_ANIMATION);
+        currentMode = MODE_ANIMATION;
+        bool ready = SourceAdapters::select(m);
+        if (m == Mode::AudioMic || m == Mode::AudioBluetooth) {
+            currentMode = m == Mode::AudioMic ? MODE_I2S_MIC : MODE_ADC;
+            ready = ready && configureI2SForMode(currentMode);
+        }
+        CommandState::setReady(ready && !CubinaWire::audioMode(m) && m != Mode::Depth);
+        Serial.printf("Demand mode: %s (%u)\r\n", modeName(m), unsigned(m));
     }
-    void pollButtons () {
-        for (unsigned i = 0; i < sizeof (buttons) / sizeof (buttons[0]); ++i) {
-            if (buttons[i].pressed ()) {
+    void pollButtons() {
+        for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
+            // Every button is a plain debounced press. Holding ADC must not
+            // enter an unimplemented SD mode or change the physical input.
+            const CommandButtons::Event event = buttons[i].poll();
+            if (event != CommandButtons::Event::None) {
                 switch (i) {
                 case 0:
-                    demand (Mode::Animation);
+                    demand(Mode::Animation);
                     break;
                 case 1:
-                    demand (Mode::AudioMic);
+                    demand(Mode::AudioMic);
                     break;
                 case 2:
-                    demand (selected == Mode::AudioBluetooth ? Mode::AudioSD
-                            : selected == Mode::AudioSD      ? Mode::AudioDJ
-                                                             : Mode::AudioBluetooth);
+                    demand(Mode::AudioBluetooth);
                     break;
                 case 3:
-                    demand (Mode::Game);
+                    demand(Mode::Game);
                     break;
                 case 4:
-                    demand (Mode::Depth);
-                    break;
-                case 5:
-                    demand (Mode::AudioSD);
-                    break;
-                case 6:
-                    demand (Mode::AudioDJ);
+                    demand(Mode::Depth);
                     break;
                 }
             }
         }
     }
-    void task (void *) {
+    void task(void *) {
         // Arduino Bluepad32 synchronizes with its own Core-0 Bluetooth stack;
         // keep BP32.update and all ControllerPtr access in this Core-1 task.
         for (auto &b : buttons) {
             if (b.pin >= 0) {
-                pinMode (b.pin, INPUT_PULLUP);
+                pinMode(b.pin, INPUT_PULLUP);
             }
         }
-        const double mclk = ledcSetup (0, 8000000, 2);
-        ledcAttachPin (I2S_MCLK, 0);
-        ledcWrite (0, 2);
-        Serial.printf ("LEDC configured SCKI=%.0f Hz\n", mclk);
-        FastLED.addLeds<WS2812B, LED_PIN, GRB> (leds, NUM_LEDS);
-        FastLED.setBrightness (100);
-        FastLED.clear ();
-        FastLED.show ();
-        demand (Mode::Animation);
+        const double mclk = ledcSetup(0, 8000000, 2);
+        ledcAttachPin(I2S_MCLK, 0);
+        ledcWrite(0, 2);
+        Serial.printf("LEDC configured SCKI=%.0f Hz\n", mclk);
+        FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
+        FastLED.setBrightness(100);
+        FastLED.clear();
+        FastLED.show();
+        demand(Mode::Animation);
         for (;;) {
-            serviceAudioDebug ();
-            BluetoothManager::update ();
-            pollButtons ();
-            if (CubinaWire::audioMode (selected)) {
-                acquireAudio (selected == Mode::AudioSD);
+            serviceAudioDebug();
+            BluetoothManager::update();
+            pollButtons();
+            if (CubinaWire::audioMode(selected)) {
+                acquireAudio(false); // Mic or the sole physical PCM1808 input.
             } else if (selected == Mode::Game) {
-                CommandState::publishGamepads (BluetoothManager::getState (ROLE_MASTER),
-                                               BluetoothManager::getState (ROLE_PLAYER_2));
-            } else if (selected == Mode::Depth && uint32_t (millis () - lastDepthRead) >= 33) {
+                CommandState::publishGamepads(BluetoothManager::getState(ROLE_MASTER),
+                                              BluetoothManager::getState(ROLE_PLAYER_2));
+            } else if (selected == Mode::Depth && uint32_t(millis() - lastDepthRead) >= 33) {
                 static uint8_t bits[CubinaWire::DEPTH_BYTES];
-                lastDepthRead = millis ();
-                if (SourceAdapters::readDepth (bits)) {
-                    CommandState::publishDepth (bits);
+                lastDepthRead = millis();
+                if (SourceAdapters::readDepth(bits)) {
+                    CommandState::publishDepth(bits);
                 }
             }
-            vTaskDelay (1); // yielding, not an unbounded busy spin
+            vTaskDelay(1); // yielding, not an unbounded busy spin
         }
     }
 } // namespace
-void SignalAcquisition::begin () {
+void SignalAcquisition::begin() {
     // Register BP32 callbacks once in Arduino setup; update runs in the task.
-    BluetoothManager::setup ();
-    BaseType_t ok = xTaskCreatePinnedToCore (task, "SignalAcquisition", 16384, nullptr, 1, nullptr,
-                                             COMMAND_ACQUISITION_CORE);
-    configASSERT (ok == pdPASS);
+    BluetoothManager::setup();
+    BaseType_t ok = xTaskCreatePinnedToCore(task, "SignalAcquisition", 16384, nullptr, 1, nullptr,
+                                            COMMAND_ACQUISITION_CORE);
+    configASSERT(ok == pdPASS);
 }

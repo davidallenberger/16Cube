@@ -41,5 +41,26 @@ int main(){
     for(unsigned mode=1;mode<=4;++mode){p={};p.mode=Mode(mode);AudioPayload a={};a.mode=mode==1?1:mode==3?3:2;
         a.beat=1;a.volumeRaw=255;for(int i=0;i<16;++i)a.fftResult[i]=i*17;writeAudio(p,a,1234);
         bytes=frame(p);assert(decode(bytes.data(),bytes.size()-1,q));assert(readAudio(q).volumeRaw==255&&get32(q.payload+21)==1234);}
+    AudioPayload music = {};
+    music.mode = 2;
+    music.tempoBpm100 = 12850;
+    music.tempoPhase = 65535;
+    music.tempoConfidence = 207;
+    music.tempoFlags = AUDIO_ACTIVE | TEMPO_LOCKED;
+    p = {};
+    p.mode = Mode::AudioBluetooth;
+    writeAudio(p, music, 99);
+    bytes = frame(p);
+    assert(decode(bytes.data(), bytes.size()-1, q));
+    const auto timing = readAudio(q);
+    assert(timing.tempoBpm100 == 12850 && timing.tempoPhase == 65535);
+    assert(timing.tempoConfidence == 207 && timing.tempoFlags == 3);
+    p.payload[30] = 128;
+    assert(!valid(p));
+    p.payload[30] = TEMPO_LOCKED;
+    assert(!valid(p));
+    p.payload[30] = AUDIO_ACTIVE | TEMPO_LOCKED;
+    put16(p.payload+25, 40000);
+    assert(!valid(p));
     printf("Protocol tests passed: CRC, maximum frames, corruption, resync, timeout, source modes, gamepads, voxel ordering. Max frame=%zu bytes.\n",MAX_FRAME);
 }

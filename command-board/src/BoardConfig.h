@@ -8,17 +8,16 @@
 #define COMMAND_UART_TX 27
 #define COMMAND_BTN_ANIMATION 18
 #define COMMAND_BTN_MIC 19
-#define COMMAND_BTN_LINE 32
+#define COMMAND_BTN_ADC 32
 #define COMMAND_BTN_GAME 25
 #define COMMAND_BTN_DEPTH 33
-// Extra dedicated source buttons are optional. -1 means not wired. The existing
-// LINE button cycles Bluetooth -> SD -> DJ, so all modes work with five buttons.
-#define COMMAND_BTN_SD -1
-#define COMMAND_BTN_DJ -1
+// COMMAND_BTN_ADC is the single wired PCM1808/ADC input button.
+// Mic and ADC buttons select their source; repeating the active button advances
+// the render routine. There is no hold gesture or SD/DJ source cycling.
 #define COMMAND_ACQUISITION_CORE 1
 #define COMMAND_SENDER_CORE 0
 
-// USB Serial diagnostics only. Binary Serial2 transmission remains unchanged.
+// USB Serial diagnostics only. Never write text to binary Serial2.
 #ifndef COMMAND_AUDIO_DEBUG
 #define COMMAND_AUDIO_DEBUG 1
 #endif

@@ -40,11 +40,11 @@ stage() {
 }
 stage "$command_src" "$command_include" "$work/command" \
     main.cpp BoardConfig.h CommandState.cpp CommandState.h \
-    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h UARTSender.cpp UARTSender.h SendTiming.h \
-    BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h
+    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h TempoTracker.h UARTSender.cpp UARTSender.h SendTiming.h \
+    BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    UARTReceiver.cpp UARTReceiver.h Audio.cpp Audio.h Depth.cpp Depth.h
+    UARTReceiver.cpp UARTReceiver.h Audio.cpp Audio.h BpmRenderer.h BpmDiagnostic.h Depth.cpp Depth.h
 common=(-std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"
@@ -54,11 +54,47 @@ for bt in 0 1; do
         -I "$work/command" "$work/command/"*.cpp
 done
 "$CXX" "${common[@]}" -fsyntax-only -I "$work/render" "$work/render/"*.cpp
+for fixed in 0 1; do
+    "$CXX" "${common[@]}" -fsyntax-only -I "$work/render" \
+        -DCUBINA_BPM_DIAGNOSTIC=1 -DCUBINA_AUDIO_FIXED_BPM=$fixed \
+        "$work/render/CubeSystem.cpp"
+done
 echo 'Host syntax checks passed (API stubs, not a firmware/toolchain build).'
 "$CXX" "${common[@]}" -pthread -I "$work/command" tests/state_test.cpp -o "$work/state_test"
 "$work/state_test"
-"$CXX" "${common[@]}" -pthread -I "$work/render" tests/receiver_test.cpp -o "$work/receiver_test"
+"$CXX" "${common[@]}" -pthread -DCUBINA_BPM_DIAGNOSTIC=0 \
+    -I "$work/render" tests/receiver_test.cpp -o "$work/receiver_test"
 "$work/receiver_test"
+
+"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
+    tests/bpm_diagnostic_test.cpp -o "$work/bpm_diagnostic_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/bpm_diagnostic_test"
+
+"$CXX" "${common[@]}" -I "$work/render" tests/receiver_startup_test.cpp -o "$work/receiver_startup_test"
+"$work/receiver_startup_test"
+
+# Exercise the real physical LED arrays/mapping, rather than setVoxel stubs.
+# Repeat with the full 16-cube canvas without changing a user's hardware file.
+"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
+    tests/bpm_output_test.cpp -o "$work/bpm_output_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_test"
+sed '/^#define TARGET_2026_CUBOID/d' "$work/render/CubeCore.h" > "$work/render/CubeCore.full.h"
+mv "$work/render/CubeCore.h" "$work/render/CubeCore.saved.h"
+mv "$work/render/CubeCore.full.h" "$work/render/CubeCore.h"
+"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
+    tests/bpm_output_test.cpp -o "$work/bpm_output_full_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_full_test"
+mv "$work/render/CubeCore.saved.h" "$work/render/CubeCore.h"
+
+"$CXX" "${common[@]}" -I "$work/command" tests/mode_button_test.cpp -o "$work/mode_button_test"
+"$work/mode_button_test"
+
+"$CXX" "${common[@]}" -I "$work/render" -DAUDIO_SERIAL_DEBUG=0 -fsanitize=address,undefined -g \
+    tests/audio_playback_test.cpp -o "$work/audio_playback_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/audio_playback_test"
+
+"$CXX" "${common[@]}" -I "$work/command" tests/tempo_tracker_test.cpp -o "$work/tempo_tracker_test"
+"$work/tempo_tracker_test"
 
 "$CXX" "${common[@]}" -DCOMMAND_ENABLE_GAMEPAD_BLUETOOTH=1 \
     -I "$work/command" tests/gamepad_mapping_test.cpp -o "$work/gamepad_mapping_test"
@@ -75,3 +111,7 @@ ASAN_OPTIONS=detect_leaks=0 "$work/audio_analysis_test"
 "$CXX" "${common[@]}" -I "$work/command" -ffunction-sections -fdata-sections \
     -Wl,--gc-sections tests/sender_timing_test.cpp -o "$work/sender_timing_test"
 "$work/sender_timing_test"
+
+"$CXX" "${common[@]}" -I "$work/command" -fsanitize=address,undefined -g \
+    tests/sender_rate_limit_test.cpp -o "$work/sender_rate_limit_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/sender_rate_limit_test"

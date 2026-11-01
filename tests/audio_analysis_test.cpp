@@ -17,6 +17,13 @@ static bool invertedRight = false;
 static AudioPayload published = {};
 static unsigned publications = 0;
 static uint32_t publishedBeats = 0;
+static unsigned installs = 0;
+static unsigned uninstalls = 0;
+static unsigned sourceSelections = 0;
+static unsigned modeSelections = 0;
+static unsigned modeRepeats = 0;
+static i2s_config_t lastConfig = {};
+static i2s_pin_config_t lastPins = {};
 
 unsigned long millis () {
     return clockMs;
@@ -33,12 +40,16 @@ const char *esp_err_to_name (esp_err_t) {
     return "host-test";
 }
 esp_err_t i2s_driver_uninstall (int) {
+    ++uninstalls;
     return ESP_OK;
 }
-esp_err_t i2s_driver_install (int, const i2s_config_t *, int, void *) {
+esp_err_t i2s_driver_install (int, const i2s_config_t *config, int, void *) {
+    ++installs;
+    lastConfig = *config;
     return ESP_OK;
 }
-esp_err_t i2s_set_pin (int, const i2s_pin_config_t *) {
+esp_err_t i2s_set_pin (int, const i2s_pin_config_t *pins) {
+    lastPins = *pins;
     return ESP_OK;
 }
 
@@ -71,6 +82,18 @@ esp_err_t i2s_read (int, void *data, size_t requested, size_t *received, int) {
 bool SourceAdapters::readSD (int32_t *, size_t) {
     return false;
 }
+bool SourceAdapters::select(CubinaWire::Mode) {
+    ++sourceSelections;
+    return true;
+}
+void CommandState::selectMode(CubinaWire::Mode) {
+    ++modeSelections;
+}
+void CommandState::repeatModeDemand() {
+    ++modeRepeats;
+}
+void CommandState::setReady(bool) {
+}
 void CommandState::publishAudio (const AudioPayload &audio, uint32_t beats) {
     published = audio;
     publishedBeats = beats;
@@ -92,6 +115,23 @@ static void hop () {
 }
 
 int main () {
+    // Numerical fixtures use explicit settings, independent of the user's
+    // source calibration retained by the installer.
+    uiMasterSensitivity = 1.0f;
+    uiInputGainADC = 1.0f;
+    uiInputGainMic = 4.0f;
+    uiFullScaleRMS = 0.02f;
+    uiNoiseFloorRMSADC = 0.00002f;
+    uiNoiseFloorRMSMic = 0.00010f;
+    uiSpectrumGamma = 0.60f;
+    uiVolumeAttackMs = 16.0f;
+    uiVolumeReleaseMs = 50.0f;
+    uiBandAttackMs = 16.0f;
+    uiBandReleaseMs = 50.0f;
+    uiAverageMs = 800.0f;
+    for (float &gain : binEQ) {
+        gain = 1.0f;
+    }
     // Independent overlap histories and FFT scratch storage, including DC.
     AudioAnalysis::OverlapWindow window;
     float l[256];
@@ -208,6 +248,54 @@ int main () {
     float twice = AudioAnalysis::smoothLevel (100, 0, 0.008f, 16, 50);
     twice = AudioAnalysis::smoothLevel (twice, 0, 0.008f, 16, 50);
     assert (std::abs (once - twice) < 0.0001f);
+
+    // Actual acquisition dispatch: next visual preserves the installed driver
+    // and measurements. A real Mic/ADC change still sets the correct input pin.
+    using CubinaWire::Mode;
+    resetSource(MODE_ADC);
+    selected = Mode::AudioBluetooth;
+    volumeSmFloat = 73.0f;
+    const unsigned initialInstalls = installs;
+    const unsigned initialUninstalls = uninstalls;
+    const unsigned initialSelections = sourceSelections;
+    demand(Mode::AudioBluetooth);
+    assert(modeRepeats == 1);
+    assert(installs == initialInstalls);
+    assert(uninstalls == initialUninstalls);
+    assert(sourceSelections == initialSelections);
+    assert(volumeSmFloat == 73.0f);
+
+    demand(Mode::AudioMic);
+    assert(installs == initialInstalls + 1);
+    assert(lastPins.data_in_num == I2S_SD_MIC);
+    assert(lastConfig.channel_format == I2S_CHANNEL_FMT_ONLY_RIGHT);
+    demand(Mode::AudioMic);
+    assert(modeRepeats == 2);
+    assert(installs == initialInstalls + 1);
+
+    // Even legacy SD/DJ requests collapse to the single physical PCM input.
+    demand(Mode::AudioSD);
+    assert(selected == Mode::AudioBluetooth);
+    assert(currentMode == MODE_ADC);
+    assert(lastPins.data_in_num == I2S_SD_ADC);
+    assert(lastPins.bck_io_num == I2S_SCK && lastPins.ws_io_num == I2S_WS);
+    assert(lastConfig.channel_format == I2S_CHANNEL_FMT_RIGHT_LEFT);
+    assert(lastConfig.sample_rate == 31250);
+    assert(lastConfig.communication_format == (PCM1808_LEFT_JUSTIFIED ? I2S_COMM_FORMAT_STAND_MSB : I2S_COMM_FORMAT_STAND_I2S));
+    assert(lastConfig.use_apll == PCM1808_USE_APLL);
+    demand(Mode::AudioDJ);
+    assert(selected == Mode::AudioBluetooth);
+    assert(modeRepeats == 3);
+    assert(installs == initialInstalls + 2);
+
+    // Repeating after failed setup retries acquisition, rather than claiming
+    // that a non-running driver can remain active.
+    i2sReady = false;
+    demand(Mode::AudioBluetooth);
+    assert(i2sReady);
+    assert(installs == initialInstalls + 3);
+    assert(modeSelections == 3);
+    puts("Acquisition dispatch passed: repeat preserves I2S and levels, Mic/ADC pins, single PCM source, failed-setup retry.");
     puts ("Common audio tests passed: overlap, DC removal, phase-safe RMS/spectrum, bass coverage, "
           "common source calibration, single-fed kick, partial reads, silence, clipping recovery, "
           "timed smoothing.");
