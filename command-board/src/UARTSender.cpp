@@ -107,7 +107,7 @@ namespace {
             // Take the LATEST complete state at transmission time. Acquisition
             // can keep publishing while Serial2.write() runs on this task.
             // Only this copy operation consumes pending game-button latches.
-            CommandSnapshot state = CommandState::takeForSend ();
+            CommandSnapshot state = CommandState::takeForSend (dataDue);
             state.ready = state.ready && (state.mode == Mode::Animation ||
                                           uint32_t (millis () - state.capturedMs) <= 250);
 

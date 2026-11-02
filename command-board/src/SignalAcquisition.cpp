@@ -1,21 +1,28 @@
 /*
  * AUDIO PROCESSING — EXECUTIVE SUMMARY
  *
- * The command board continuously reads audio at 31,250 samples per second.
- * It analyzes a moving 512-sample window—about 16 milliseconds of sound—
- * advancing by 256 new samples each time. Each window produces overall volume
- * and sixteen frequency-band strengths. Smoothing reduces jitter, while a
- * separate bass-kick detector identifies sudden low-frequency attacks.
- * Microphone and ADC inputs share the same processing, with separate
- * sensitivity settings to balance their different input levels.
+ * Capture 31,250 samples per second per channel. Every 256 new samples,
+ * analyze a 512-sample window for RMS volume and sixteen frequency bands.
+ * Source gain/noise floors calibrate the input; shared envelopes shape display
+ * levels. A continuous bass detector reports kicks. A general attack detector
+ * measures sudden increases across the linear bands before display shaping;
+ * TempoTracker reuses that measurement to estimate BPM and a beat grid.
+ * Neither detector identifies an instrument or understands speech syllables.
  *
- * About 60 times per second, the command board sends the latest summary over
- * UART: raw, smoothed, and averaged volume; sixteen frequency levels; and kick
- * information. The render board uses these summaries at up to 60 FPS. The
- * boards run independently without clock synchronization. Raw audio stays on
- * the command board. AGC, peak holding, and musical beat tracking are not
- * currently implemented.
+ * UART sends snapshots at nominal 60 Hz: volume, spectrum, kicks, general
+ * attack count/strength/band mask, and tempo/phase/confidence/status. Pending
+ * attacks are retained between sends. The renderer chooses artistic thresholds,
+ * cooldowns and visual peak holds. Tempo uses history-based phase alignment and
+ * lock hysteresis, but half/double-time ambiguity and tempo ramps remain limits.
+ * Both boards must use shared protocol version 3. No raw audio crosses UART;
+ * AGC and automatic musical-structure/dynamics classification are not present.
+ *
+ * Animations use ONE render-side AudioFrame, not this wire payload: flat
+ * volume/band values, bassKick/midAttack/highAttack and usable BPM, with
+ * beatPulse(N)/beatAngle(N) helpers. The adapter owns event retention,
+ * freshness and musical-clock smoothing; effects do not decode packet flags.
  */
+ 
 /*
  * AUDIO PROCESSING PRIMER: FROM WAVEFORM TO ANIMATION PAYLOAD
  *
@@ -166,7 +173,7 @@
  * mutex and records local publication time. UARTSender takes a latest-state
  * snapshot without holding that mutex during transmission. SharedProtocol
  * wraps 21 legacy display bytes, the four-byte kick count and six explicit
- * tempo bytes in a 31-byte Audio payload (protocol version 2).
+ * tempo bytes plus seven attack bytes in a 38-byte Audio payload (protocol version 3).
  * The outer header includes version/type, demanded mode, readiness, boot
  * session, mode revision, sequence, and capturedMs. COBS frames it and CRC-16
  * checks integrity. The inner source label mode is NOT the outer Mode enum.
@@ -184,9 +191,9 @@
  * actual ESP32 throughput. The design uses no additional processing board.
  *
  * TempoTracker reuses linear band RMS before display EQ/gamma/smoothing.
- * Positive log-band changes form a novelty curve; a fixed 8.4-second history
+ * Adaptive-gated linear power increases form a novelty curve; a fixed 8.4-second history
  * supports an incremental autocorrelation search over roughly 60-200 BPM.
- * Onsets pull the predicted phase near beats, and confidence decays on silence.
+ * The weighted novelty history aligns phase; hysteresis retains lock through short gaps.
  * A calibrated volume floor of 5 distinguishes activity from tiny idle noise.
  * This is an experimental musical clock: half/double-time ambiguity, weak
  * percussion and rapid tempo changes remain limitations. WorkMax includes it.
@@ -528,6 +535,7 @@ constexpr uint32_t KICK_MIN_INTERVAL_MS = 180;
 constexpr uint32_t KICK_LED_HOLD_MS = 80;
 constexpr uint32_t AUDIO_DEBUG_INTERVAL_MS = 50;
 
+uint32_t attackCount = 0; // General attack events; independent of bass kicks.
 uint32_t beatCount = 0; // Monotonic during this boot, including between prints
 uint32_t lastBeatEventMs = 0;
 bool beatPending = false; // Cleared after publishing the acquired block
@@ -844,10 +852,12 @@ static void queueAudioDebug(const int32_t *words, size_t frames, size_t channels
     int n =
         snprintf(audioDebugText, sizeof(audioDebugText),
                  "%s: InRMS=%.7f Gain=%.3f Sens=%.2f VIn=%.1f VRaw=%u VSm=%u VAvg=%u Beats=%lu "
-                 "BassRMS=%.5f Bins:[",
+                 "BassRMS=%.5f Attacks=%lu BPM=%.1f Phase=%u Conf=%u Flags=%u Bins:[",
                  source, double(measuredRMS), double(sourceGain), double(uiMasterSensitivity),
                  double(inputLevel), unsigned(audio.volumeRaw), unsigned(audio.volumeSm),
-                 unsigned(audio.sampleAvg), (unsigned long)beatCount, double(kickDetector.bassRms));
+                 unsigned(audio.sampleAvg), (unsigned long)beatCount, double(kickDetector.bassRms),
+                 (unsigned long)audio.attackCount, double(audio.tempoBpm100) / 100.0,
+                 unsigned(audio.tempoPhase), unsigned(audio.tempoConfidence), unsigned(audio.tempoFlags));
     if (n <= 0 || size_t(n) >= sizeof(audioDebugText)) {
         return;
     }
@@ -993,6 +1003,12 @@ static void acquireAudio(bool sd) {
     // keeps a tiny electrical baseline from counting as music during silence.
     const TempoTracker::Result rhythm = tempoTracker.process(
         tempoBands, audible && volumeRawFloat >= 5.0f, AudioAnalysis::HopSeconds);
+    if (rhythm.attack.event) {
+        ++attackCount;
+        payload.attackStrength = uint8_t(lroundf(rhythm.attack.strength * 255.0f));
+        payload.attackBands = rhythm.attack.bands;
+    }
+    payload.attackCount = attackCount;
     payload.tempoBpm100 = uint16_t(lroundf(rhythm.bpm * 100.0f));
     payload.tempoPhase = uint16_t(rhythm.phase * 65536.0f);
     payload.tempoConfidence = uint8_t(lroundf(rhythm.confidence * 255.0f));

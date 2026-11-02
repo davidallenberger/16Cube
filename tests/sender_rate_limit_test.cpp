@@ -82,7 +82,7 @@ CommandSnapshot CommandState::snapshot() {
     return state;
 }
 
-CommandSnapshot CommandState::takeForSend() {
+CommandSnapshot CommandState::takeForSend(bool) {
     return snapshot();
 }
 

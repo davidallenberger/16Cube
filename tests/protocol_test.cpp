@@ -47,6 +47,9 @@ int main(){
     music.tempoPhase = 65535;
     music.tempoConfidence = 207;
     music.tempoFlags = AUDIO_ACTIVE | TEMPO_LOCKED;
+    music.attackCount = 0xfffffff0u;
+    music.attackStrength = 201;
+    music.attackBands = 0x9101;
     p = {};
     p.mode = Mode::AudioBluetooth;
     writeAudio(p, music, 99);
@@ -55,6 +58,8 @@ int main(){
     const auto timing = readAudio(q);
     assert(timing.tempoBpm100 == 12850 && timing.tempoPhase == 65535);
     assert(timing.tempoConfidence == 207 && timing.tempoFlags == 3);
+    assert(timing.attackCount == 0xfffffff0u);
+    assert(timing.attackStrength == 201 && timing.attackBands == 0x9101);
     p.payload[30] = 128;
     assert(!valid(p));
     p.payload[30] = TEMPO_LOCKED;

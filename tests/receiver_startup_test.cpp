@@ -42,7 +42,7 @@ int main() {
     assert(Serial2.beginCalls == 0);
     assert(Serial2.rxBufferSize == 0);
     assert(!RemoteInputs::control().linked);
-    assert(!RemoteInputs::audio().valid);
+    assert(RemoteInputs::audio().volumeSm == 0);
 
     runningCore = assignedCore;
     try {

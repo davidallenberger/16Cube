@@ -22,6 +22,32 @@ void Audio::nextRoutine() {
 void Depth::run(){}
 void Depth::renderIcon(TextureState&){}
 int main(){
+    // General attacks survive quiet packets and are frozen for one frame.
+    using namespace CubinaWire;
+    RemoteInputs::begin();
+    Packet attackPacket;
+    attackPacket.session = 100;
+    attackPacket.sequence = 1;
+    attackPacket.modeRevision = 1;
+    attackPacket.mode = Mode::AudioBluetooth;
+    attackPacket.flags = SOURCE_READY;
+    AudioPayload attackPayload = {};
+    attackPayload.mode = 2;
+    attackPayload.attackCount = 1;
+    attackPayload.attackStrength = 190;
+    attackPayload.attackBands = 128;
+    writeAudio(attackPacket, attackPayload, 0);
+    accept(attackPacket);
+    ++attackPacket.sequence;
+    attackPayload.attackStrength = 0;
+    attackPayload.attackBands = 0;
+    writeAudio(attackPacket, attackPayload, 0);
+    accept(attackPacket);
+    RemoteInputs::beginFrame();
+    assert(RemoteInputs::audio().midAttack);
+    assert(RemoteInputs::audio().midAttack); // A second read is not consumption.
+    RemoteInputs::beginFrame();
+    assert(!RemoteInputs::audio().midAttack);
     // Registry entry points remain wired to the correct input families.
     assert (appRegistry[AUDIO_APP].run == &Audio::run);
     assert (appRegistry[DEPTH_APP].run == &Depth::run);
@@ -34,10 +60,18 @@ int main(){
     a.tempoConfidence = 220;
     a.tempoFlags = AUDIO_ACTIVE | TEMPO_LOCKED;
     writeAudio(p,a,10);accept(p);
-    assert(RemoteInputs::audio().values.volumeRaw==100);
-    assert(RemoteInputs::audio().values.tempoBpm100 == 12800);
-    assert(RemoteInputs::audio().values.tempoPhase == 16384);
-    p.sequence=2;writeAudio(p,a,11);accept(p);assert(RemoteInputs::consumeBeat());assert(!RemoteInputs::consumeBeat());
+    RemoteInputs::beginFrame();
+    assert(RemoteInputs::audio().volumeRaw == 100);
+    assert(RemoteInputs::audio().beatAngle() > 1.5f);
+    p.sequence = 2;
+    writeAudio(p, a, 11);
+    accept(p);
+    assert(!RemoteInputs::audio().bassKick); // Arrival cannot alter a frozen frame.
+    RemoteInputs::beginFrame();
+    assert(RemoteInputs::audio().bassKick);
+    assert(RemoteInputs::audio().bassKick);
+    RemoteInputs::beginFrame();
+    assert(!RemoteInputs::audio().bassKick);
     // Do not accept duplicate/stale data or contradictory same-revision modes.
     accept(p);assert(RemoteInputs::stats().duplicates==1);
     Packet bad=p;bad.sequence=3;bad.mode=Mode::AudioDJ;accept(bad);assert(RemoteInputs::control().mode==Mode::AudioBluetooth);
@@ -54,7 +88,7 @@ int main(){
     // New authoritative depth demand bypasses menu; occupancy clears on switch.
     p={};p.mode=Mode::Depth;p.session=1;p.modeRevision=3;p.sequence=5;accept(p);
     CubeSystem::frameCheckpoint();assert(CubeSystem::selectedMenuIndex==11);
-    assert(!RemoteInputs::audio().valid);
+    assert(RemoteInputs::audio().volumeRaw == 0);
     p.flags=SOURCE_READY;p.type=Type::Depth;p.length=DEPTH_BYTES;p.sequence=6;
     setVoxelBit(p.payload,15,15,15);accept(p);uint8_t bits[512];assert(RemoteInputs::depth(bits)&&voxel(bits,15,15,15));
     clockMs+=251;assert(!RemoteInputs::depth(bits));

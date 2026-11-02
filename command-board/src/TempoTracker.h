@@ -2,6 +2,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include "AttackDetector.h"
 
 // Acquisition-task-owned rhythm estimate. This is an experimental tempo and
 // phase tracker, not a claim to recognize the musical beat of every recording.
@@ -14,6 +15,7 @@ class TempoTracker {
         float confidence = 0.0f;
         bool active = false;
         bool locked = false;
+        AttackDetector::Result attack;
     };
 
     void reset() {
@@ -21,51 +23,13 @@ class TempoTracker {
     }
 
     Result process(const float *bands, bool audible, float seconds) {
-        audioTime += seconds;
-        if (audioTime > 60.0f) {
-            // Retain sub-millisecond float resolution during long installations.
-            audioTime -= 60.0f;
-            lastOnset -= 60.0f;
-        }
         phase = wrap(phase + seconds * bpm / 60.0f);
         quietSeconds = audible ? 0.0f : quietSeconds + seconds;
 
-        // Positive changes in log band RMS form a gain-tolerant novelty curve.
-        // Extra bass weight favors a musical pulse, but all bands contribute.
-        // No display EQ, gamma, or smoothing is involved in this measurement.
-        float flux = 0.0f;
-        float weights = 0.0f;
-        for (unsigned band = 0; band < 16; ++band) {
-            const float level = log1pf(fmaxf(0.0f, bands[band]) * 100000.0f);
-            const float weight = band < 4 ? 3.0f : 1.0f;
-            if (havePrevious && audible) {
-                flux += fmaxf(0.0f, level - previous[band]) * weight;
-            }
-            weights += weight;
-            previous[band] = level;
-        }
-        havePrevious = true;
-        flux /= weights;
-
-        const float novelty = fmaxf(0.0f, flux - fluxMean * 1.1f);
-        const bool onset = audible && onsetArmed && flux > fmaxf(0.035f, fluxMean * 1.6f) &&
-                           audioTime - lastOnset > 0.09f;
-        if (flux < fmaxf(0.02f, fluxMean * 0.8f)) {
-            onsetArmed = true;
-        }
-        if (onset) {
-            onsetArmed = false;
-            lastOnset = audioTime;
-            if (confidence >= LockConfidence) {
-                // Only attacks near a predicted beat pull the clock. Half-beat
-                // hi-hats should not immediately move it onto the off-beat.
-                const float error = phase > 0.5f ? phase - 1.0f : phase;
-                if (fabsf(error) <= 0.22f) {
-                    phase = wrap(phase - error * 0.35f);
-                }
-            }
-        }
-        fluxMean += (1.0f - expf(-seconds)) * (flux - fluxMean);
+        // One shared attack measurement supplies both the public attack event
+        // and the tempo novelty history. It uses linear power, not display bins.
+        const auto attack = attacks.process(bands, audible, seconds);
+        const float novelty = attack.novelty;
 
         // Two 256-sample hops make one novelty sample (61.035 Hz at 31,250).
         // The fixed ring holds about 8.4 seconds. Correlation is spread over
@@ -93,8 +57,8 @@ class TempoTracker {
             }
         }
 
-        if (!audible) {
-            confidence *= expf(-seconds / 0.6f);
+        if (quietSeconds > 0.8f) {
+            confidence *= expf(-seconds / 0.4f);
         }
         if (quietSeconds > 2.0f && !quietReset) {
             // Old music must not immediately re-lock a new recording after a
@@ -115,8 +79,14 @@ class TempoTracker {
         result.bpm = haveTempo ? bpm : 0.0f;
         result.phase = phase;
         result.confidence = confidence;
-        result.active = quietSeconds < 0.35f;
-        result.locked = result.active && confidence >= LockConfidence;
+        result.active = quietSeconds < 1.2f;
+        if (!result.active || confidence < 0.30f) {
+            lockHeld = false;
+        } else if (confidence >= 0.45f) {
+            lockHeld = true;
+        }
+        result.locked = result.active && lockHeld;
+        result.attack = attack;
         return result;
     }
 
@@ -130,25 +100,21 @@ class TempoTracker {
 
     float history[Capacity] = {};
     float scores[MaximumLag + 2] = {};
-    float previous[16] = {};
+    AttackDetector attacks;
+    bool lockHeld = false;
     size_t writeIndex = 0;
     size_t count = 0;
     unsigned scanLag = MinimumLag - 1;
     unsigned hopPair = 0;
     float accumulatedNovelty = 0.0f;
     float noveltyEnvelope = 0.0f;
-    float audioTime = 0.0f;
     float quietSeconds = 1.0f;
-    float lastOnset = -1.0f;
-    float fluxMean = 0.0f;
     float bpm = 120.0f;
     float phase = 0.0f;
     float confidence = 0.0f;
     float pendingBpm = 0.0f;
     unsigned pendingEstimates = 0;
-    bool havePrevious = false;
     bool haveTempo = false;
-    bool onsetArmed = true;
     bool quietReset = false;
 
     static float wrap(float value) {
@@ -179,6 +145,37 @@ class TempoTracker {
         const float numerator = xy - sx * sy / n;
         const float denominator = sqrtf(fmaxf(0.0f, (xx - sx * sx / n) * (yy - sy * sy / n)));
         return denominator > 0.000001f ? fmaxf(0.0f, numerator / denominator) : 0.0f;
+    }
+
+    // Find the phase supported by the complete novelty history. Anchoring to
+    // just the latest onset could choose a hi-hat halfway between bass beats.
+    void alignPhase(bool acquiring) {
+        float real = 0.0f;
+        float imaginary = 0.0f;
+        float weight = 0.0f;
+        const float step = 6.28318530718f / NoveltyRate * bpm / 60.0f;
+        const float rotateReal = cosf(step);
+        const float rotateImaginary = sinf(step);
+        float cosine = 1.0f;
+        float sine = 0.0f;
+        for (size_t age = 0; age < count; ++age) {
+            const float value = atAge(age);
+            real += value * cosine;
+            imaginary += value * sine;
+            weight += value;
+            const float nextCosine = cosine * rotateReal - sine * rotateImaginary;
+            sine = sine * rotateReal + cosine * rotateImaginary;
+            cosine = nextCosine;
+        }
+        // Weak/canceling phase evidence must not snap a running clock.
+        if (weight <= 0.0f || sqrtf(real * real + imaginary * imaginary) < weight * 0.15f) {
+            return;
+        }
+        const float target = wrap(atan2f(imaginary, real) / 6.28318530718f +
+                                  (256.0f / 31250.0f) * bpm / 60.0f);
+        float error = target - phase;
+        error -= floorf(error + 0.5f);
+        phase = wrap(phase + error * (acquiring ? 1.0f : 0.5f));
     }
 
     void chooseTempo() {
@@ -220,7 +217,7 @@ class TempoTracker {
                 : 0.0f;
         const float candidate = fmaxf(60.0f, fminf(200.0f, 60.0f * NoveltyRate / (best + offset)));
         const float certainty = fmaxf(0.0f, fminf(1.0f, (scores[best] - 0.20f) / 0.65f));
-        const bool acquiring = confidence < LockConfidence;
+        const bool acquiring = !lockHeld;
         confidence += 0.35f * (certainty - confidence);
         if (certainty < LockConfidence) {
             return;
@@ -228,11 +225,12 @@ class TempoTracker {
 
         if (!haveTempo || acquiring) {
             bpm = candidate;
-            phase = wrap((audioTime - lastOnset) * bpm / 60.0f);
+            alignPhase(true);
             haveTempo = true;
             pendingEstimates = 0;
         } else if (fabsf(candidate - bpm) < bpm * 0.15f) {
             bpm += 0.2f * (candidate - bpm);
+            alignPhase(false);
             pendingEstimates = 0;
         } else {
             // Require repeated agreement before jumping to a new tempo family.
@@ -241,7 +239,7 @@ class TempoTracker {
             pendingBpm = candidate;
             if (pendingEstimates >= 3) {
                 bpm = candidate;
-                phase = wrap((audioTime - lastOnset) * bpm / 60.0f);
+                alignPhase(true);
                 pendingEstimates = 0;
             }
         }

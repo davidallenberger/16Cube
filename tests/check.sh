@@ -3,6 +3,13 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 CXX=${CXX:-g++}
+# Apple ld and GNU ld use different dead-code elimination switches. The
+# acquisition tests deliberately link only the production functions they use.
+if [[ "$(uname -s)" == Darwin ]]; then
+    discard_unused=(-Wl,-dead_strip)
+else
+    discard_unused=(-Wl,--gc-sections)
+fi
 if [[ -d command-board/src && -d main-render-board/src ]]; then
     command_src="$root/command-board/src"
     command_include="$root/command-board/include"
@@ -40,11 +47,11 @@ stage() {
 }
 stage "$command_src" "$command_include" "$work/command" \
     main.cpp BoardConfig.h CommandState.cpp CommandState.h \
-    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h TempoTracker.h UARTSender.cpp UARTSender.h SendTiming.h \
+    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h TempoTracker.h AttackDetector.h UARTSender.cpp UARTSender.h SendTiming.h \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    UARTReceiver.cpp UARTReceiver.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
+    UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
 common=(-std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"
@@ -75,19 +82,24 @@ for canvas in full cuboid; do
     if [[ "$canvas" == cuboid ]]; then
         canvas_flags=(-DTARGET_2026_CUBOID)
     fi
-    "$CXX" "${common[@]}" "${canvas_flags[@]}" -I "$work/render" \
+    # Bash 3.2 treats an empty array as unset under nounset. Expand only
+    # when populated, preserving each flag as its own argument.
+    "$CXX" "${common[@]}" ${canvas_flags[@]+"${canvas_flags[@]}"} -I "$work/render" \
         -fsanitize=address,undefined -g tests/bpm_output_test.cpp \
         -o "$work/bpm_output_$canvas"
     ASAN_OPTIONS=detect_leaks=0 "$work/bpm_output_$canvas"
+
+    # Run the SAME production audio routines on both canvas dimensions.
+    # Density should scale coverage while preserving bounds and event times.
+    "$CXX" "${common[@]}" ${canvas_flags[@]+"${canvas_flags[@]}"} -I "$work/render" \
+        -DAUDIO_SERIAL_DEBUG=0 -fsanitize=address,undefined -g \
+        tests/audio_playback_test.cpp -o "$work/audio_playback_$canvas"
+    ASAN_OPTIONS=detect_leaks=0 "$work/audio_playback_$canvas"
 done
 mv "$work/render/CubeCore.saved.h" "$work/render/CubeCore.h"
 
 "$CXX" "${common[@]}" -I "$work/command" tests/mode_button_test.cpp -o "$work/mode_button_test"
 "$work/mode_button_test"
-
-"$CXX" "${common[@]}" -I "$work/render" -DAUDIO_SERIAL_DEBUG=0 -fsanitize=address,undefined -g \
-    tests/audio_playback_test.cpp -o "$work/audio_playback_test"
-ASAN_OPTIONS=detect_leaks=0 "$work/audio_playback_test"
 
 "$CXX" "${common[@]}" -I "$work/command" tests/tempo_tracker_test.cpp -o "$work/tempo_tracker_test"
 "$work/tempo_tracker_test"
@@ -98,16 +110,25 @@ ASAN_OPTIONS=detect_leaks=0 "$work/audio_playback_test"
 
 # The numerical reference FFT is only for host verification, never firmware.
 "$CXX" -I "$root/tests/audio_stubs" "${common[@]}" -I "$work/command" \
-    -I "$root/tests/stubs" -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -I "$root/tests/stubs" -ffunction-sections -fdata-sections "${discard_unused[@]}" \
     -DCOMMAND_ENABLE_GAMEPAD_BLUETOOTH=0 -fsanitize=address,undefined -g \
     tests/audio_analysis_test.cpp -o "$work/audio_analysis_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/audio_analysis_test"
 
 # Test production packet construction and the scheduler independently of UART.
 "$CXX" "${common[@]}" -I "$work/command" -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections tests/sender_timing_test.cpp -o "$work/sender_timing_test"
+    "${discard_unused[@]}" tests/sender_timing_test.cpp -o "$work/sender_timing_test"
 "$work/sender_timing_test"
 
 "$CXX" "${common[@]}" -I "$work/command" -fsanitize=address,undefined -g \
     tests/sender_rate_limit_test.cpp -o "$work/sender_rate_limit_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/sender_rate_limit_test"
+
+"$CXX" "${common[@]}" -I "$work/command" tests/attack_detector_test.cpp -o "$work/attack_detector_test"
+"$work/attack_detector_test"
+
+# Exercise the actual private adapter/public frame contract independently of
+# drawing: timing helpers, stale data, event groups, latches and sensitivity.
+"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
+    tests/audio_frame_test.cpp -o "$work/audio_frame_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/audio_frame_test"

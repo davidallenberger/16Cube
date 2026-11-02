@@ -51,7 +51,15 @@ void CommandState::repeatModeDemand() {
 }
 void CommandState::publishAudio(const AudioPayload &a, uint32_t b) {
     xSemaphoreTake(mutex, portMAX_DELAY);
+    // Retain the strongest attack until an AUDIO transmission takes it.
+    // Later quiet analysis windows must not erase an event between sends.
+    const uint8_t strength = state.audio.attackStrength;
+    const uint16_t bands = state.audio.attackBands;
     state.audio = a;
+    if (strength > state.audio.attackStrength) {
+        state.audio.attackStrength = strength;
+    }
+    state.audio.attackBands |= bands;
     state.beats = b;
     state.capturedMs = millis();
     state.ready = true;
@@ -77,9 +85,13 @@ void CommandState::publishDepth(const uint8_t *bits) {
     state.ready = true;
     xSemaphoreGive(mutex);
 }
-CommandSnapshot CommandState::takeForSend() {
+CommandSnapshot CommandState::takeForSend(bool consumeAudio) {
     xSemaphoreTake(mutex, portMAX_DELAY);
     CommandSnapshot s = state;
+    if (consumeAudio && CubinaWire::audioMode(state.mode)) {
+        state.audio.attackStrength = 0;
+        state.audio.attackBands = 0;
+    }
     state.presses[0] = 0;
     state.presses[1] = 0;
     xSemaphoreGive(mutex);

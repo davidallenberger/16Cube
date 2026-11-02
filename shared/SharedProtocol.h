@@ -20,12 +20,15 @@ struct AudioPayload {
     uint16_t tempoPhase;     // 0..65535 maps to one predicted beat cycle.
     uint8_t tempoConfidence; // 0..255; confidence is not volume.
     uint8_t tempoFlags;      // bit 0: audio active; bit 1: rhythm locked.
+    uint32_t attackCount;   // Cumulative general attacks during this command-board boot.
+    uint8_t attackStrength; // Strongest pending attack, 0..255.
+    uint16_t attackBands;   // Bit mask of contributing frequency bands.
 };
 static_assert(offsetof(AudioPayload, fftResult) == 5, "Legacy audio offsets changed");
 
 namespace CubinaWire {
     constexpr uint32_t BAUD = 921600;
-    constexpr uint8_t VERSION = 2; // Tempo fields: update and flash BOTH boards.
+    constexpr uint8_t VERSION = 3; // General attack fields: update and flash BOTH boards.
     enum class Mode : uint8_t {
         Animation = 0,
         AudioMic = 1,
@@ -43,7 +46,7 @@ namespace CubinaWire {
     constexpr size_t MAX_RAW = HEADER_BYTES + MAX_PAYLOAD + 2;
     constexpr size_t MAX_ENCODED = MAX_RAW + MAX_RAW / 254 + 1;
     constexpr size_t MAX_FRAME = MAX_ENCODED + 1; // COBS delimiter included
-    constexpr size_t AUDIO_BYTES = 31;
+    constexpr size_t AUDIO_BYTES = 38;
     constexpr uint8_t AUDIO_ACTIVE = 1;
     constexpr uint8_t TEMPO_LOCKED = 2;
     constexpr size_t GAMEPAD_BYTES = 38;
@@ -335,7 +338,8 @@ namespace CubinaWire {
         return s;
     }
     // Audio keeps the existing 21-byte visualizer payload followed by a 32-bit
-    // kick counter, then six explicitly encoded tempo bytes. Never copy sizeof
+    // kick counter, six explicitly encoded tempo bytes, and seven attack bytes.
+    // Never copy sizeof
     // AudioPayload: the compiler may add alignment padding before its uint16 fields.
     inline void writeAudio(Packet &p, const AudioPayload &a, uint32_t beats) {
         p.type = Type::Audio;
@@ -346,6 +350,9 @@ namespace CubinaWire {
         put16(p.payload + 27, a.tempoPhase);
         p.payload[29] = a.tempoConfidence;
         p.payload[30] = a.tempoFlags;
+        put32(p.payload + 31, a.attackCount);
+        p.payload[35] = a.attackStrength;
+        put16(p.payload + 36, a.attackBands);
     }
     inline AudioPayload readAudio(const Packet &p) {
         AudioPayload a = {};
@@ -354,6 +361,9 @@ namespace CubinaWire {
         a.tempoPhase = get16(p.payload + 27);
         a.tempoConfidence = p.payload[29];
         a.tempoFlags = p.payload[30];
+        a.attackCount = get32(p.payload + 31);
+        a.attackStrength = p.payload[35];
+        a.attackBands = get16(p.payload + 36);
         return a;
     }
     // Depth is one occupancy bit per voxel, X changing fastest, then Y, then Z.

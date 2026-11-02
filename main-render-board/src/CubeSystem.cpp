@@ -153,9 +153,13 @@ void CubeSystem::frameCheckpoint() {
     // Animation task: copy those values here, choose the app, and escape from
     // the old app if needed. longjmp must stay on the task that called setjmp.
     //
-    // control() returns a value copy and releases its internal mutex before
-    // returning. Consequently no receiver mutex is held when we jump below.
-    const RemoteInputs::Control c = RemoteInputs::control();
+    // beginFrame() returns control and freezes matching audio/gamepad input
+    // under the same mutex, then releases it. No receiver mutex is held when
+    // we jump below, and a concurrent packet cannot mix two source demands.
+    // Freeze audio and gamepad input before a possible app escape. The new
+    // app must start with the new source's frame, not the preceding source.
+    // This also advances the single musical clock once for the drawing pass.
+    const RemoteInputs::Control c = RemoteInputs::beginFrame();
 
     // A linked command is new to us if this is the first one, the command
     // board rebooted (session changed), or another mode demand was issued
@@ -211,10 +215,6 @@ void CubeSystem::frameCheckpoint() {
             longjmp(engineJumpBuffer, 2);
         }
     }
-
-    // Publish one frame's gamepad inputs, including latched short presses.
-    // The accessors manage their own mutexes; app code sees copied values.
-    RemoteInputs::beginFrame();
 
     static uint32_t homeStart = 0;
     static bool homeConsumed = false;

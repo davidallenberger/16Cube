@@ -26,5 +26,5 @@ namespace CommandState {
     void publishGamepads(const GamepadState &, const GamepadState &);
     void publishDepth(const uint8_t *bits);
     CommandSnapshot snapshot();
-    CommandSnapshot takeForSend(); // atomic copy + clear edge latches
+    CommandSnapshot takeForSend(bool consumeAudio = false); // atomic copy + clear edge latches
 } // namespace CommandState

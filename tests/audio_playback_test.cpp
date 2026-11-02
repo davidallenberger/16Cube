@@ -1,3 +1,4 @@
+#include "UARTReceiver.cpp"
 #include "Audio.cpp"
 #include <cassert>
 #include <cstdio>
@@ -18,6 +19,12 @@ CRGB CRGB::Purple;
 static uint32_t clockMs = 0;
 static uint32_t initialClock = 0;
 static unsigned frame = 0;
+static uint32_t session = 0;
+static bool variedPlacement = false;
+static uint32_t placementState = 1;
+static bool drawn[RNDR_X * RNDR_Y * RNDR_Z] = {};
+static unsigned uniqueThisFrame = 0;
+static unsigned firstUniqueCount = 0;
 static unsigned litVoxels = 0;
 static unsigned voxelsThisFrame = 0;
 static unsigned minX = 0;
@@ -30,8 +37,16 @@ static unsigned firstExtents[3] = {};
 static unsigned firstCount = 0;
 static uint8_t frameBrightness = 0;
 static std::vector<uint8_t> brightnessFrames;
-static std::vector<RemoteInputs::Audio> input;
+// Generated wire inputs; the REAL receiver, adapter and clock run below.
+struct Input {
+    AudioPayload values = {};
+    uint32_t beatCount = 0;
+    bool valid = true;
+};
+static std::vector<Input> input;
+static void receiveFrame();
 static std::vector<unsigned> lineFrames;
+static std::vector<unsigned> writeCounts;
 static uint8_t scratch[RNDR_X * RNDR_Y * RNDR_Z];
 uint8_t *SharedAppMemory = scratch;
 
@@ -51,13 +66,22 @@ void delay(int) {
 
 long random(long upper) {
     assert(upper > 0);
-    return 0;
+    if (!variedPlacement) {
+        return 0;
+    }
+    placementState = placementState * 1664525u + 1013904223u;
+    return long((placementState >> 8) % uint32_t(upper));
 }
 
 void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB &color) {
     assert(x < RNDR_X);
     assert(y < RNDR_Y);
     assert(z < RNDR_Z);
+    const unsigned index = x + RNDR_X * (y + RNDR_Y * z);
+    if (!drawn[index]) {
+        drawn[index] = true;
+        ++uniqueThisFrame;
+    }
     if (voxelsThisFrame == 0) {
         minX = maxX = x;
         minY = maxY = y;
@@ -74,6 +98,9 @@ void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB &color) {
     ++voxelsThisFrame;
 }
 
+void clearAll() {
+}
+
 void fadeAll(uint8_t) {
 }
 
@@ -84,10 +111,14 @@ void showCube() {
             firstExtents[1] = maxY - minY + 1;
             firstExtents[2] = maxZ - minZ + 1;
             firstCount = voxelsThisFrame;
+            firstUniqueCount = uniqueThisFrame;
         }
         lineFrames.push_back(frame);
     }
+    writeCounts.push_back(voxelsThisFrame);
     voxelsThisFrame = 0;
+    uniqueThisFrame = 0;
+    std::memset(drawn, 0, sizeof(drawn));
     brightnessFrames.push_back(frameBrightness);
     frameBrightness = 0;
 
@@ -98,24 +129,44 @@ void showCube() {
     }
 
     clockMs += 16;
+    receiveFrame();
 }
 
 void CubeSystem::frameCheckpoint() {
 }
 
-RemoteInputs::Audio RemoteInputs::audio() {
-    return input.at(frame);
+static void receiveFrame() {
+    const Input &source = input.at(frame);
+    CubinaWire::Packet packet;
+    packet.session = session;
+    packet.sequence = frame + 1;
+    packet.modeRevision = 1;
+    packet.mode = CubinaWire::Mode::AudioBluetooth;
+    packet.flags = source.valid ? CubinaWire::SOURCE_READY : 0;
+    packet.capturedMs = 1000 + frame * 16; // Deliberately unrelated board clock.
+    CubinaWire::writeAudio(packet, source.values, source.beatCount);
+    accept(packet);
+    RemoteInputs::beginFrame();
 }
 
 static void render(void (*routine)()) {
     clockMs = initialClock;
     frame = 0;
+    ++session;
+    placementState = 1;
+    firstUniqueCount = 0;
+    uniqueThisFrame = 0;
+    std::memset(drawn, 0, sizeof(drawn));
     litVoxels = 0;
     lineFrames.clear();
+    writeCounts.clear();
     brightnessFrames.clear();
     frameBrightness = 0;
     firstCount = 0;
     voxelsThisFrame = 0;
+
+    RemoteInputs::begin();
+    receiveFrame();
 
     try {
         routine();
@@ -126,146 +177,77 @@ static void render(void (*routine)()) {
     assert(false && "Audio routine unexpectedly returned");
 }
 
-// Keep packet time separate from render time, as on the two real boards.
-// Every test starts with an established, modest background in all bands.
-static void makeStream(unsigned count = 80, uint32_t capturedStart = 1000) {
-    input.assign(count, RemoteInputs::Audio());
+static void makeStream(unsigned count = 80) {
+    input.assign(count, Input());
     initialClock = 0;
-
-    for (unsigned i = 0; i < count; ++i) {
-        input[i].valid = true;
-        input[i].capturedMs = capturedStart + i * 16;
-        input[i].receivedMs = i * 16;
-        input[i].values.volumeSm = 128;
-        input[i].values.beat = 1; // Must not act as this effect's trigger.
-
-        for (unsigned band = 0; band < 16; ++band) {
-            input[i].values.fftResult[band] = 20;
+    for (auto &sample : input) {
+        sample.values.mode = 2;
+        sample.values.volumeSm = 128;
+        for (auto &band : sample.values.fftResult) {
+            band = 20;
         }
     }
 }
 
-int main() {
-    const unsigned expectedLength = 1 + 128 * (RNDR_X - 1) / 255;
+static void addAttack(unsigned at, uint16_t bands, uint8_t strength = 128) {
+    for (unsigned i = at; i < input.size(); ++i) {
+        ++input[i].values.attackCount;
+    }
+    input[at].values.attackStrength = strength;
+    input[at].values.attackBands = bands;
+}
 
-    // Every band can trigger, including the lowest and highest bands. Holding
-    // a new loud note for over a second must not generate recurring peaks.
+int main() {
+    // Artist-tuned defaults in Audio.h must not change this test fixture.
+    Audio::controls().puddlesSensitivity = 1.0f;
+    Audio::controls().puddlePeakSensitivity = 1.0f;
+    Audio::controls().puddlePeakDensity = 1.0f;
+    Audio::controls().bpmSensitivity = 1.0f;
+    Audio::controls().attackSensitivity = 1.0f;
+    Audio::controls().maxCubeEdge = 4;
+    const unsigned expectedLength = 1 + 128 * (RNDR_X - 1) / 255;
+    // Explicit expectations for the two supported canvases. Same fractional
+    // footprint needs fewer lines on 10x10x16 than on the full 16^3 cube.
+    const unsigned defaultLines = RNDR_X == 16 ? 6 : 4;
+
+    // Every frequency group uses the same public event interface. The visual
+    // must not contain another detector that examines compressed display bins.
     for (unsigned band = 0; band < 16; ++band) {
         makeStream();
-        for (unsigned i = 10; i < input.size(); ++i) {
-            input[i].values.fftResult[band] = 90;
-        }
+        addAttack(10, uint16_t(1u << band));
         render(&Audio::animatePuddlePeak);
         assert(lineFrames == std::vector<unsigned>({10}));
-        assert(litVoxels == expectedLength);
+        assert(litVoxels == defaultLines * expectedLength);
     }
-
-    // Simultaneous spectral increases represent one burst, not sixteen lines.
     makeStream();
-    for (unsigned band = 0; band < 16; ++band) {
-        input[10].values.fftResult[band] = 90;
-    }
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames == std::vector<unsigned>({10}));
-
-    // Separated attacks re-arm and produce distinct lines. Closely staggered
-    // attacks are consumed during cooldown rather than queued for later.
-    makeStream();
-    input[10].values.fftResult[0] = 90;
-    input[11].values.fftResult[8] = 90;
-    input[14].values.fftResult[15] = 90;
-    input[30].values.fftResult[8] = 90;
-    input[50].values.fftResult[15] = 90;
+    addAttack(10, 0xFFFF);
+    addAttack(30, 0x0080);
+    addAttack(50, 0x8000);
     render(&Audio::animatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10, 30, 50}));
 
-    // A quieter high-frequency accent still qualifies over steady loud bass.
+    // A dedicated kick merges with the general bass event into ONE spawn.
     makeStream();
-    for (auto &sample : input) {
-        sample.values.fftResult[0] = 230;
+    for (unsigned i = 10; i < input.size(); ++i) {
+        input[i].beatCount = 1;
     }
-    input[10].values.fftResult[15] = 50;
+    input[10].values.beat = 1;
+    addAttack(10, 0x0001);
     render(&Audio::animatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10}));
 
-    // Neither a steady sound/kick flag nor small fluctuations are onsets.
+    // Loud or fluctuating display bins alone must not invent shared events.
     makeStream();
     for (unsigned i = 0; i < input.size(); ++i) {
-        for (unsigned band = 0; band < 16; ++band) {
-            input[i].values.fftResult[band] = 20 + (i % 2) * 4;
-        }
-    }
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames.empty());
-    makeStream();
-    for (auto &sample : input) {
-        for (auto &band : sample.values.fftResult) {
-            band = 200;
+        for (auto &band : input[i].values.fftResult) {
+            band = i % 2 ? 230 : 20;
         }
     }
     render(&Audio::animatePuddlePeak);
     assert(lineFrames.empty());
 
-    // Reject near-zero chatter even when the relative change is enormous.
     makeStream();
-    for (auto &sample : input) {
-        sample.values.fftResult[5] = 0;
-    }
-    input[10].values.fftResult[5] = 11;
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames.empty());
-
-    // Do not reprocess levels with a repeated publication timestamp.
-    makeStream();
-    for (unsigned i = 10; i < input.size(); ++i) {
-        input[i].capturedMs = input[9].capturedMs;
-        input[i].values.fftResult[0] = 90;
-    }
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames.empty());
-
-    makeStream();
-    input[10].values.fftResult[0] = 90;
-    for (auto &sample : input) {
-        sample.values.volumeSm = 0;
-    }
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames.empty());
-
-    // Resumption learns a new background. The later accent still triggers.
-    makeStream();
-    input[10].values.fftResult[0] = 90;
-    for (unsigned i = 15; i <= 20; ++i) {
-        input[i].valid = false;
-    }
-    for (unsigned i = 21; i < input.size(); ++i) {
-        input[i].values.fftResult[0] = 200;
-    }
-    input[50].values.fftResult[15] = 90;
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames == std::vector<unsigned>({10, 50}));
-
-    // A long source-timestamp gap also resets history without a stale frame.
-    makeStream();
-    for (unsigned i = 20; i < input.size(); ++i) {
-        input[i].capturedMs += 400;
-        input[i].values.fftResult[0] = 200;
-    }
-    input[50].values.fftResult[15] = 90;
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames == std::vector<unsigned>({50}));
-
-    // Sender and render clocks can each wrap independently.
-    makeStream(80, 0xfffffff0u);
-    initialClock = 0xffffffc0u;
-    input[10].values.fftResult[0] = 90;
-    input[30].values.fftResult[15] = 90;
-    render(&Audio::animatePuddlePeak);
-    assert(lineFrames == std::vector<unsigned>({10, 30}));
-
-    // External sensitivity changes onset response, without changing input gain.
-    makeStream();
-    input[10].values.fftResult[8] = 26;
+    addAttack(10, 0x0080, 20);
     render(&Audio::animatePuddlePeak);
     assert(lineFrames.empty());
     render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 2.0f); });
@@ -273,7 +255,7 @@ int main() {
     render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 0.0f); });
     assert(lineFrames.empty());
 
-    // Maximum volume fills the requested line axis, or a bounded solid cube.
+    // Maximum volume fills one axis or a bounded solid cube, as before.
     makeStream(15);
     for (auto &sample : input) {
         sample.values.volumeSm = 255;
@@ -282,15 +264,13 @@ int main() {
     assert(firstExtents[0] == 1 && firstExtents[1] == 1 && firstExtents[2] == RNDR_Z);
     render(&Audio::animatePuddlesCubes);
     assert(firstCount == 64);
-    assert(firstExtents[0] == 4 && firstExtents[1] == 4 && firstExtents[2] == 4);
     render(+[] { Audio::puddles(false, Audio::PuddleShape::Cube, 1.0f, 200); });
-    assert(firstCount == 125); // Oversized requests clamp to 5 and canvas bounds.
+    assert(firstCount == 125);
     render(+[] { Audio::puddles(false, Audio::PuddleShape::Cube, 0.0f); });
     assert(lineFrames.empty());
 
-    // Same geometry choices apply to peak-triggered shapes.
     makeStream();
-    input[10].values.fftResult[15] = 90;
+    addAttack(10, 0x8000);
     render(&Audio::animatePuddlePeakVertical);
     assert(lineFrames == std::vector<unsigned>({10}));
     assert(firstExtents[0] == 1 && firstExtents[1] == 1 && firstExtents[2] > 1);
@@ -298,13 +278,80 @@ int main() {
     assert(lineFrames == std::vector<unsigned>({10}));
     assert(firstExtents[0] == firstExtents[1] && firstExtents[1] == firstExtents[2]);
 
-    // Idle BPM remains visible and breathes over a full five-second cycle.
-    makeStream(400);
-    render(&Audio::animateBpmSphere);
-    assert(*std::min_element(brightnessFrames.begin(), brightnessFrames.end()) < 40);
-    assert(*std::max_element(brightnessFrames.begin(), brightnessFrames.end()) > 72);
+    // Calibrate the 16^3 default against the actual ordinary spawn cadence.
+    // Sum the recent draw contributions with the specified exponential fade;
+    // this is expected full-brightness-equivalent coverage before overlaps.
+    // It is not a claim about exact physical occupancy or perceived brightness.
+    if (RNDR_X == 16 && RNDR_Y == 16 && RNDR_Z == 16) {
+        makeStream(200);
+        render(&Audio::animatePuddles);
+        const unsigned lastSpawn = lineFrames.back();
+        float ordinaryCoverage = 0.0f;
+        for (unsigned i = 0; i <= lastSpawn; ++i) {
+            ordinaryCoverage += writeCounts[i] * expf(-float((lastSpawn - i) * 16) / 250.0f);
+        }
+        makeStream();
+        addAttack(10, 0x0080);
+        render(&Audio::animatePuddlePeak);
+        assert(firstCount > ordinaryCoverage * 0.8f);
+        assert(firstCount < ordinaryCoverage * 1.2f);
+    }
 
-    makeStream(80);
+    // Density changes BURST coverage, not event timing or shape length.
+    makeStream();
+    addAttack(10, 0x0080);
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 0.5f); });
+    assert(firstCount == defaultLines * expectedLength / 2);
+    assert(lineFrames == std::vector<unsigned>({10}));
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 2.0f); });
+    assert(firstCount == defaultLines * expectedLength * 2);
+    assert(lineFrames == std::vector<unsigned>({10}));
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 0.0f); });
+    assert(lineFrames.empty());
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, -5.0f); });
+    assert(lineFrames.empty());
+
+    // Random placement actually spreads the burst: check distinct voxels,
+    // not only repeated writes to a single line in a deterministic stub.
+    variedPlacement = true;
+    render(&Audio::animatePuddlePeak);
+    assert(firstUniqueCount >= 3 * expectedLength);
+    assert(firstCount == defaultLines * expectedLength);
+    variedPlacement = false;
+
+    // Volume still controls EACH shape's size: density must not erase it.
+    for (auto &sample : input) {
+        sample.values.volumeSm = 255;
+    }
+    render(&Audio::animatePuddlePeak);
+    const unsigned fullLines = RNDR_X == 16 ? 6 : 4;
+    assert(firstCount == fullLines * RNDR_X);
+    assert(firstExtents[0] == RNDR_X);
+
+    // Extreme UI values cannot turn one event into unbounded work.
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 1.0e30f); });
+    assert(firstCount <= 32 * RNDR_X && firstCount <= 2048);
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Cube, 1.0f, 5, 1.0e30f); });
+    assert(firstCount == 2000); // Sixteen 5^3 cubes fit the 2048-write budget.
+
+    // Increasing density cannot admit a weak attack or invent a missing one.
+    makeStream();
+    addAttack(10, 0x0080, 20);
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 100.0f); });
+    assert(lineFrames.empty());
+    makeStream();
+    render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 100.0f); });
+    assert(lineFrames.empty());
+
+    // Idle keeps the full five-second dim breath; locked music drives it.
+    makeStream(400);
+    for (auto &sample : input) {
+        sample.values.volumeSm = 0;
+    }
+    render(&Audio::animateBpmSphere);
+    assert(*std::min_element(brightnessFrames.begin(), brightnessFrames.end()) <= 33);
+    assert(*std::max_element(brightnessFrames.begin(), brightnessFrames.end()) >= 79);
+    makeStream(160);
     for (unsigned i = 0; i < input.size(); ++i) {
         input[i].values.tempoBpm100 = 12000;
         input[i].values.tempoPhase = uint16_t(fmodf(i * 0.016f * 2.0f, 1.0f) * 65536.0f);
@@ -318,20 +365,30 @@ int main() {
     render(&Audio::animateBpmSphere);
     assert(*std::max_element(brightnessFrames.begin(), brightnessFrames.end()) <= 80);
 
-    // Exercise all real playlist entry points and wrapping.
+    makeStream();
+    addAttack(10, 0x0080, 180);
+    render(&Audio::animateAttackMonitor);
+    assert(lineFrames == std::vector<unsigned>({10, 11, 12, 13, 14}));
+    assert(firstCount == 64);
+    makeStream();
+    initialClock = 0xFFFFFFC0u;
+    addAttack(10, 0x0001);
+    addAttack(30, 0x8000);
+    render(&Audio::animatePuddlePeak);
+    assert(lineFrames == std::vector<unsigned>({10, 30}));
+
     const char *names[] = {
         "Puddles Horizontal", "Puddles Vertical", "Puddles Cubes",
         "Puddle Peak Horizontal", "Puddle Peak Vertical", "Puddle Peak Cubes",
-        "BPM Sphere", "BPM Checkerboard", "BPM Diagonal", "BPM Helix"
+        "BPM Sphere", "BPM Checkerboard", "BPM Diagonal", "BPM Helix", "Attack Monitor"
     };
-    for (unsigned entry = 0; entry < 10; ++entry) {
+    for (unsigned entry = 0; entry < 11; ++entry) {
         makeStream();
         assert(std::strcmp(Audio::currentRoutineName(), names[entry]) == 0);
         render(&Audio::run);
-        assert(entry >= 3 && entry <= 5 ? lineFrames.empty() : !lineFrames.empty());
+        assert(((entry >= 3 && entry <= 5) || entry == 10) ? lineFrames.empty() : !lineFrames.empty());
         Audio::nextRoutine();
     }
     assert(std::strcmp(Audio::currentRoutineName(), names[0]) == 0);
-
-    puts("Audio playback passed: all-band onsets, sustain rejection, sensitivity, line/cube bounds, all playlist entries/wrap, musical/idle/stale BPM rendering.");
+    puts("Audio playback passed: real receiver/frame adapter, shared events, sensitivity, geometry, canvas-scaled density/placement/work bounds, playlist wrapping, musical/idle/stale BPM.");
 }

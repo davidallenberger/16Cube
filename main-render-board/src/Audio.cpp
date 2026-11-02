@@ -24,6 +24,7 @@ const Audio::Routine *Audio::routineList(size_t &count) {
         {"BPM Checkerboard", &Audio::animateBpmCheckerboard},
         {"BPM Diagonal", &Audio::animateBpmDiagonal},
         {"BPM Helix", &Audio::animateBpmHelix},
+        {"Attack Monitor", &Audio::animateAttackMonitor},
     };
 
     count = sizeof(routines) / sizeof(routines[0]);
@@ -95,7 +96,7 @@ void Audio::debug() {
     debug(RemoteInputs::audio());
 }
 
-void Audio::debug(const RemoteInputs::Audio &audio) {
+void Audio::debug(const RemoteInputs::AudioFrame &audio) {
 #if AUDIO_SERIAL_DEBUG
     // Render task only. No printing in UARTReceiver and no lock held during TX.
     // Static storage survives a nonlocal app exit; no resource-owning locals.
@@ -135,31 +136,15 @@ void Audio::debug(const RemoteInputs::Audio &audio) {
             source = "Depth";
             break;
         }
-        const long age = audio.valid ? long(uint32_t(now - audio.receivedMs)) : -1;
-        const char *rhythmState = "stale";
-        if (audio.valid) {
-            if (!(audio.values.tempoFlags & CubinaWire::AUDIO_ACTIVE)) {
-                rhythmState = "idle";
-            } else if (audio.values.tempoFlags & CubinaWire::TEMPO_LOCKED) {
-                rhythmState = "locked";
-            } else {
-                rhythmState = "search";
-            }
-        }
-        int n =
-            snprintf(text, sizeof(text),
-                     "Audio: source=%s routine=%s linked=%u valid=%u session=%lu rev=%lu age=%ldms "
-                     "VRaw=%u VSm=%u VAvg=%u Kicks=%lu BPM=%.1f Phase=%u%% Conf=%u%% Rhythm=%s RXok=%lu "
-                     "RXbad=%lu\r\nBins:[",
-                     source, currentRoutineName(), unsigned(control.linked), unsigned(audio.valid),
-                     (unsigned long)control.session, (unsigned long)control.revision, age,
-                     unsigned(audio.values.volumeRaw), unsigned(audio.values.volumeSm),
-                     unsigned(audio.values.sampleAvg), (unsigned long)audio.beatCount,
-                     double(audio.values.tempoBpm100) / 100.0,
-                     unsigned(audio.values.tempoPhase) * 100 / 65536,
-                     unsigned(audio.values.tempoConfidence) * 100 / 255,
-                     rhythmState,
-                     (unsigned long)stats.accepted, (unsigned long)stats.rejected);
+        int n = snprintf(
+            text, sizeof(text),
+            "Audio: source=%s routine=%s linked=%u VRaw=%u VSm=%u VAvg=%u "
+            "BPM=%.1f Bass=%u Mid=%u High=%u RXok=%lu RXbad=%lu\r\nBins:[",
+            source, currentRoutineName(), unsigned(control.linked),
+            unsigned(audio.volumeRaw), unsigned(audio.volumeSm), unsigned(audio.volumeAvg),
+            double(audio.bpm), unsigned(audio.bassKick), unsigned(audio.midAttack),
+            unsigned(audio.highAttack), (unsigned long)stats.accepted,
+            (unsigned long)stats.rejected);
         if (n <= 0 || size_t(n) >= sizeof(text)) {
             return;
         }
@@ -167,7 +152,7 @@ void Audio::debug(const RemoteInputs::Audio &audio) {
 
         for (unsigned i = 0; i < 16; ++i) {
             n = snprintf(text + queued, sizeof(text) - queued, i == 15 ? "%u]\r\n" : "%u ",
-                         unsigned(audio.values.fftResult[i]));
+                         unsigned(audio.fftResult[i]));
             if (n <= 0 || size_t(n) >= sizeof(text) - queued) {
                 queued = 0;
                 return;
@@ -201,56 +186,43 @@ void Audio::animatePuddlesCubes() {
 
 void Audio::animatePuddlePeak() {
     puddles(true, PuddleShape::Horizontal, controls().puddlePeakSensitivity,
-            controls().maxCubeEdge);
+            controls().maxCubeEdge, controls().puddlePeakDensity);
 }
 
 void Audio::animatePuddlePeakVertical() {
-    puddles(true, PuddleShape::Vertical, controls().puddlePeakSensitivity, controls().maxCubeEdge);
+    puddles(true, PuddleShape::Vertical, controls().puddlePeakSensitivity,
+            controls().maxCubeEdge, controls().puddlePeakDensity);
 }
 
 void Audio::animatePuddlePeakCubes() {
-    puddles(true, PuddleShape::Cube, controls().puddlePeakSensitivity, controls().maxCubeEdge);
+    puddles(true, PuddleShape::Cube, controls().puddlePeakSensitivity,
+            controls().maxCubeEdge, controls().puddlePeakDensity);
 }
 
 // Inspired by Puddles/Puddlepeak by Andrew Tuline, merged by @dedehai.
-// This adaptation draws a line for a noticeable NEW burst in any frequency
-// band, rather than selecting one frequency or reusing the bass-kick flag.
-// Each band is compared with its own recent level, so a quieter treble accent
-// can qualify even while another band carries a steady, louder bass note.
-//
-// Detection uses the 16 compressed/smoothed band summaries already received.
-// This is a visual onset detector, not raw-waveform peak measurement or musical
-// beat tracking. It changes neither acquisition gain nor the UART protocol.
-void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8_t maxCubeEdge) {
+// Both effects share geometry and fading. Ordinary Puddles responds to volume;
+// Puddle Peak responds to the same bass/mid/high events every other animation
+// sees. There is no second detector, baseline, timestamp or rearm algorithm
+// hidden inside this visual. Its sensitivity only admits weaker shared events.
+void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8_t maxCubeEdge,
+                    float peakDensity) {
     constexpr float PUDDLE_FADE_TIME_MS = 250.0f;
-
-    // The main visual sensitivity knob: higher detects smaller increases.
-    // This affects WHEN a line appears, not audio gain or line length.
-    sensitivity = std::isfinite(sensitivity) ? max(0.0f, sensitivity) : 1.0f;
     constexpr uint32_t PUDDLE_SPAWN_INTERVAL_MS = 34;
 
-    // Defaults for the detector, all in the existing 0..255 band units.
-    // Require BOTH a meaningful absolute rise and a rise relative to that
-    // band's recent level. A small activity floor excludes near-zero chatter.
-    constexpr float REFERENCE_TIME_MS = 350.0f;
-    constexpr float MINIMUM_RISE = 8.0f;
-    constexpr float RELATIVE_RISE = 0.35f;
-    constexpr uint8_t MINIMUM_BAND_LEVEL = 12;
-    constexpr uint32_t PEAK_MIN_INTERVAL_MS = 100;
-    constexpr uint32_t REFERENCE_GAP_MS = 250;
-
-    // Each routine invocation owns its detector history. baseline[] follows
-    // recent levels; armed[] remembers whether a band may report a new burst.
-    // Nothing here is shared with the receiver task or another animation.
-    float baseline[16] = {};
-    bool armed[16] = {};
+    // Ordinary Puddles' 250-ms exponential fade and frame-rounded 34-ms
+    // cadence leave roughly six full-brightness shapes' worth on screen.
+    // Use that as the reference footprint of ONE accepted peak. This is a
+    // starting artistic match, not a promise of identical average occupancy:
+    // peak bursts are synchronized to sounds, and can be far apart.
+    constexpr float REFERENCE_BURST_SHAPES = 6.0f;
+    constexpr float REFERENCE_CANVAS_VOXELS = 16.0f * 16.0f * 16.0f;
+    constexpr unsigned MAX_BURST_SHAPES = 32;
+    constexpr unsigned MAX_BURST_VOXEL_WRITES = 2048;
+    peakDensity = std::isfinite(peakDensity) ? max(0.0f, peakDensity) : 1.0f;
+    sensitivity = std::isfinite(sensitivity) ? max(0.0f, sensitivity) : 1.0f;
 
     uint32_t lastFade = millis();
-    uint32_t lastPeak = 0;
     uint32_t lastSpawn = millis();
-    uint32_t lastExaminedCapture = 0;
-    bool havePeak = false;
-    bool haveReference = false;
     uint8_t hue = 0;
 
     for (;;) {
@@ -266,115 +238,86 @@ void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8
             lastFade = now;
         }
 
-        const RemoteInputs::Audio audio = RemoteInputs::audio();
+        const auto audio = RemoteInputs::audio(sensitivity);
         Audio::debug(audio);
 
-        bool peak = false;
+        const bool hit = audio.bassKick || audio.midAttack || audio.highAttack;
+        const bool volumeReady = audio.volumeSm * sensitivity >= 2.0f;
+        const bool intervalReady = uint32_t(now - lastSpawn) >= PUDDLE_SPAWN_INTERVAL_MS;
+        const bool spawn = peakDetect ? hit && peakDensity > 0.0f : volumeReady && intervalReady;
 
-        if (!peakDetect) {
-            const float volume = audio.valid ? audio.values.volumeSm * sensitivity : 0.0f;
-            peak = volume >= 2.0f && uint32_t(now - lastSpawn) >= PUDDLE_SPAWN_INTERVAL_MS;
-            if (peak) {
-                lastSpawn = now;
-            }
-        } else if (!audio.valid) {
-            // Do not compare resumed audio with history from before a dropout.
-            // Existing lines still fade while no usable input is available.
-            haveReference = false;
-        } else if (!haveReference || audio.capturedMs != lastExaminedCapture) {
-            // Process each publication once, even if render frames reread it.
-            // Subtract only COMMAND-board timestamps from one another; never
-            // compare them with this board's clock. Unsigned subtraction also
-            // handles the sender's millisecond counter wrapping.
-            const uint32_t audioElapsed = uint32_t(audio.capturedMs - lastExaminedCapture);
-            const bool initialize = !haveReference || audioElapsed > REFERENCE_GAP_MS;
-            lastExaminedCapture = audio.capturedMs;
-
-            if (initialize) {
-                // Establish the current background without inventing an
-                // onset merely because we entered the routine or reconnected.
-                for (unsigned band = 0; band < 16; ++band) {
-                    baseline[band] = audio.values.fftResult[band];
-                    armed[band] = true;
-                }
-                haveReference = true;
-            } else {
-                const float follow = 1.0f - expf(-float(audioElapsed) / REFERENCE_TIME_MS);
-                const bool audible = audio.values.volumeSm > 1;
-                bool anyOnset = false;
-
-                for (unsigned band = 0; band < 16; ++band) {
-                    const float level = audio.values.fftResult[band];
-                    const float rise = level - baseline[band];
-                    const float requiredRise =
-                        max(MINIMUM_RISE, baseline[band] * RELATIVE_RISE) / max(0.05f, sensitivity);
-
-                    if (audible && level >= MINIMUM_BAND_LEVEL && rise >= requiredRise) {
-                        if (armed[band]) {
-                            anyOnset = true;
-                        }
-                        armed[band] = false;
-                    } else if (!audible || rise <= requiredRise * 0.4f) {
-                        // Hysteresis: settle substantially below the trigger
-                        // difference before allowing this band to fire again.
-                        // A constant note eventually becomes its own baseline
-                        // and cannot retrigger simply for remaining loud.
-                        armed[band] = true;
-                    }
-
-                    // Update AFTER testing, so the new burst is compared with
-                    // the previous background rather than absorbed into it.
-                    // This adapts a reference only; it never rescales audio.
-                    baseline[band] += follow * (level - baseline[band]);
-                }
-
-                // Merge all qualifying bands into one visual event. Marking
-                // bands above also consumes rises during this cooldown, so
-                // one staggered attack is not queued up as several late lines.
-                const bool intervalElapsed =
-                    !havePeak || uint32_t(now - lastPeak) >= PEAK_MIN_INTERVAL_MS;
-                peak = anyOnset && intervalElapsed;
-            }
-        }
-
-        if (peak && sensitivity > 0.0f) {
-            havePeak = true;
-            lastPeak = now;
+        if (spawn && sensitivity > 0.0f) {
+            lastSpawn = now;
 
             // Peak sensitivity changes the trigger; ordinary sensitivity
             // changes size. Both use the SAME volume for all geometry choices.
             const float response = peakDetect ? 1.0f : sensitivity;
-            const uint8_t volume = uint8_t(min(255.0f, audio.values.volumeSm * response));
+            const uint8_t volume = uint8_t(min(255.0f, audio.volumeSm * response));
             const CRGB color = CHSV(hue++, 220, 255);
+            const bool vertical = shape == PuddleShape::Vertical;
+            const uint8_t dimension = vertical ? RNDR_Z : RNDR_X;
+            const uint8_t length = 1 + uint16_t(volume) * (dimension - 1) / 255;
+            const uint8_t fit = min(RNDR_X, min(RNDR_Y, RNDR_Z));
+            const uint8_t referenceMaximum = max(uint8_t(1), min(uint8_t(5), maxCubeEdge));
+            const uint8_t maximum = min(referenceMaximum, fit);
+            const uint8_t edge = 1 + uint16_t(volume) * (maximum - 1) / 255;
+            unsigned shapeCount = 1; // Ordinary Puddles retains its existing cadence.
 
-            if (shape == PuddleShape::Cube) {
-                const uint8_t fit = min(RNDR_X, min(RNDR_Y, RNDR_Z));
-                const uint8_t maximum = max(uint8_t(1), min(uint8_t(5), min(maxCubeEdge, fit)));
-                const uint8_t edge = 1 + uint16_t(volume) * (maximum - 1) / 255;
-                const uint8_t x0 = random(RNDR_X - edge + 1);
-                const uint8_t y0 = random(RNDR_Y - edge + 1);
-                const uint8_t z0 = random(RNDR_Z - edge + 1);
-                for (uint8_t z = z0; z < z0 + edge; ++z) {
-                    for (uint8_t y = y0; y < y0 + edge; ++y) {
-                        for (uint8_t x = x0; x < x0 + edge; ++x) {
-                            setVoxel(x, y, z, color);
+            if (peakDetect) {
+                // Preserve the same relative footprint on a smaller canvas.
+                // Compare this shape with its equivalent on the reference
+                // 16^3 cube at the SAME volume. Otherwise a shorter line on a
+                // small canvas would incorrectly be counted as a full line.
+                // Size/volume information is retained: quiet sounds still
+                // draw smaller shapes; density does not compensate it away.
+                const unsigned actualVoxels = shape == PuddleShape::Cube
+                    ? unsigned(edge) * edge * edge
+                    : length;
+                const unsigned referenceEdge = 1 + uint16_t(volume) * (referenceMaximum - 1) / 255;
+                const unsigned referenceVoxels = shape == PuddleShape::Cube
+                    ? referenceEdge * referenceEdge * referenceEdge
+                    : 1 + uint16_t(volume) * 15 / 255;
+                const float canvasScale = float(unsigned(RNDR_X) * RNDR_Y * RNDR_Z) /
+                    REFERENCE_CANVAS_VOXELS;
+                const float requested = REFERENCE_BURST_SHAPES * peakDensity * canvasScale *
+                    float(referenceVoxels) / float(actualVoxels);
+
+                // Bound both random-placement work and voxel writes, even
+                // for an extreme density setting. This needs no pool, heap,
+                // task or extra arena. A fractional request rounds upward so
+                // a positive density still gives a small canvas a response.
+                const unsigned shapeLimit = min(MAX_BURST_SHAPES,
+                    max(1u, MAX_BURST_VOXEL_WRITES / actualVoxels));
+                shapeCount = unsigned(ceilf(fminf(requested, float(shapeLimit))));
+            }
+
+            // All shapes in this burst appear in this SAME frame. Random
+            // positions add coverage, while their shared time/color tie them
+            // to one audible event. Nothing spawns between accepted events.
+            for (unsigned item = 0; item < shapeCount; ++item) {
+                if (shape == PuddleShape::Cube) {
+                    const uint8_t x0 = random(RNDR_X - edge + 1);
+                    const uint8_t y0 = random(RNDR_Y - edge + 1);
+                    const uint8_t z0 = random(RNDR_Z - edge + 1);
+                    for (uint8_t z = z0; z < z0 + edge; ++z) {
+                        for (uint8_t y = y0; y < y0 + edge; ++y) {
+                            for (uint8_t x = x0; x < x0 + edge; ++x) {
+                                setVoxel(x, y, z, color);
+                            }
                         }
                     }
-                }
-            } else {
-                // Z is the vertical axis; X is the existing horizontal line.
-                const bool vertical = shape == PuddleShape::Vertical;
-                const uint8_t dimension = vertical ? RNDR_Z : RNDR_X;
-                const uint8_t length = 1 + uint16_t(volume) * (dimension - 1) / 255;
-                uint8_t x = random(vertical ? RNDR_X : RNDR_X - length + 1);
-                const uint8_t y = random(RNDR_Y);
-                uint8_t z = random(vertical ? RNDR_Z - length + 1 : RNDR_Z);
-                for (uint8_t i = 0; i < length; ++i) {
-                    setVoxel(x, y, z, color);
-                    if (vertical) {
-                        ++z;
-                    } else {
-                        ++x;
+                } else {
+                    // Z is vertical; X is the existing horizontal line.
+                    uint8_t x = random(vertical ? RNDR_X : RNDR_X - length + 1);
+                    const uint8_t y = random(RNDR_Y);
+                    uint8_t z = random(vertical ? RNDR_Z - length + 1 : RNDR_Z);
+                    for (uint8_t i = 0; i < length; ++i) {
+                        setVoxel(x, y, z, color);
+                        if (vertical) {
+                            ++z;
+                        } else {
+                            ++x;
+                        }
                     }
                 }
             }
@@ -390,6 +333,36 @@ void Audio::animateBpmSphere() {
     bpm(BPM_SPHERE, controls().bpmSensitivity);
 }
 
+void Audio::animateAttackMonitor() {
+    uint32_t flashStarted = 0;
+    bool flashing = false;
+    for (;;) {
+        const auto audio = RemoteInputs::audio(controls().attackSensitivity);
+        const uint32_t now = millis();
+        if (audio.bassKick || audio.midAttack || audio.highAttack) {
+            flashStarted = now;
+            flashing = true;
+        }
+        if (uint32_t(now - flashStarted) >= 80) {
+            flashing = false;
+        }
+        clearAll();
+        if (flashing) {
+            // Fixed location/size/brightness isolates WHEN an attack arrives.
+            // The short visible hold is presentation, not another detector.
+            for (uint8_t z = RNDR_Z / 2 - 2; z < RNDR_Z / 2 + 2; ++z) {
+                for (uint8_t y = RNDR_Y / 2 - 2; y < RNDR_Y / 2 + 2; ++y) {
+                    for (uint8_t x = RNDR_X / 2 - 2; x < RNDR_X / 2 + 2; ++x) {
+                        setVoxel(x, y, z, CRGB::White);
+                    }
+                }
+            }
+        }
+        Audio::debug(audio);
+        showCube();
+    }
+}
+
 void Audio::animateBpmCheckerboard() {
     bpm(BPM_CHECKERBOARD, controls().bpmSensitivity);
 }
@@ -403,62 +376,34 @@ void Audio::animateBpmHelix() {
 }
 
 void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
-    // A slow five-second cycle remains visible during silence. Unknown rhythm
-    // while music is audible uses a provisional 60 BPM or the last estimate;
-    // it is labelled "search" in debug, never presented as a confident beat.
-    constexpr float IDLE_BPM = 12.0f;
-    constexpr float SEARCH_BPM = 60.0f;
     sensitivity = std::isfinite(sensitivity) ? max(0.0f, sensitivity) : 1.0f;
 
+    // Geometry preparation is unchanged and runs once. The audio adapter now
+    // owns the clock, packet-age interpretation, locking and idle fallback.
+    // None of that belongs in this drawing routine.
     uint8_t *phaseMap = reinterpret_cast<uint8_t *>(SharedAppMemory);
     BpmRenderer::prepare(phaseMap, mode);
-    uint32_t lastFrame = millis();
-    float phase = 0.0f;
-    float rate = IDLE_BPM;
-    bool previouslyLocked = false;
 
     for (;;) {
-        const uint32_t now = millis();
-        const float seconds = min(0.25f, float(uint32_t(now - lastFrame)) / 1000.0f);
-        lastFrame = now;
-        const RemoteInputs::Audio audio = RemoteInputs::audio();
+        const auto audio = RemoteInputs::audio();
         Audio::debug(audio);
-        const bool active = audio.valid && (audio.values.tempoFlags & CubinaWire::AUDIO_ACTIVE);
-        const bool locked = active && (audio.values.tempoFlags & CubinaWire::TEMPO_LOCKED);
-        const float estimate = float(audio.values.tempoBpm100) / 100.0f;
-        const float targetRate = !active ? IDLE_BPM : estimate >= 60.0f ? estimate : SEARCH_BPM;
 
-        // Changing speed does not recompute phase from millis()*BPM, which
-        // would jump the pattern. Integrate a smoothly changing local clock.
-        rate += (1.0f - expf(-seconds / 0.5f)) * (targetRate - rate);
-        phase += seconds * rate / 60.0f;
-        phase -= floorf(phase);
-
-        if (locked) {
-            // The transmitted phase belongs to its latest audio publication.
-            // Extrapolate only using LOCAL time since that packet arrived.
-            // No cross-board subtraction or synchronized millis() is needed.
-            const float age = float(uint32_t(now - audio.receivedMs)) / 1000.0f;
-            float targetPhase = float(audio.values.tempoPhase) / 65536.0f + age * estimate / 60.0f;
-            targetPhase -= floorf(targetPhase);
-            float error = targetPhase - phase;
-            error -= floorf(error + 0.5f);
-            phase += previouslyLocked ? error * (1.0f - expf(-seconds / 0.15f)) : error;
-            phase -= floorf(phase);
-        }
-        previouslyLocked = locked;
-
-        // One smooth visual breath per beat. The musical phase moves BOTH
-        // the density waves and the brightness envelope. Palette cycling is
-        // decorative and deliberately independent of the tempo.
-        const float breath = 0.5f + 0.5f * cosf(phase * 6.283185307f);
+        // One cycle per musical beat, matching the existing animation speed.
+        // The legacy drawing peaks at the beat boundary, so invert the shared
+        // 0 -> 1 -> 0 pulse here. Changing the period needs only a new argument
+        // to BOTH helpers (for example 4 means four beats per visual cycle).
+        const float breath = 1.0f - audio.beatPulse(1);
+        const float cycle = audio.beatAngle(1) / 6.283185307f;
         const uint8_t beat = uint8_t(64.0f + breath * 191.0f);
-        const uint8_t travel = uint8_t(phase * 256.0f);
-        const float volume = active ? min(255.0f, audio.values.volumeSm * sensitivity) : 0.0f;
-        const uint8_t level =
-            uint8_t(min(255.0f, 32.0f + (active ? 64.0f + volume * 0.6f : 48.0f) * breath));
-        BpmRenderer::draw(phaseMap, RainbowColors_p, uint8_t(beat - travel), uint8_t(now / 40),
-                          level);
+        const uint8_t travel = uint8_t(cycle * 256.0f);
+
+        // Volume remains an artistic brightness control. Zero/stale volume
+        // keeps the familiar dim idle breath. Timing does not rescale volume.
+        const float volume = min(255.0f, audio.volumeSm * sensitivity);
+        const float amplitude = volume > 1.0f ? 64.0f + volume * 0.6f : 48.0f;
+        const uint8_t level = uint8_t(min(255.0f, 32.0f + amplitude * breath));
+        BpmRenderer::draw(phaseMap, RainbowColors_p, uint8_t(beat - travel),
+                          uint8_t(millis() / 40), level);
 
         showCube();
     }
