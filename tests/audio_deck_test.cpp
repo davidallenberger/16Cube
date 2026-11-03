@@ -15,6 +15,7 @@ static unsigned animationRequests = 0;
 static unsigned normalStops = 0;
 static unsigned launchLimit = 0;
 static bool manualFirst = false;
+static bool toggleHold = false;
 static bool buttonAtDeadline = false;
 
 struct StopTest {
@@ -54,6 +55,9 @@ static void draw(unsigned id) {
     bool pressed = false;
     while (TestDemo::audioRoutineRunning()) {
         clockMs += 10;
+        if (toggleHold && launches.size() == 1) {
+            TestDemo::playbackHeld() = uint32_t(clockMs - start) < 120;
+        }
         if (!pressed && launches.size() == 1 &&
             ((manualFirst && uint32_t(clockMs - start) >= 20) ||
              (buttonAtDeadline && uint32_t(clockMs - start) >= TestDemo::audioPlayback().durationMs))) {
@@ -117,6 +121,8 @@ static void reset(TestDemo::PlaybackOrder order = TestDemo::PlaybackOrder::Seque
     launches.clear();
     durations.clear();
     clockMs = 0;
+    TestDemo::playbackHeld() = false;
+    toggleHold = false;
     manualFirst = false;
     buttonAtDeadline = false;
 }
@@ -134,9 +140,16 @@ int main() {
     using namespace TestDemo;
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Puddles Horizontal") == 0);
-    play(13);
+    std::vector<unsigned> enabled;
+    for (unsigned i = 0; i < AUDIO_ROUTINE_COUNT; ++i) {
+        if (audioRoutines[i].enabled) {
+            enabled.push_back(i);
+        }
+    }
+    const unsigned count = enabled.size();
+    play(count + 2);
     for (unsigned i = 0; i < launches.size(); ++i) {
-        assert(launches[i] == i % 11);
+        assert(launches[i] == enabled[i % count]);
         assert(durations[i] == 50);
     }
 
@@ -159,6 +172,22 @@ int main() {
     assert(durations[0] == 20);
     assert(launches[0] == 0);
 
+    // Boolean Hold outlives a deadline while motion continues. Release lets
+    // the expired routine finish; manual Next still overrides Hold.
+    reset();
+    toggleHold = true;
+    play(2);
+    assert(durations[0] == 120 && durations[1] == 50);
+    reset();
+    playbackHeld() = true;
+    manualFirst = true;
+    play(1);
+    assert(durations[0] == 20);
+    assert(routineTimeRemaining(500, 50));
+    playbackHeld() = false;
+    assert(!routineTimeRemaining(500, 50));
+    assert(routineTimeRemaining(20, 50));
+
     // A source/mode escape clears timers without rewinding the selection.
     // A just-applied manual step is retained even if a switch follows it.
     reset();
@@ -170,15 +199,15 @@ int main() {
     assert(launches[0] == 1);
 
     reset(PlaybackOrder::Shuffled);
-    play(33);
+    play(count * 3);
     for (unsigned cycle = 0; cycle < 3; ++cycle) {
-        std::vector<unsigned> bag(launches.begin() + cycle * 11, launches.begin() + (cycle + 1) * 11);
+        std::vector<unsigned> bag(launches.begin() + cycle * count, launches.begin() + (cycle + 1) * count);
         std::sort(bag.begin(), bag.end());
-        for (unsigned i = 0; i < 11; ++i) {
-            assert(bag[i] == i);
+        for (unsigned i = 0; i < count; ++i) {
+            assert(bag[i] == enabled[i]);
         }
         if (cycle > 0) {
-            assert(launches[cycle * 11 - 1] != launches[cycle * 11]);
+            assert(launches[cycle * count - 1] != launches[cycle * count]);
         }
     }
 

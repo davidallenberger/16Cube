@@ -1,4 +1,5 @@
 #pragma once
+#include "TestDemo.h"
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "GeometryEngine.h"
@@ -30,7 +31,7 @@ private:
 
         TextureState tex(sMode, pal, 4.0f); // Fast 4.0f Multiplier for Waves
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             
             // Animate the ripple using the passed speed
@@ -54,7 +55,7 @@ private:
         
         TextureState tex(sMode, pal, 1.66f); // Ideal speed for the Saddle math
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             clearAll();
             rx += rotXSpeed; ry += rotYSpeed; rz += rotZSpeed;
@@ -81,7 +82,7 @@ private:
 
         TextureState tex(sMode, pal, 4.0f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             geomPhase += waveSpeed * deltaMs; clearAll();
             int phaseShiftDegrees = (int)geomPhase % 360;
@@ -132,7 +133,7 @@ private:
     CRGB floorColor = CRGB(25, 32, 40); 
     floorColor.nscale8(floorBrightness);
 
-    while (millis() - startTime < durationMs) {
+    while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
         uint32_t now = millis(); 
         uint32_t deltaMs = now - lastFrame;
         if (deltaMs == 0) { yield(); continue; }

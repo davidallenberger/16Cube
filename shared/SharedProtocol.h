@@ -40,6 +40,7 @@ namespace CubinaWire {
     };
     enum class Type : uint8_t { Status = 0, Audio = 1, Gamepads = 2, Depth = 3 };
     constexpr uint8_t SOURCE_READY = 1;
+    constexpr uint8_t PLAYBACK_HOLD = 2; // Temporary Depth-button debug latch.
     constexpr size_t DEPTH_BYTES = 16 * 16 * 16 / 8; // one occupancy BIT per voxel
     constexpr size_t HEADER_BYTES = 22;
     constexpr size_t MAX_PAYLOAD = DEPTH_BYTES;
@@ -102,7 +103,7 @@ namespace CubinaWire {
     }
     // Reject inconsistent types, lengths, or field values before publishing input.
     inline bool valid(const Packet &p) {
-        if (!validMode(uint8_t(p.mode)) || (p.flags & ~SOURCE_READY)) {
+        if (!validMode(uint8_t(p.mode)) || (p.flags & ~(SOURCE_READY | PLAYBACK_HOLD))) {
             return false;
         }
         switch (p.type) {

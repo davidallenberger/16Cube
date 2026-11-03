@@ -1,4 +1,5 @@
 #pragma once
+#include "TestDemo.h"
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "GeometryEngine.h"
@@ -66,7 +67,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
         
         TextureState tex(sMode, pal, 1.0f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             lastFrameTime = now;
@@ -98,7 +99,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
 
         TextureState tex(sMode, pal, 0.8f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             clearAll();
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
@@ -149,7 +150,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
 
         TextureState tex(sMode, pal, 0.8f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             lastFrameTime = now;
@@ -240,7 +241,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
             if (currentZ < -50.0f) { currentZ = 0.0f; break; } 
         }
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             lastFrameTime = now;
@@ -394,7 +395,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
 
         TextureState tex(sMode, pal, 1.66f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             lastFrameTime = now;
@@ -491,7 +492,7 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
         const float gravity = 38.0f * SYSTEM_ENERGY;     
         const float maxLateralSpeed = 8.0f * SYSTEM_ENERGY;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             if (deltaMs == 0) { yield(); continue; } 
@@ -583,7 +584,7 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
 
         TextureState tex(sMode, pal, 1.0f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             lastFrame = now;
@@ -709,7 +710,7 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
     static void animateFlyingBox(uint32_t durationMs, uint32_t speedMs) {
         uint32_t startTime = millis();
         
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             bool travel = (random8(2) == 0);
             RenderMode rMode = (RenderMode)random8(3);
             
@@ -779,7 +780,7 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
 
         float step = 0.5f;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             lastFrame = now;

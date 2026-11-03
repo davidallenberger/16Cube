@@ -22,6 +22,14 @@ int main(){
     }
     CommandState::publishAudio(live, 7);
     const CommandSnapshot beforeRepeat = CommandState::snapshot();
+    CommandState::togglePlaybackHold();
+    const CommandSnapshot held = CommandState::snapshot();
+    assert(held.playbackHeld);
+    assert(held.revision == beforeRepeat.revision);
+    assert(held.mode == beforeRepeat.mode);
+    assert(held.ready && held.audio.volumeRaw == 80);
+    CommandState::togglePlaybackHold();
+    assert(!CommandState::snapshot().playbackHeld);
     CommandState::repeatModeDemand();
     const CommandSnapshot afterRepeat = CommandState::snapshot();
     assert(afterRepeat.revision == beforeRepeat.revision + 1);

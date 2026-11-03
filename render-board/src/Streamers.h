@@ -1,8 +1,79 @@
 #pragma once
+#include "TestDemo.h"
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "AppMemory.h"
-#include "BpmRenderer.h"
+
+#include <math.h>
+
+// Shared geometry/drawing for timed Streamers and the audio-controlled wrapper.
+// These modes describe spatial arrangement, independently of musical timing.
+enum BpmSpatialMode { BPM_CHECKERBOARD = 0, BPM_SPHERE = 1, BPM_DIAGONAL = 2, BPM_HELIX = 3 };
+
+class BpmRenderer {
+  public:
+    // Caller owns a scratch byte per rendered voxel. Prepare once on entry,
+    // then retain the map for every frame. No allocation or task is created.
+    static void prepare(uint8_t *phaseMap, BpmSpatialMode mode) {
+        const float maxDist =
+            fmaxf(1.0f, sqrtf(RNDR_CX * RNDR_CX + RNDR_CY * RNDR_CY + RNDR_CZ * RNDR_CZ));
+        const uint8_t zStep = 256 / RNDR_Z;
+        const uint8_t diagStep = 256 / (RNDR_X + RNDR_Y + RNDR_Z);
+        size_t index = 0;
+
+        for (uint8_t z = 0; z < RNDR_Z; ++z) {
+            for (uint8_t y = 0; y < RNDR_Y; ++y) {
+                for (uint8_t x = 0; x < RNDR_X; ++x) {
+                    uint8_t spatial = 0;
+                    switch (mode) {
+                    case BPM_CHECKERBOARD:
+                        spatial = (x + y) % 2 == 0 ? z * zStep : 256 - z * zStep;
+                        break;
+                    case BPM_SPHERE: {
+                        const float dx = x - RNDR_CX;
+                        const float dy = y - RNDR_CY;
+                        const float dz = z - RNDR_CZ;
+                        spatial = uint8_t(sqrtf(dx * dx + dy * dy + dz * dz) / maxDist * 255.0f);
+                        break;
+                    }
+                    case BPM_DIAGONAL:
+                        spatial = (x + y + z) * diagStep;
+                        break;
+                    case BPM_HELIX: {
+                        const float angle = atan2f(y - RNDR_CY, x - RNDR_CX);
+                        spatial = uint8_t((angle + 3.14159f) * 40.74f) + z * zStep;
+                        break;
+                    }
+                    }
+                    phaseMap[index++] = spatial;
+                }
+            }
+        }
+    }
+
+    // brightnessOffset moves the density pattern; colorPhase moves the palette.
+    // Timed Streamers passes its legacy offsets. Audio supplies a phase driven
+    // by the musical clock, plus a slowly changing decorative palette phase.
+    static void draw(const uint8_t *phaseMap, const CRGBPalette16 &palette,
+                     uint8_t brightnessOffset, uint8_t colorPhase, uint8_t level = 255) {
+        size_t index = 0;
+        for (uint8_t z = 0; z < RNDR_Z; ++z) {
+            for (uint8_t y = 0; y < RNDR_Y; ++y) {
+                for (uint8_t x = 0; x < RNDR_X; ++x) {
+                    const uint8_t spatial = phaseMap[index++];
+                    uint8_t brightness = brightnessOffset + spatial;
+                    brightness = qsub8(brightness, 32);
+                    brightness = qadd8(brightness, brightness);
+                    brightness = uint8_t(uint16_t(brightness) * level / 255);
+                    const uint8_t colorIndex = colorPhase + (spatial >> 1);
+                    setVoxel(x, y, z,
+                             ColorFromPalette(palette, colorIndex, brightness, LINEARBLEND));
+                }
+            }
+        }
+    }
+};
+
 #include "GeometryEngine.h"
 
 enum BlackHoleOrbit {
@@ -121,7 +192,7 @@ class Streamers {
         for(int x = 0; x < RNDR_X; x++) { for(int y = 0; y < RNDR_Y; y++) { zPos[x][y] = RNDR_Z - 1.0f; state[x][y] = 0; } }
         bool returnPhase = false; int totalVoxels = RNDR_X * RNDR_Y;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             clearAll(); int atBottom = 0, atTop = 0, triggersPerFrame = max(1, totalVoxels / 30); 
             for(int i = 0; i < triggersPerFrame; i++) {
                 int rx = random8(RNDR_X), ry = random8(RNDR_Y);
@@ -180,7 +251,7 @@ class Streamers {
             lastFrame = now; float dt = deltaMs / 1000.0f;
             
             // Check the clock once per frame
-            bool timeIsUp = (now - startTime >= durationMs);
+            bool timeIsUp = !TestDemo::routineTimeRemaining(uint32_t(now - startTime), durationMs);
             
             fadeAll(75);
 
@@ -360,7 +431,7 @@ class Streamers {
 
                 if (!anyAlive || now - stateTimer > 4000) {
                     currentCycle++;
-                    if ((targetCycles > 0 && currentCycle >= targetCycles) || (targetCycles <= 0 && (millis() - startTime >= durationMs))) keepRunning = false;
+                    if ((!TestDemo::playbackHeld() && targetCycles > 0 && currentCycle >= targetCycles) || (targetCycles <= 0 && (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)))) keepRunning = false;
                     if (keepRunning) {
                         state = SPIRAL_IN; stateTimer = now;
                         angleA = 0.0f; angleB = PI; zA = RNDR_Z - 1.0f; zB = 0.0f; speed = TWO_PI * 0.5f;
@@ -380,7 +451,7 @@ class Streamers {
         uint8_t px[50], py[50], pz[50], pDir[50]; int activeCount = 0;
         for (uint8_t x = 0; x < RNDR_X; x++) { for (uint8_t y = 0; y < RNDR_Y; y++) { if (random8(7) == 0 && activeCount < 50) { px[activeCount] = x; py[activeCount] = y; pz[activeCount] = 0; pDir[activeCount] = random8(3); activeCount++; } } }
         clearAll(); 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now; masterHue -= 0.133f * deltaMs; 
             CRGB currentFrameColor = CHSV((uint8_t)masterHue, 255, 255);
             for (int i = 0; i < activeCount; i++) {
@@ -394,7 +465,7 @@ class Streamers {
 
   static void animateHula(uint32_t durationMs, uint32_t speedMs, CRGBPalette16 pal = RainbowColors_p, float revsPerSec = 1.5f) {
         uint32_t startTime = millis(), lastFrameTime = millis(); float globalAngle = 0.0f, colorPhase = 0.0f, midZ = (RNDR_Z - 1) / 2.0f;
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrameTime; lastFrameTime = now; clearAll();
             float s = sin(globalAngle), c = cos(globalAngle);
             for (int z = 0; z < RNDR_Z; z++) {
@@ -411,7 +482,7 @@ class Streamers {
         uint32_t startTime = millis(), lastFrameTime = millis(); float globalAngle = 0.0f, colorPhase = 0.0f;
         const int MAX_DEBRIS = 64; int numDebris = min((int)(RNDR_Z * 3), MAX_DEBRIS); float dZ[MAX_DEBRIS], dAng[MAX_DEBRIS], dRadOffset[MAX_DEBRIS], dSpeed[MAX_DEBRIS];
         for(int i = 0; i < numDebris; i++) { dZ[i] = random16(0, RNDR_Z * 10) / 10.0f; dAng[i] = random16(0, TWO_PI * 100) / 100.0f; dRadOffset[i] = random16(10, 20) / 10.0f; dSpeed[i] = random16(10, 30) / 10.0f; }
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrameTime; lastFrameTime = now; clearAll();
             float progress = (float)(now - startTime) / (float)durationMs, currentRevs = startingRevs * (1.0f + (progress * 2.5f)); 
             globalAngle += (currentRevs * TWO_PI) * (deltaMs / 1000.0f); colorPhase += 150.0f * (deltaMs / 1000.0f);
@@ -461,7 +532,7 @@ class Streamers {
         TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan();
         TextureState tex(plan.sMode, plan.palette, 1.0f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             if (deltaMs == 0) { yield(); continue; } 
@@ -620,7 +691,7 @@ class Streamers {
             blobs[i].hue = random8(); // Stagger initial thermal colors
         }
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             if (deltaMs == 0) { yield(); continue; }
@@ -794,7 +865,7 @@ class Streamers {
         
         for(int i = 0; i < 32; i++) { histX[i] = RNDR_CX; histY[i] = RNDR_CY; }
         
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             clearAll();
             masterPhase += 0.33f * deltaMs; 
@@ -856,7 +927,7 @@ class Streamers {
         float lagPerLayer = totalTwist / (RNDR_Z - 1);
         float spinSpeed = adjustedRps * 360.0f;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             clearAll();
             masterPhase += 0.33f * deltaMs; 
@@ -903,7 +974,7 @@ class Streamers {
         float dX[MAX_DROPS], dY[MAX_DROPS], dZ[MAX_DROPS];
         bool active[MAX_DROPS] = {false};
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
             clearAll();
             masterPhase += 0.33f * deltaMs;
@@ -1011,7 +1082,7 @@ class Streamers {
             }
         }
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             lastFrame = now;
@@ -1144,7 +1215,7 @@ class Streamers {
         
         float tBase = 0.0f;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; }
@@ -1303,7 +1374,7 @@ class Streamers {
             }
         }
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; }
@@ -1368,7 +1439,7 @@ class Streamers {
         BpmRenderer::prepare(phaseMap, mode);
         const uint32_t startTime = millis();
 
-        while (uint32_t(millis() - startTime) < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             const uint32_t now = millis();
             const uint8_t beat = beatsin8(bpm, 64, 255);
             const uint8_t timeBase = now / 15;
@@ -1386,7 +1457,7 @@ class Streamers {
         const unsigned numBirds = (RNDR_X > 8) ? 30 : 12;
         const uint32_t totalVoxels = RNDR_X * RNDR_Y * RNDR_Z;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame == 0) { yield(); continue; }
             lastFrame = now;
@@ -1458,7 +1529,7 @@ class Streamers {
         uint8_t speed = (effectSpeed / 16); 
         uint8_t hueBase = 0;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame == 0) { yield(); continue; }
             lastFrame = now;
@@ -1520,7 +1591,7 @@ class Streamers {
         uint8_t speed = (effectSpeed / 16); 
         uint8_t hueBase = 0;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame == 0) { yield(); continue; }
             lastFrame = now;
@@ -1575,7 +1646,7 @@ class Streamers {
         uint8_t fadeUpAmount = 8 + (effectSpeed >> 2);
         uint8_t fadeDownAmount = 8 + (effectSpeed >> 3);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame < 15) { yield(); continue; } 
             lastFrame = now;
@@ -1666,7 +1737,7 @@ class Streamers {
 
         float zFreq = TWO_PI / (RNDR_Z * 0.8f);
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; } 
@@ -1774,7 +1845,7 @@ class Streamers {
         static uint16_t angleX = 0, angleY = 0, angleZ = 0;
         static uint32_t masterSpin = 0;
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame < 15) { yield(); continue; }
             lastFrame = now;
@@ -1926,7 +1997,7 @@ class Streamers {
         int32_t cz_fp = (int32_t)(RNDR_CZ * 256.0f);
 
         // 2. THE RENDER ENGINE
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame < 15) { yield(); continue; }
             lastFrame = now;
@@ -1992,7 +2063,7 @@ class Streamers {
         // 800 points guarantees a solid, unbroken trace even on 4 strands
         const int numPoints = 800; 
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             if (now - lastFrame < 15) { yield(); continue; } // Cap at ~60fps
             lastFrame = now;
@@ -2050,7 +2121,7 @@ class Streamers {
         // Pre-allocate our Boolean gap arrays to keep the inner loop lightning fast
         bool gapX[RNDR_X], gapY[RNDR_Y], gapZ[RNDR_Z];
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); 
             if (now - lastFrame < 15) { yield(); continue; } 
             lastFrame = now;
@@ -2108,7 +2179,7 @@ class Streamers {
 
         uint8_t aX = 12, aY = 15, aZ = 18; 
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; } lastFrame = now;
 
@@ -2143,7 +2214,7 @@ static void animateSoapFilm3D(uint32_t durationMs, CRGBPalette16 pal = RainbowCo
         uint32_t startTime = millis(), lastFrame = millis(), noiseTime = 0;
         uint16_t scale = 1200; 
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; } lastFrame = now;
 
@@ -2179,7 +2250,7 @@ static void animateSoapFilm3D(uint32_t durationMs, CRGBPalette16 pal = RainbowCo
         float maxAllowedRadSq = (baseRadius + maxDisplacement) * (baseRadius + maxDisplacement);
         uint16_t scale = 1500; 
 
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
             if (deltaMs == 0) { yield(); continue; } lastFrame = now;
 

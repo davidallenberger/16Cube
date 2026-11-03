@@ -1,3 +1,4 @@
+#include "TestDemo.h"
 #include "Letters.h"
 #include "CubeCore.h"
 #include "Icons.h"
@@ -177,8 +178,8 @@ namespace Letters
         while (true)
         {
             // Evaluate Exit Conditions
-            if (durationMs > 0 && (millis() - startTime >= durationMs)) break;
-            if (iterations > 0 && currentIteration >= iterations) break;
+            if (durationMs > 0 && (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs))) break;
+            if (!TestDemo::playbackHeld() && iterations > 0 && currentIteration >= iterations) break;
 
             clearAll();
 

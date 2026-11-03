@@ -1,3 +1,4 @@
+#include "TestDemo.h"
 #include "Icons.h"
 #include "CubeCore.h"
 #include "icons.h"
@@ -159,7 +160,7 @@ void scrollIcons(const char* iconString, uint32_t durationMs, uint8_t scrollDela
 
   // CONTINUOUS LOOPING ENGINE
   while (true) {
-    if (durationMs > 0 && (millis() - startTime >= durationMs)) break;
+    if (durationMs > 0 && (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs))) break;
 
     clearAll();
     

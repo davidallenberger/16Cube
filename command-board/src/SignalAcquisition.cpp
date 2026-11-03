@@ -1135,7 +1135,9 @@ namespace {
                     demand(Mode::Game);
                     break;
                 case 4:
-                    demand(Mode::Depth);
+                    // Temporary debugging: Depth is now a Hold toggle.
+                    // Keep acquisition and the current audio source running.
+                    CommandState::togglePlaybackHold();
                     break;
                 }
             }

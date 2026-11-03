@@ -1,5 +1,4 @@
 #include "TestDemo.h"
-#include "PlaybackDeck.h"
 #include "Audio.h"
 
 namespace {
@@ -12,7 +11,8 @@ namespace {
     // THE APPROVED AUDIO DECK. Set enabled=false to leave a work-in-progress
     // routine out of unattended playback. Its Audio:: method can still exist
     // and be called directly. These entries NEVER mix with the normal deck.
-    // Existing entries start enabled to preserve the current available set.
+    // Add new routines at the TOP: sequential playback starts with the first
+    // enabled entry after a flash, ready for the debug Hold button.
     const AudioRoutine audioRoutines[] = {
         {true, "Puddles Horizontal", &Audio::animatePuddles},
         {true, "Puddles Vertical", &Audio::animatePuddlesVertical},
@@ -24,7 +24,7 @@ namespace {
         {true, "BPM Checkerboard", &Audio::animateBpmCheckerboard},
         {true, "BPM Diagonal", &Audio::animateBpmDiagonal},
         {true, "BPM Helix", &Audio::animateBpmHelix},
-        {true, "Attack Monitor", &Audio::animateAttackMonitor},
+        {false, "Attack Monitor", &Audio::animateAttackMonitor},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;
@@ -95,7 +95,7 @@ bool TestDemo::audioRoutineRunning() {
         return false;
     }
     const uint32_t duration = audioPlayback().durationMs;
-    return duration == 0 || uint32_t(millis() - audioStartedMs) < duration;
+    return duration == 0 || routineTimeRemaining(uint32_t(millis() - audioStartedMs), duration);
 }
 
 void TestDemo::stopPlayback() {

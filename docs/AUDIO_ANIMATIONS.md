@@ -1,20 +1,19 @@
 # Cubina audio animation handoff
 
-Work from the current pushed main branch of davidallenberger/16Cube. Inspect
-its actual source rather than rebuilding a parallel audio interface. The
-playback refactor was prepared from 32b70f1c994be3b0543e229b878c1ff93d2113a6;
-its later tested commit will be the new baseline once installed and pushed.
+Work from the actual local checkout of davidallenberger/16Cube, checking HEAD
+and local modifications before editing. Preserve unpushed work. Inspect its
+source rather than rebuilding a parallel audio interface.
 
 ## Ownership
 
 - command-board acquires PCM1808/I2S-microphone samples and produces volume,
   sixteen frequency bands, kick/general-attack events, and estimated tempo.
-- main-render-board draws the selected program. Audio and normal animation are
+- render-board draws the selected program. Audio and normal animation are
   separate top-level decks. They NEVER intermix, run concurrently, or create
   another rendering task.
 - TestDemo owns playback. TestDemo.cpp retains normal art/billboard scheduling;
   TestDemoAudio.cpp owns the approved audio list, selected entry, shuffle and
-  timer. PlaybackDeck.h provides their common bounded shuffle/selection tools.
+  timer. TestDemo.h contains their common bounded shuffle/selection tools.
 - Audio.cpp/Audio.h contain static visualization methods, artistic controls,
   icon drawing and readable debug. Effects have no playlist or selected index.
 - UARTReceiver/AudioFrame/AudioFrameClock own packet interpretation, consistent
@@ -113,10 +112,61 @@ arena/task/buffer sizes unless explicitly investigating them. Calibrate source
 gain on command-board; tune artistic response separately in each effect.
 Prefer clear comments, expanded formatting, one statement per line, no space
 between a function name and '('. Avoid per-voxel expensive trig/sqrt where
-precomputation or existing helpers suffice. Inspect CubeCore, BpmRenderer,
-TextureEngine, Streamers and Surfaces for the drawing conventions.
+precomputation or existing helpers suffice. Inspect CubeCore, TextureEngine, Streamers (including its shared BPM renderer)
+and Surfaces for the drawing conventions.
 
 Run bash tests/check.sh after relevant changes. Host checks simulate input and
 time; they do not prove ESP32 timing or physical appearance. Purpose-built
 single-dimension visuals should make it easy to hear/see the causal connection
 before combining volume, frequency, attacks and tempo into richer artwork.
+
+
+## Temporary debug Hold
+
+The command-board Depth / motion-capture button toggles a boolean Hold latch.
+It no longer selects depth acquisition. Both boards must run the matching
+firmware: the UART header now admits the PLAYBACK_HOLD flag. Source selection,
+source readiness, calibration and mode revision are unchanged by this toggle.
+
+Hold keeps the current audio or normal animation routine moving, suppressing
+its automatic duration/cycle exit. Finite normal shows repeat the same scene.
+Manual Next and source/mode buttons still work, and Hold applies to the next
+selected playlist routine until toggled off. On release, an expired routine
+finishes at its next normal exit check. Link loss releases the render latch;
+reconnection restores the command board's boolean. Games/menu are unaffected.
+The command board starts with Hold off on boot.
+
+Add new audio routines at the top of audioRoutines in TestDemoAudio.cpp. The
+first enabled entry starts first after render boot in sequential order; Hold
+makes it available for extended inspection. Preserve disabled entries unless
+explicitly enabling them for playback.
+
+## Fixed-size helper storage
+
+These helpers predate the parameterized drawing engine. They use logical
+coordinates and do not bypass spacer mapping. Hardware will never exceed 16
+voxels on any axis, so the existing 16-element caches are intentional capacity
+limits and do not need expansion:
+
+- TextureState in TextureEngine.h caches hue, RGB distortion waves and squared
+  distances in 16-element arrays per axis. Caching avoids repeating shader
+  calculations at every voxel. Both 16x16x16 and 10x10x16 canvases fit.
+- Streamers::animateRandomFall uses 16x16 position/state arrays for XY columns.
+  Planes::animateSplat uses a 16x16 travel-distance map for the two face axes.
+  Their active loops use logical dimensions, with unused cache capacity on
+  smaller canvases.
+- Games/Tetris.cpp has 16-entry layer-fill scratch arrays and a 16x16x16
+  game-over occupancy snapshot. Tetris also has deliberate 8x8 logical-board
+  rules. Games/Tetris2d.h contains an 8x16 board; these are game-specific
+  dimensions, not requests to support larger hardware.
+
+Not every literal 16 is a canvas assumption: FFT bands, palette entries,
+font/icon bitmap widths and bounded deck capacities describe other data.
+This cleanup documents these limits without changing shader math, game rules
+or memory allocations.
+
+## Cleanup validation
+
+Both board firmware builds, the full host test suite and rendering regressions
+passed. On November 3, 2026, the user confirmed that hardware tests pass for
+this cleanup and the temporary Hold behavior.

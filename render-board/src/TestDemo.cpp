@@ -1,14 +1,13 @@
 #include "TestDemo.h"
 #include "CubeCore.h"
-#include "PlaybackDeck.h"
 #include "SpacerCheck.h"
 #include "Planes.h"
 #include "Letters.h"
 #include "Icons.h"
-#include "Rubiks.h" 
+#include "Games/Rubiks.h"
 #include "GeometryEngine.h"
 #include "TextureEngine.h"
-#include "Tetris.h"
+#include "Games/Tetris.h"
 #include "Shapes.h"
 #include "Surfaces.h"
 #include "Streamers.h"
@@ -749,7 +748,11 @@ namespace TestDemo {
 
         animationSceneActive = true;
         animationSceneOrdered = isTestMode;
-        renderScene(concept, shape, motion, rMode, sModeTracker, pal, stretch, durationMs, isTestMode, currentStep, totalSteps);
+        // Finite shows (for example Rubiks) may return without a duration
+        // loop. While held, repeat this same selected scene and its parameters.
+        do {
+            renderScene(concept, shape, motion, rMode, sModeTracker, pal, stretch, durationMs, isTestMode, currentStep, totalSteps);
+        } while (TestDemo::playbackHeld());
         animationSceneActive = false;
 
         if (isTestMode) {

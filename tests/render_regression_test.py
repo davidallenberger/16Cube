@@ -14,7 +14,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'main-render-board/src'
+SOURCE = ROOT / 'render-board/src'
 COMPILER = os.environ.get('CXX', 'g++')
 
 
@@ -35,6 +35,7 @@ def function(text, signature):
 
 
 BALL_HARNESS = r'''
+#include "TestDemo.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>

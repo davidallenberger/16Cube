@@ -2,7 +2,7 @@
 // mapping and physical strip arrays. It checks the values handed to FastLED,
 // including the sacrificial/spacer LEDs that must remain completely black.
 #include "CubeCore.cpp"
-#include "BpmRenderer.h"
+#include "Streamers.h"
 #include <array>
 #include <cassert>
 #include <cstdio>

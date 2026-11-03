@@ -168,6 +168,34 @@ int main(){
     CubeSystem::frameCheckpoint();
     assert(audioAdvanceRequests == 0);
 
+    // Hold is absolute packet state, independent of source demand revision.
+    // Repeated heartbeats cannot restart/advance or accidentally toggle it.
+    p.flags = PLAYBACK_HOLD;
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(TestDemo::playbackHeld());
+    assert(RemoteInputs::control().playbackHeld);
+    assert(audioAdvanceRequests == 0);
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(TestDemo::playbackHeld());
+    assert(audioAdvanceRequests == 0);
+    clockMs += 1001;
+    CubeSystem::frameCheckpoint();
+    assert(!TestDemo::playbackHeld());
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(TestDemo::playbackHeld());
+    p.flags = 0;
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(!TestDemo::playbackHeld());
+    assert(audioAdvanceRequests == 0);
+
     // A repeated source demand asks the managed effect to return, once.
     // Audio does NOT longjmp/restart its OS app for this ordinary advance.
     ++p.sequence;

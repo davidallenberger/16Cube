@@ -50,6 +50,12 @@ int main () {
     source.session = 123;
     source.revision = 7;
     source.ready = true;
+    source.playbackHeld = true;
+    const auto heldPacket = makePacket(source, false, false, 1);
+    assert(heldPacket.flags == (CubinaWire::SOURCE_READY | CubinaWire::PLAYBACK_HOLD));
+    assert(heldPacket.mode == source.mode && heldPacket.modeRevision == source.revision);
+    assert(CubinaWire::valid(heldPacket));
+    source.playbackHeld = false;
     source.audio.mode = 2;
     source.audio.beat = 0;
     source.audio.volumeRaw = 90;

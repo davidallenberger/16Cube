@@ -396,7 +396,10 @@ int main() {
         "Puddle Peak Horizontal", "Puddle Peak Vertical", "Puddle Peak Cubes",
         "BPM Sphere", "BPM Checkerboard", "BPM Diagonal", "BPM Helix", "Attack Monitor"
     };
-    for (unsigned entry = 0; entry < 11; ++entry) {
+    for (unsigned entry = 0; entry < AUDIO_ROUTINE_COUNT; ++entry) {
+        if (!audioRoutines[entry].enabled) {
+            continue;
+        }
         makeStream();
         assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[entry]) == 0);
         render(&TestDemo::runAudio);

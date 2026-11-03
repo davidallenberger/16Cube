@@ -97,3 +97,9 @@ CommandSnapshot CommandState::takeForSend(bool consumeAudio) {
     xSemaphoreGive(mutex);
     return s;
 }
+
+void CommandState::togglePlaybackHold() {
+    xSemaphoreTake(mutex, portMAX_DELAY);
+    state.playbackHeld = !state.playbackHeld;
+    xSemaphoreGive(mutex);
+}

@@ -1,4 +1,5 @@
 #pragma once
+#include "TestDemo.h"
 #include "CubeCore.h"
 #include "TextureEngine.h"
 
@@ -58,12 +59,12 @@ public:
         uint8_t xIdx = pickEdge(0), yIdx = pickEdge(1), zIdx = pickEdge(2);
         
         uint32_t startTime = millis();
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint8_t xTarget = (getDimSize(0) - 1) - xIdx; sweepAxisWithStatics(0, xIdx, xTarget, xIdx, yIdx, zIdx, tX, tY, tZ, speedMs); xIdx = xTarget;
-            if (millis() - startTime >= durationMs) break;
+            if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             
             uint8_t yTarget = (getDimSize(1) - 1) - yIdx; sweepAxisWithStatics(1, yIdx, yTarget, xIdx, yIdx, zIdx, tX, tY, tZ, speedMs); yIdx = yTarget;
-            if (millis() - startTime >= durationMs) break;
+            if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             
             uint8_t zTarget = (getDimSize(2) - 1) - zIdx; sweepAxisWithStatics(2, zIdx, zTarget, xIdx, yIdx, zIdx, tX, tY, tZ, speedMs); zIdx = zTarget;
         }
@@ -75,7 +76,7 @@ public:
         //TexturePlan plan = {sMode, pal};
         
         uint32_t startTime = millis();
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             TexturePlan plan  = PaletteUtils::getRandomTexturePlan();
             TextureState tex(plan.sMode, plan.palette, 1.0f);
             
@@ -107,7 +108,7 @@ public:
                     }
                 }
                 showCube(); tex.advance(deltaMs); if (normalizedDelayMs > 0) delay(normalizedDelayMs); yield();
-                if (millis() - startTime >= durationMs) break; 
+                if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             }
             f_axis = pin_axis; f_pos = pin_pos;
         }
@@ -115,7 +116,7 @@ public:
 
     static void animateSplat(uint32_t durationMs, uint32_t speedMs=0) {    
         uint32_t startTime = millis();
-        while (millis() - startTime < durationMs) {
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             TexturePlan plan= PaletteUtils::getRandomTexturePlan();
             TextureState tex(plan.sMode, plan.palette, 1.0f);
             
@@ -137,9 +138,9 @@ public:
                     }
                 }
                 showCube(); tex.advance(deltaMs); if (speedMs > 0) delay(speedMs); yield(); 
-                if (millis() - startTime >= durationMs) break;
+                if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             }
-            if (millis() - startTime >= durationMs) break;
+            if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
 
             for(int p = 0; p < 15; p++) { 
                 uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
@@ -152,9 +153,9 @@ public:
                     }
                 }
                 showCube(); tex.advance(deltaMs); delay(max(speedMs, 20U)); 
-                if (millis() - startTime >= durationMs) break;
+                if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             }
-            if (millis() - startTime >= durationMs) break;
+            if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
 
             for (uint8_t step = 0; step <= max_pos; step++) {
                 uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
@@ -168,9 +169,9 @@ public:
                     }
                 }
                 showCube(); tex.advance(deltaMs); if (speedMs > 0) delay(speedMs); yield(); 
-                if (millis() - startTime >= durationMs) break;
+                if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             }
-            if (millis() - startTime >= durationMs) break;
+            if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
 
             for(int p = 0; p < 15; p++) { 
                 uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
@@ -182,7 +183,7 @@ public:
                     }
                 }
                 showCube(); tex.advance(deltaMs); delay(max(speedMs, 20U)); 
-                if (millis() - startTime >= durationMs) break;
+                if (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) break;
             }
         }
     }

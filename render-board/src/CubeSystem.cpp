@@ -5,14 +5,14 @@
 #include "Audio.h"
 #include "Depth.h"
 #include "UARTReceiver.h"
-#include "Tetris.h"
-#include "Tetris2d.h"
-#include "Rubiks.h"
-#include "Breakout.h"
-#include "Breakout2d.h"
-#include "Snake.h"
-#include "Snake2d.h"
-#include "Asteroids3d.h"
+#include "Games/Tetris.h"
+#include "Games/Tetris2d.h"
+#include "Games/Rubiks.h"
+#include "Games/Breakout.h"
+#include "Games/Breakout2d.h"
+#include "Games/Snake.h"
+#include "Games/Snake2d.h"
+#include "Games/Asteroids3d.h"
 
 SystemState CubeSystem::currentState = SYS_STATE_RUN_APP;
 int16_t CubeSystem::selectedMenuIndex = 0;
@@ -132,6 +132,9 @@ void CubeSystem::changeState(SystemState s) {
     // Cancel the old playback context before an app escape, preserving its
     // selected routine. A same-source audio advance does not change OS state.
     TestDemo::stopPlayback();
+    if (s != SYS_STATE_RUN_APP || (selectedMenuIndex != 0 && selectedMenuIndex != AUDIO_APP)) {
+        TestDemo::playbackHeld() = false;
+    }
     currentState = s;
     stateTimer = millis();
     menuNeedsRedraw = true;
@@ -154,6 +157,16 @@ void CubeSystem::frameCheckpoint() {
     // app must start with the new source's frame, not the preceding source.
     // This also advances the single musical clock once for the drawing pass.
     const RemoteInputs::Control c = RemoteInputs::beginFrame();
+
+    // Hold is independent of mode revision: heartbeat repetition must never
+    // advance/restart a routine or toggle the latch. Link loss releases it.
+    // Restrict it to playlists so short menu-icon drawing calls still return.
+    const bool hold = c.linked && c.playbackHeld && currentState == SYS_STATE_RUN_APP &&
+                      (selectedMenuIndex == 0 || selectedMenuIndex == AUDIO_APP);
+    if (TestDemo::playbackHeld() != hold) {
+        TestDemo::playbackHeld() = hold;
+        Serial.printf("Playback hold: %s\r\n", hold ? "ON" : "OFF");
+    }
 
     // A linked command is new to us if this is the first one, the command
     // board rebooted (session changed), or another mode demand was issued

@@ -1,3 +1,4 @@
+#include "TestDemo.h"
 #include "Tetris.h"
 #include "UARTReceiver.h"
 
@@ -251,7 +252,7 @@ void Tetris::animate(uint32_t durationSeconds, SimSpeed speed) {
     bagIndex = 7; 
     uint8_t snagCount = 0; 
 
-    while (millis() - startTime < durationMs) {
+    while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
         unsigned long now = millis();
 
         if (!isActive) {

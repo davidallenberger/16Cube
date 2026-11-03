@@ -10,6 +10,7 @@ struct CommandSnapshot {
     uint32_t capturedMs = 0;
     uint32_t beats = 0;
     bool ready = false;
+    bool playbackHeld = false;
     AudioPayload audio = {};
     GamepadState pads[2];
     uint32_t presses[2] = {};
@@ -22,6 +23,7 @@ namespace CommandState {
     // readiness, capture time, and pending input events. Acquisition task only.
     void repeatModeDemand();
     void setReady(bool ready);
+    void togglePlaybackHold(); // Keeps the selected source and demand revision.
     void publishAudio(const AudioPayload &, uint32_t beatCount);
     void publishGamepads(const GamepadState &, const GamepadState &);
     void publishDepth(const uint8_t *bits);

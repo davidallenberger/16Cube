@@ -10,11 +10,11 @@ if [[ "$(uname -s)" == Darwin ]]; then
 else
     discard_unused=(-Wl,--gc-sections)
 fi
-if [[ -d command-board/src && -d main-render-board/src ]]; then
+if [[ -d command-board/src && -d render-board/src ]]; then
     command_src="$root/command-board/src"
     command_include="$root/command-board/include"
-    render_src="$root/main-render-board/src"
-    render_include="$root/main-render-board/include"
+    render_src="$root/render-board/src"
+    render_include="$root/render-board/include"
 elif [[ -d command && -d render ]]; then
     # Also support running the tests in the original extracted migration archive.
     command_src="$root/command"
@@ -22,7 +22,7 @@ elif [[ -d command && -d render ]]; then
     render_src="$root/render"
     render_include="$root/render"
 else
-    echo 'Place tests/ beside command-board/, main-render-board/, and shared/.' >&2
+    echo 'Place tests/ beside command-board/, render-board/, and shared/.' >&2
     exit 1
 fi
 [[ -f shared/SharedProtocol.h ]] || { echo 'Missing shared/SharedProtocol.h' >&2; exit 1; }
@@ -51,7 +51,10 @@ stage "$command_src" "$command_include" "$work/command" \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    TestDemo.h TestDemoAudio.cpp PlaybackDeck.h SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
+    TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h Depth.cpp Depth.h
+# Compile the production BPM section co-resident in Streamers.h. Full
+# Streamers effects require the ESP32/FastLED build, verified separately.
+sed '/^#include "GeometryEngine.h"/,$d' "$render_src/Streamers.h" > "$work/render/Streamers.h"
 common=(-DCUBINA_ENABLE_UART_RECEIVER=1 -std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"
@@ -149,8 +152,8 @@ ASAN_OPTIONS=detect_leaks=0 "$work/audio_frame_test"
     tests/audio_deck_test.cpp -o "$work/audio_deck_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/audio_deck_test"
 
-# Firmware's standalone switch defaults to OFF for the experiment. Existing
-# receiver tests above explicitly exercise the unchanged enabled backend.
+# Verify the optional standalone receiver backend independently. Firmware
+# retains the tested UART-enabled configuration.
 # This separate OFF test defines no Serial/Serial2, millis or FreeRTOS symbols:
 # an accidental dependency on those services makes the link fail.
 "$CXX" "${common[@]}" -UCUBINA_ENABLE_UART_RECEIVER -DCUBINA_ENABLE_UART_RECEIVER=0 \

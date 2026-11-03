@@ -40,7 +40,8 @@ namespace {
         packet.modeRevision = state.revision;
         packet.sequence = sequence;
         packet.capturedMs = state.capturedMs;
-        packet.flags = state.ready ? SOURCE_READY : 0;
+        packet.flags = (state.ready ? SOURCE_READY : 0) |
+                       (state.playbackHeld ? PLAYBACK_HOLD : 0);
 
         // Every packet carries mode authority. The first packet for a new
         // demand can be a Status packet; the next data packet follows on
@@ -74,6 +75,7 @@ namespace {
     void task (void *) {
         uint32_t sequence = 0;
         uint32_t seenRevision = 0;
+        bool seenHold = false;
         SendTiming::Deadline dataDeadline;
         SendTiming::Deadline statusDeadline;
         SendTiming::Deadline packetDeadline;
@@ -97,7 +99,7 @@ namespace {
             const bool carriesData =
                 audioMode (view.mode) || view.mode == Mode::Game || view.mode == Mode::Depth;
             const bool dataDue = carriesData && freshSource (view) && dataDeadline.due (now);
-            const bool statusDue = changed || statusDeadline.due (now);
+            const bool statusDue = changed || view.playbackHeld != seenHold || statusDeadline.due (now);
 
             if (!dataDue && !statusDue) {
                 vTaskDelay (1);
@@ -145,6 +147,7 @@ namespace {
                 const uint32_t submittedAt = micros();
                 packetDeadline.restart(submittedAt, MINIMUM_PACKET_INTERVAL_US);
                 seenRevision = state.revision;
+                seenHold = state.playbackHeld;
                 statusDeadline.restart(submittedAt, SendTiming::StatusPeriodUs);
 
                 if (packet.type != Type::Status) {

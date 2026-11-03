@@ -3,7 +3,7 @@
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "UARTReceiver.h"
-#include "BpmRenderer.h"
+#include "Streamers.h"
 
 // Static animation collection, like Streamers and Surfaces. Implementations
 // are grouped in Audio.cpp; callers do not need to construct an Audio object.
