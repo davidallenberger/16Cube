@@ -29,21 +29,13 @@ class Audio {
     };
     static Controls &controls();
 
-    // Run the selected entry in the audio routine list. It remains selected
-    // when acquisition switches between microphone and the wired ADC input.
-    static void run();
+    // TestDemo owns playback. These methods draw effects and can also be
+    // called directly for isolated development outside a managed deck.
     static void renderIcon(TextureState &texture);
 
-    // Called by CubeSystem on the animation task BEFORE escaping the old
-    // routine. Advance once and wrap at the end of the list. This method
-    // changes the selection only; run() launches it after the old app exits.
-    static void nextRoutine();
-
-    // Readable selection for diagnostics; render task only, like run/next.
-    static const char *currentRoutineName();
-
-    // Current default effect. Each invocation starts its animation state anew.
-    // It runs until the existing CubeSystem checkpoint exits the active app.
+    // Each invocation starts its effect state anew. In the managed audio
+    // deck, TestDemo ends it on a timer/button. Direct calls are untimed;
+    // CubeSystem's existing checkpoint still handles mode/source escapes.
     static void animatePuddles();
 
     // Event-driven variant: a bass, midrange or treble attack starts a burst
@@ -79,14 +71,4 @@ class Audio {
     // same audio values that produced this frame.
     static void debug(const RemoteInputs::AudioFrame &audio);
 
-  private:
-    struct Routine {
-        const char *name;
-        void (*run)();
-    };
-
-    // The list and selection live in method-local static storage. They belong
-    // only to the animation task, so the UART task needs no access or mutex.
-    static const Routine *routineList(size_t &count);
-    static size_t &selectedRoutineIndex();
 };

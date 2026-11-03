@@ -1,5 +1,5 @@
 #include "Audio.h"
-#include "CubeSystem.h"
+#include "TestDemo.h"
 #include "AppMemory.h"
 #include <math.h>
 #include <cmath>
@@ -8,77 +8,11 @@
 #define AUDIO_SERIAL_DEBUG 1
 #endif
 
-// This is the audio routine list. Add each future routine here in the
-// desired button order, with its readable name and static method address.
-// Calling a named method directly still works; it does not change this list's
-// selection. Each animation continues to own its own local working state.
-const Audio::Routine *Audio::routineList(size_t &count) {
-    static const Routine routines[] = {
-        {"Puddles Horizontal", &Audio::animatePuddles},
-        {"Puddles Vertical", &Audio::animatePuddlesVertical},
-        {"Puddles Cubes", &Audio::animatePuddlesCubes},
-        {"Puddle Peak Horizontal", &Audio::animatePuddlePeak},
-        {"Puddle Peak Vertical", &Audio::animatePuddlePeakVertical},
-        {"Puddle Peak Cubes", &Audio::animatePuddlePeakCubes},
-        {"BPM Sphere", &Audio::animateBpmSphere},
-        {"BPM Checkerboard", &Audio::animateBpmCheckerboard},
-        {"BPM Diagonal", &Audio::animateBpmDiagonal},
-        {"BPM Helix", &Audio::animateBpmHelix},
-        {"Attack Monitor", &Audio::animateAttackMonitor},
-    };
-
-    count = sizeof(routines) / sizeof(routines[0]);
-    return routines;
-}
-
 Audio::Controls &Audio::controls() {
     // Future menus may update these on the animation task. They are not UART
     // globals and must not be mutated concurrently by another task.
     static Controls settings;
     return settings;
-}
-
-size_t &Audio::selectedRoutineIndex() {
-    // Playback selection, not animation state. It survives app exits so a
-    // source change can restart the SAME visualization with different audio.
-    // This is render-task-owned state; the receiver never changes it.
-    static size_t selectedIndex = 0;
-    return selectedIndex;
-}
-
-void Audio::nextRoutine() {
-    size_t count = 0;
-    routineList(count);
-
-    size_t &selectedIndex = selectedRoutineIndex();
-    selectedIndex = (selectedIndex + 1) % count;
-}
-
-const char *Audio::currentRoutineName() {
-    size_t count = 0;
-    const Routine *routines = routineList(count);
-    return routines[selectedRoutineIndex() % count].name;
-}
-
-// CubeSystem calls this entry point after choosing audio mode. No timer or
-// automatic selection change is introduced: unattended playback stays on the
-// selected effect. A repeated demand for the same source selects the next
-// effect in frameCheckpoint(), exits the old app, and then calls run() again.
-void Audio::run() {
-    size_t count = 0;
-    const Routine *routines = routineList(count);
-    const Routine &routine = routines[selectedRoutineIndex() % count];
-
-    Serial.printf("Audio routine: %s\r\n", routine.name);
-
-    // The current effects run indefinitely and call showCube() regularly.
-    // If a future effect returns, restart it here instead of unexpectedly
-    // dropping unattended playback into CubeSystem's game menu.
-    for (;;) {
-        routine.run();
-        CubeSystem::frameCheckpoint();
-        delay(1);
-    }
 }
 
 void Audio::renderIcon(TextureState &) {
@@ -140,7 +74,7 @@ void Audio::debug(const RemoteInputs::AudioFrame &audio) {
             text, sizeof(text),
             "Audio: source=%s routine=%s linked=%u VRaw=%u VSm=%u VAvg=%u "
             "BPM=%.1f Bass=%u Mid=%u High=%u RXok=%lu RXbad=%lu\r\nBins:[",
-            source, currentRoutineName(), unsigned(control.linked),
+            source, TestDemo::currentAudioRoutineName(), unsigned(control.linked),
             unsigned(audio.volumeRaw), unsigned(audio.volumeSm), unsigned(audio.volumeAvg),
             double(audio.bpm), unsigned(audio.bassKick), unsigned(audio.midAttack),
             unsigned(audio.highAttack), (unsigned long)stats.accepted,
@@ -225,7 +159,7 @@ void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8
     uint32_t lastSpawn = millis();
     uint8_t hue = 0;
 
-    for (;;) {
+    while (TestDemo::audioRoutineRunning()) {
         const uint32_t now = millis();
         const uint32_t elapsed = uint32_t(now - lastFade);
 
@@ -336,7 +270,7 @@ void Audio::animateBpmSphere() {
 void Audio::animateAttackMonitor() {
     uint32_t flashStarted = 0;
     bool flashing = false;
-    for (;;) {
+    while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio(controls().attackSensitivity);
         const uint32_t now = millis();
         if (audio.bassKick || audio.midAttack || audio.highAttack) {
@@ -384,7 +318,7 @@ void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
     uint8_t *phaseMap = reinterpret_cast<uint8_t *>(SharedAppMemory);
     BpmRenderer::prepare(phaseMap, mode);
 
-    for (;;) {
+    while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio();
         Audio::debug(audio);
 

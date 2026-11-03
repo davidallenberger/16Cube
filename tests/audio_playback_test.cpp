@@ -1,9 +1,12 @@
 #include "UARTReceiver.cpp"
 #include "Audio.cpp"
+#include "TestDemoAudio.cpp"
 #include <cassert>
 #include <cstdio>
 #include <vector>
 #include <cstring>
+#include <string>
+#include <limits>
 
 SerialStub Serial;
 SerialStub Serial2;
@@ -47,6 +50,8 @@ static std::vector<Input> input;
 static void receiveFrame();
 static std::vector<unsigned> lineFrames;
 static std::vector<unsigned> writeCounts;
+static std::vector<std::string> routineNames;
+static unsigned buttonFrame = std::numeric_limits<unsigned>::max();
 static uint8_t scratch[RNDR_X * RNDR_Y * RNDR_Z];
 uint8_t *SharedAppMemory = scratch;
 
@@ -105,6 +110,10 @@ void fadeAll(uint8_t) {
 }
 
 void showCube() {
+    routineNames.push_back(TestDemo::currentAudioRoutineName());
+    if (frame == buttonFrame) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
     if (voxelsThisFrame) {
         if (lineFrames.empty()) {
             firstExtents[0] = maxX - minX + 1;
@@ -132,7 +141,10 @@ void showCube() {
     receiveFrame();
 }
 
-void CubeSystem::frameCheckpoint() {
+void TestDemo::Detail::advanceAnimation() {
+}
+
+void TestDemo::Detail::stopAnimation() {
 }
 
 static void receiveFrame() {
@@ -150,6 +162,7 @@ static void receiveFrame() {
 }
 
 static void render(void (*routine)()) {
+    TestDemo::stopPlayback();
     clockMs = initialClock;
     frame = 0;
     ++session;
@@ -160,6 +173,7 @@ static void render(void (*routine)()) {
     litVoxels = 0;
     lineFrames.clear();
     writeCounts.clear();
+    routineNames.clear();
     brightnessFrames.clear();
     frameBrightness = 0;
     firstCount = 0;
@@ -384,11 +398,46 @@ int main() {
     };
     for (unsigned entry = 0; entry < 11; ++entry) {
         makeStream();
-        assert(std::strcmp(Audio::currentRoutineName(), names[entry]) == 0);
-        render(&Audio::run);
+        assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[entry]) == 0);
+        render(&TestDemo::runAudio);
         assert(((entry >= 3 && entry <= 5) || entry == 10) ? lineFrames.empty() : !lineFrames.empty());
-        Audio::nextRoutine();
+        TestDemo::requestNext(TestDemo::Deck::Audio);
     }
-    assert(std::strcmp(Audio::currentRoutineName(), names[0]) == 0);
+    assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) == 0);
+    // Actual effects return to the actual TestDemo player on expiry. This
+    // crosses the real player/receiver/effect boundary, rather than testing
+    // only a fake timer callback or a separate selection helper.
+    makeStream(32);
+    TestDemo::audioPlayback().durationMs = 64;
+    render(&TestDemo::runAudio);
+    assert(routineNames[0] == "Puddles Horizontal");
+    assert(routineNames[3] == "Puddles Horizontal");
+    assert(routineNames[4] == "Puddles Vertical");
+    assert(routineNames[8] == "Puddles Cubes");
+    TestDemo::stopPlayback();
+    while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
+
+    // A press at the deadline is still ONE step. Then hold mode preserves
+    // the next real effect indefinitely without restarting it every frame.
+    makeStream(16);
+    buttonFrame = 3;
+    render(&TestDemo::runAudio);
+    assert(routineNames[4] == "Puddles Vertical");
+    TestDemo::stopPlayback();
+    while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
+    TestDemo::audioPlayback().durationMs = 0;
+    buttonFrame = 1;
+    render(&TestDemo::runAudio);
+    assert(routineNames[0] == "Puddles Horizontal");
+    assert(routineNames[1] == "Puddles Horizontal");
+    for (unsigned i = 2; i < routineNames.size(); ++i) {
+        assert(routineNames[i] == "Puddles Vertical");
+    }
+    buttonFrame = std::numeric_limits<unsigned>::max();
+
     puts("Audio playback passed: real receiver/frame adapter, shared events, sensitivity, geometry, canvas-scaled density/placement/work bounds, playlist wrapping, musical/idle/stale BPM.");
 }

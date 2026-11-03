@@ -1,5 +1,19 @@
 #pragma once
 
+// STANDALONE RENDER TEST: change ONLY this switch, then rebuild/flash render.
+// 0: compile out the board-to-board UART2 receiver and return neutral inputs.
+//    No receiver task, receive mutex, RX buffer, parser, or UART2 begin/read/write.
+// 1: compile the original receiver, unchanged.
+// USB Serial logging is separate and remains available in either build.
+// The default is deliberately OFF for this baseline experiment.
+#ifndef CUBINA_ENABLE_UART_RECEIVER
+#define CUBINA_ENABLE_UART_RECEIVER 0
+#endif
+
+#if CUBINA_ENABLE_UART_RECEIVER != 0 && CUBINA_ENABLE_UART_RECEIVER != 1
+#error "CUBINA_ENABLE_UART_RECEIVER must be 0 or 1"
+#endif
+
 #include <Arduino.h>
 #include "SharedProtocol.h"
 #include "AudioFrame.h"

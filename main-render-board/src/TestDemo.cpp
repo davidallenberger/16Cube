@@ -1,4 +1,7 @@
 #include "TestDemo.h"
+#include "CubeCore.h"
+#include "PlaybackDeck.h"
+#include "SpacerCheck.h"
 #include "Planes.h"
 #include "Letters.h"
 #include "Icons.h"
@@ -192,6 +195,17 @@ namespace {
     uint8_t seqConcept = 0;
     ConceptDebugState states[TOTAL_CONCEPTS]; 
 
+    // Only playback state lives here. Rendering, durations and weighted normal
+    // deck membership below remain unchanged. Audio has a separate index bag.
+    bool animationSceneActive = false;
+    bool animationSceneOrdered = false;
+
+    uint16_t pickNormalDeckIndex(uint16_t limit) {
+        // Keep FastLED's existing random generator for the normal decks.
+        // A full 256-entry deck needs the unbounded byte form at that bound.
+        return limit == 256 ? random8() : random8(uint8_t(limit));
+    }
+
     // --- The Dispatcher ---
     void renderScene(uint8_t concept, ShapeType shape, uint8_t motionIdx, RenderMode rMode, ShaderMode sModeTracker, CRGBPalette16 pal, bool stretch, uint32_t durationMs, bool isTestMode, int currentStep, int totalSteps) {
         MotionType motion = (MotionType)motionIdx;
@@ -241,7 +255,9 @@ namespace {
             else if (concept == CONCEPT_SCENE_PIPES) sprintf(speedBuf, "%u ms", SPEED_SCENE_PIPES);
             else if (concept == CONCEPT_SCENE_WILD_MOUSE) sprintf(speedBuf, "%u ms", SPEED_SCENE_WILD_MOUSE);
             else if (concept == CONCEPT_SCENE_ATOM_SMASHER) sprintf(speedBuf, "Self-Timed");
-            else if (concept == CONCEPT_SCENE_WOBBLING_DISH) sprintf(speedBuf, "%.2f RPM", SPEED_SCENE_WOBBLING_DISH);
+            // This speed is stored as an integer. printf's %f requires a
+            // double argument; supplying the integer was undefined behavior.
+            else if (concept == CONCEPT_SCENE_WOBBLING_DISH) snprintf(speedBuf, sizeof(speedBuf), "%.2f RPM", static_cast<double>(SPEED_SCENE_WOBBLING_DISH));
             else if (concept == CONCEPT_SCENE_HELIX) sprintf(speedBuf, "%u ms", SPEED_SCENE_HELIX);
             else if (concept == CONCEPT_SCENE_FLYING_BOX) sprintf(speedBuf, "%u ms", SPEED_SCENE_FLYING_BOX);
             else if (concept == CONCEPT_SCENE_MOVING_BOXES) sprintf(speedBuf, "%u ms", SPEED_SCENE_MOVING_BOXES);
@@ -260,11 +276,51 @@ namespace {
             else if (concept == CONCEPT_SCENE_BLACKHOLE) sprintf(speedBuf, "Self-Timed");
             else if (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TEXT_ISRAEL) sprintf(speedBuf, "%u ms", SPEED_TEXT_ICONS);
             else if (concept == CONCEPT_SCENE_RUBIKS) sprintf(speedBuf, "Self-Timed");
-            else if (concept == CONCEPT_SCENE_TETRIS) sprintf(speedBuf, "%lu sec", max((uint32_t)30, durationMs / 1000));
+            else if (concept == CONCEPT_SCENE_TETRIS) snprintf(speedBuf, sizeof(speedBuf), "%lu sec", static_cast<unsigned long>(max((uint32_t)30, durationMs / 1000)));
             
             Serial.printf("[%02d/%02d] Concept: %02d | Scene: %-17s | Shader: %-16s | Color: %-22s | Speed: %s\n", 
                 currentStep, totalSteps, concept, sceneNames[concept], displayShader, displayColor, speedBuf);
         }
+
+#if CUBINA_CHECK_SPACERS
+        SpacerCheck::SceneInfo checkScene;
+        checkScene.name = sceneNames[concept];
+        checkScene.render = concept < NUM_SHAPES ? renderNames[rMode] : "N/A";
+        checkScene.motion = concept < NUM_SHAPES ? motionNames[motion] : "Internal";
+        checkScene.shader = displayShader;
+        checkScene.palette = displayColor;
+        checkScene.step = currentStep;
+        checkScene.totalSteps = totalSteps;
+        checkScene.ordered = isTestMode;
+
+        // Self-managed marquees hide their fixed palette/texture in the old
+        // header log. Record the actual background and foreground here so a
+        // Pizza/Yes/Cubina failure has useful labels in its one final summary.
+        switch (concept) {
+            case CONCEPT_SCENE_TEXT_PIZZA:
+            case CONCEPT_SCENE_TEXT_CUBINA:
+                checkScene.shader = "Noise Field";
+                checkScene.palette = "FG Gold / BG Ocean";
+                break;
+            case CONCEPT_SCENE_TEXT_FYB:
+            case CONCEPT_SCENE_TEXT_YEAH:
+                checkScene.shader = "Noise Field";
+                checkScene.palette = "FG Yellow / BG Lava";
+                break;
+            case CONCEPT_SCENE_TEXT_YES:
+                checkScene.shader = "Noise Field";
+                checkScene.palette = "FG White / BG Forest";
+                break;
+            case CONCEPT_SCENE_TEXT_ISRAEL:
+                checkScene.shader = "Linear Flow";
+                checkScene.palette = "FG White / BG Ocean";
+                break;
+            default:
+                break;
+        }
+
+        SpacerCheck::beginScene(checkScene);
+#endif
 
         if (concept < NUM_SHAPES) { 
             switch(motion) {
@@ -357,6 +413,12 @@ namespace {
                 }
             }
         }
+
+#if CUBINA_CHECK_SPACERS
+        // Every show() above has completed before this point. Emit exactly
+        // one summary for this invocation, after its routine has returned.
+        SpacerCheck::endScene();
+#endif
     }
 }
 
@@ -365,6 +427,52 @@ namespace {
 // =========================================================================================
 
 namespace TestDemo {
+
+    PlaybackOrder &animationOrder() {
+        static PlaybackOrder order = PlaybackOrder::Shuffled;
+#if CUBINA_CHECK_SPACERS
+        // The requested baseline is the complete RANDOMIZED playlist.
+        // Keep any local ten-second duration settings elsewhere in this file.
+        order = PlaybackOrder::Shuffled;
+#endif
+        return order;
+    }
+
+    void runKinkyPizzaTest() {
+        Serial.println("MARQUEE_TEST: Kinky Pizza only; original rotating icons and noise background.");
+
+        for (;;) {
+            // Keep this call identical to the normal Pizza deck entry. Each
+            // invocation completes two scrolls, then starts again. Printing
+            // happens only on entry, never inside the frame/transmission loop.
+            Letters::scrollTextCycles("`R30` KINKY PIZZA `R30`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Gold, OceanColors_p, MODE_NOISE_FIELD, false, 75);
+        }
+    }
+
+    void runAnimation() {
+        stopPlayback();
+
+#if CUBINA_TEST_KINKY_PIZZA_ONLY
+        runKinkyPizzaTest();
+#else
+        for (;;) {
+            runEngine(animationOrder() == PlaybackOrder::Sequential);
+        }
+#endif
+    }
+
+    void Detail::advanceAnimation() {
+        if (animationSceneActive && animationSceneOrdered) {
+            // Shuffled decks already moved their cursor BEFORE drawing.
+            // Ordered tests move it AFTER returning, so an abandoned scene
+            // must explicitly step over the current concept on a button.
+            ++seqConcept;
+        }
+    }
+
+    void Detail::stopAnimation() {
+        animationSceneActive = false;
+    }
 
   void runHardwareWiringTest() {
         Serial.println("\n--- STARTING FAST BOOT DIAGNOSTIC ---");
@@ -417,8 +525,10 @@ namespace TestDemo {
         const int BILLBOARD_DECK_REPETITIONS = 1;  
         // Normal playback durations. The ordered test branch below retains
         // its separate ten-second duration for deliberate regression runs.
-        const uint32_t DURATION_ART_MS = 30000;
-        const uint32_t DURATION_BILLBOARD_MS = 20000;
+        //const uint32_t DURATION_ART_MS = 30000;
+        //const uint32_t DURATION_BILLBOARD_MS = 20000;
+        const uint32_t DURATION_ART_MS = 10000;
+        const uint32_t DURATION_BILLBOARD_MS = 10000;
         
         
         uint32_t durationMs;
@@ -475,16 +585,12 @@ namespace TestDemo {
                         currentBillboardRep = 1; // Start cleanly at 1
                         billboardIndex = 0;
                         
-                        for (int i = billboardDeckSize - 1; i > 0; i--) {            
-                            int j = random8(i + 1); uint8_t temp = billboardDeck[i]; billboardDeck[i] = billboardDeck[j]; billboardDeck[j] = temp;
-                        }
+                        Detail::shuffleDeck(billboardDeck, billboardDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE BILLBOARD DECK (Play %d of %d)! \n=======================================\n", currentBillboardRep, BILLBOARD_DECK_REPETITIONS);
                     } else {
                         // Loop Art
                         artIndex = 0;
-                        for (int i = artDeckSize - 1; i > 0; i--) {            
-                            int j = random8(i + 1); uint8_t temp = artDeck[i]; artDeck[i] = artDeck[j]; artDeck[j] = temp;
-                        }
+                        Detail::shuffleDeck(artDeck, artDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE ART DECK (Play %d of %d)! \n=======================================\n", currentArtRep, ART_DECK_REPETITIONS);
                     }
                 }
@@ -497,16 +603,12 @@ namespace TestDemo {
                         currentArtRep = 1; // Start cleanly at 1
                         artIndex = 0; 
                         
-                        for (int i = artDeckSize - 1; i > 0; i--) {            
-                            int j = random8(i + 1); uint8_t temp = artDeck[i]; artDeck[i] = artDeck[j]; artDeck[j] = temp;
-                        }
+                        Detail::shuffleDeck(artDeck, artDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE ART DECK (Play %d of %d)! \n=======================================\n", currentArtRep, ART_DECK_REPETITIONS);
                     } else {
                         // Loop Billboard
                         billboardIndex = 0;
-                        for (int i = billboardDeckSize - 1; i > 0; i--) {            
-                            int j = random8(i + 1); uint8_t temp = billboardDeck[i]; billboardDeck[i] = billboardDeck[j]; billboardDeck[j] = temp;
-                        }
+                        Detail::shuffleDeck(billboardDeck, billboardDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE BILLBOARD DECK (Play %d of %d)! \n=======================================\n", currentBillboardRep, BILLBOARD_DECK_REPETITIONS);
                     }
                 }
@@ -660,7 +762,10 @@ namespace TestDemo {
             }        
         }
 
+        animationSceneActive = true;
+        animationSceneOrdered = isTestMode;
         renderScene(concept, shape, motion, rMode, sModeTracker, pal, stretch, durationMs, isTestMode, currentStep, totalSteps);
+        animationSceneActive = false;
 
         if (isTestMode) {
             if (concept < NUM_SHAPES && states[concept].motionMask != 0) { /* Holding */ }

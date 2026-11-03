@@ -1,5 +1,6 @@
 #include "CubeCore.h"
 #include "CubeSystem.h"
+#include "SpacerCheck.h"
 
 // ========================================================
 //                 WIRING & PINS CONFIGURATION
@@ -198,6 +199,81 @@ void initCube() {
   seedAllRng();
 }
 
+#if CUBINA_CHECK_SPACERS
+#ifdef HARDWARE_BURNCUBE
+#error "This spacer inspection is for the desktop seed-pixel wiring only"
+#endif
+
+namespace {
+    void inspectSpacer(const CRGB *pixels, uint16_t index, uint8_t output,
+                       SpacerCheck::FrameScan &scan) {
+        ++scan.checked;
+        const CRGB &pixel = pixels[index];
+
+        if (pixel.r == 0 && pixel.g == 0 && pixel.b == 0) {
+            return;
+        }
+
+        if (scan.nonblack == 0) {
+            scan.firstOutput = output;
+            scan.firstIndex = index;
+            scan.red = pixel.r;
+            scan.green = pixel.g;
+            scan.blue = pixel.b;
+        }
+
+        ++scan.nonblack;
+    }
+
+    void inspectOutputSpacers(const CRGB *pixels, uint16_t length, uint8_t output,
+                              SpacerCheck::FrameScan &scan) {
+        // Outputs 0..5: one unused position after each 16-LED column.
+        // Read only those positions, rather than visiting the whole frame.
+        if (output < 6) {
+            for (uint16_t index = 16; index < length; index += 17) {
+                inspectSpacer(pixels, index, output, scan);
+            }
+
+            return;
+        }
+
+        // Outputs 6 and 7 also contain three extra wiring pixels after each
+        // 272-position plane. Their physical plane stride is therefore 275.
+        // The final output ends at 547, so its final plane has no extra tail.
+        for (uint16_t base = 0; base < length; base += 275) {
+            for (uint16_t local = 16; local < 272 && base + local < length; local += 17) {
+                inspectSpacer(pixels, base + local, output, scan);
+            }
+
+            for (uint16_t local = 272; local < 275 && base + local < length; ++local) {
+                inspectSpacer(pixels, base + local, output, scan);
+            }
+        }
+    }
+
+    void inspectDesktopSpacers() {
+        if (!SpacerCheck::sceneActive()) {
+            return;
+        }
+
+        const uint32_t startedUs = micros();
+        SpacerCheck::FrameScan scan;
+
+        inspectOutputSpacers(strip0, STRIP0_LEN, 0, scan);
+        inspectOutputSpacers(strip1, STRIP1_LEN, 1, scan);
+        inspectOutputSpacers(strip2, STRIP2_LEN, 2, scan);
+        inspectOutputSpacers(strip3, STRIP3_LEN, 3, scan);
+        inspectOutputSpacers(strip4, STRIP4_LEN, 4, scan);
+        inspectOutputSpacers(strip5, STRIP5_LEN, 5, scan);
+        inspectOutputSpacers(strip6, STRIP6_LEN, 6, scan);
+        inspectOutputSpacers(strip7, STRIP7_LEN, 7, scan);
+
+        const uint32_t scanUs = uint32_t(micros() - startedUs);
+        SpacerCheck::recordFrame(scan, scanUs);
+    }
+}
+#endif
+
 void showCube () {
     // This function runs on the animation task. Before showing another frame,
     // act on remote mode demands and the held gamepad Home button.
@@ -236,6 +312,12 @@ void showCube () {
 
     // Record the start BEFORE transmitting. LED-transfer time is part of
     // the frame budget; it is not added to a fresh 16,667-us wait afterward.
+#if CUBINA_CHECK_SPACERS
+    // Read the actual CRGB spacer entries after the frame-rate wait, directly
+    // before handing this frame to FastLED. Do not clear or "repair" them.
+    // No serial I/O, allocation, yield, mutex or driver instrumentation occurs.
+    inspectDesktopSpacers();
+#endif
     lastShow = micros ();
     FastLED.show ();
 }

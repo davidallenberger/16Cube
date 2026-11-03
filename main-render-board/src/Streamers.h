@@ -1257,6 +1257,34 @@ class Streamers {
         // The input knob still selects between one ball and the safe maximum.
         unsigned numBalls = (numBallsParam * (MAX_BALLS_PER_COL - 1)) / 255 + 1;
 
+        // Pick each ball's color ONCE, before drawing any frames. On a 16^3
+        // cube the default density selects one ball per column, so every
+        // column uses ball ID zero. Lava's palette entry zero is black;
+        // previously that made the entire scene invisible for that palette.
+        //
+        // Preserve the normal ID-to-color mapping when its color is visible.
+        // If it is black, search the remaining palette entries for a visible
+        // color. An intentionally all-black palette remains all black.
+        // This small local array uses 6 bytes on 16^3; the shared arena,
+        // physics, number of balls, and frame timing do not change.
+        CRGB ballColors[BALLS_PER_COL_CAPACITY];
+
+        for (unsigned i = 0; i < numBalls; ++i) {
+            const uint8_t colorIndex = i * (256 / max((int)numBalls, 8));
+            CRGB color = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
+
+            for (uint8_t entry = 0; entry < 16; ++entry) {
+                if (color.r != 0 || color.g != 0 || color.b != 0) {
+                    break;
+                }
+
+                const uint8_t fallbackIndex = entry * 16;
+                color = ColorFromPalette(pal, fallbackIndex, 255, LINEARBLEND);
+            }
+
+            ballColors[i] = color;
+        }
+
         // 2. WLED PHYSICS TRANSLATION
         // WLED alters gravity by dividing the time delta. 128 = half speed.
         float timeDivisor = ((255 - gravityParam) / 64.0f) + 1.0f;
@@ -1316,10 +1344,9 @@ class Streamers {
                         // 3. PHYSICAL Z-MAPPING
                         int z = constrain((int)roundf(balls[idx].height * (RNDR_Z - 1)), 0, RNDR_Z - 1);
 
-                        // 4. COLOR ASSIGNMENT (WLED Independence Logic)
-                        // Binds a specific palette color strictly to the ball's ID
-                        uint8_t colorIndex = i * (256 / max((int)numBalls, 8));
-                        CRGB color = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
+                        // Each ball keeps the visible palette color chosen
+                        // for its ID when this invocation started.
+                        const CRGB color = ballColors[i];
 
                         // Additive blending allows colors to mix beautifully when passing through each other
                         CRGB existing = getVoxel(x, y, z);

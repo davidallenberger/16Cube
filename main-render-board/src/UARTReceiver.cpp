@@ -1,4 +1,6 @@
 #include "UARTReceiver.h"
+
+#if CUBINA_ENABLE_UART_RECEIVER
 #include "CubeCore.h"
 #include "AudioFrameClock.h"
 #include <freertos/FreeRTOS.h>
@@ -451,3 +453,49 @@ RemoteInputs::Stats RemoteInputs::stats() {
     xSemaphoreGive(mutex);
     return s;
 }
+
+#else
+
+#pragma message("CUBINA: inter-board UART2 receiver COMPILED OUT for standalone render test")
+
+// The disabled build does not include CubeCore, AudioFrameClock or FreeRTOS
+// here, and does not instantiate any receiver state. Keep the public input
+// interface so CubeSystem and the effects compile without special cases.
+// These accessors do no serial I/O, locking, clock updates or task work.
+namespace RemoteInputs {
+    void begin() {
+    }
+
+    Control control() {
+        return {};
+    }
+
+    Control beginFrame() {
+        return {};
+    }
+
+    AudioFrame audio(float) {
+        return {}; // Zero levels/events; no simulated audio or moving clock.
+    }
+
+    Stats stats() {
+        return {};
+    }
+
+    GamepadState gamepad(ControllerRole) {
+        return {};
+    }
+
+    GamepadState heldGamepad(ControllerRole) {
+        return {};
+    }
+
+    bool depth(uint8_t *bits) {
+        if (bits) {
+            memset(bits, 0, CubinaWire::DEPTH_BYTES);
+        }
+        return false;
+    }
+}
+
+#endif // CUBINA_ENABLE_UART_RECEIVER

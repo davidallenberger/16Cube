@@ -50,15 +50,6 @@ namespace {
     // a held gamepad Home button is allowed to return to the game menu.
     CubinaWire::Mode demandedMode = CubinaWire::Mode::Animation;
 
-    void runAmbientArt() {
-        // Normal unattended playback uses the shuffled art/billboard decks.
-        // TestDemo::runEngine(true) remains available for an intentional
-        // ordered, ten-second-per-scene test; no diagnostic redirects live here.
-        for (;;) {
-            TestDemo::runEngine(false);
-        }
-    }
-
     void renderAmbientIcon(TextureState &) {
         Shapes::animateStatic(SHAPE_MERKABA, 10, RENDER_SOLID, MODE_SPATIAL_GRADIENT);
     }
@@ -107,7 +98,7 @@ static void renderDiagIcon(TextureState &tex) {
 // Registry positions are also used by the mode-to-app mapping below.
 // If entries are reordered, update AUDIO_APP, DEPTH_APP, and the game default.
 static const CubeApp appRegistry[] = {
-    {"Ambient Art", renderAmbientIcon, runAmbientArt},
+    {"Ambient Art", renderAmbientIcon, TestDemo::runAnimation},
     {"Tetris 3D", Tetris::renderIcon, Tetris::run},
     {"Tetris 2D", Tetris2d::renderIcon, Tetris2d::run},
     {"Asteroids 3D", Asteroids3d::renderIcon, Asteroids3d::run},
@@ -117,7 +108,7 @@ static const CubeApp appRegistry[] = {
     {"Snake 2D", Snake2d::renderIcon, Snake2d::run},
     {"Rubiks", Rubiks::renderIcon, Rubiks::run},
     {"Diagnostics", renderDiagIcon, runDiagnostics},
-    {"Audio", Audio::renderIcon, Audio::run},
+    {"Audio", Audio::renderIcon, TestDemo::runAudio},
     {"Depth Occupancy", Depth::renderIcon, Depth::run}
 };
 
@@ -138,6 +129,9 @@ void CubeSystem::setup() {
 }
 
 void CubeSystem::changeState(SystemState s) {
+    // Cancel the old playback context before an app escape, preserving its
+    // selected routine. A same-source audio advance does not change OS state.
+    TestDemo::stopPlayback();
     currentState = s;
     stateTimer = millis();
     menuNeedsRedraw = true;
@@ -176,6 +170,11 @@ void CubeSystem::frameCheckpoint() {
             c.mode == demandedMode && CubinaWire::audioMode(c.mode) &&
             currentState == SYS_STATE_RUN_APP && selectedMenuIndex == AUDIO_APP;
 
+        const bool advanceAnimationRoutine =
+            appliedControl && c.session == appliedSession && c.revision != appliedRevision &&
+            c.mode == demandedMode && c.mode == CubinaWire::Mode::Animation &&
+            currentState == SYS_STATE_RUN_APP && selectedMenuIndex == 0;
+
         // Mark the demand as handled BEFORE escaping the old app. Otherwise
         // the next checkpoint would see it as new and jump again forever.
         appliedControl = true;
@@ -188,9 +187,11 @@ void CubeSystem::frameCheckpoint() {
         // source supplies its data. Game mode opens the local game menu.
         if (CubinaWire::audioMode(c.mode)) {
             if (advanceAudioRoutine) {
-                // Advance BEFORE the jump: the replacement Audio::run() must
-                // launch the next entry, not restart the previous one.
-                Audio::nextRoutine();
+                // TestDemo selects once and ends the old effect at its next
+                // loop boundary. No OS restart/longjmp is needed for an audio
+                // routine change. The revision above is already acknowledged.
+                TestDemo::requestNext(TestDemo::Deck::Audio);
+                return;
             }
 
             selectedMenuIndex = AUDIO_APP;
@@ -202,7 +203,11 @@ void CubeSystem::frameCheckpoint() {
             selectedMenuIndex = 5; // Initially highlight Breakout 2D.
             changeState(SYS_STATE_MENU);
         } else {
-            // Animation demands select the ordinary Ambient Art playlist.
+            // Another Animation press skips the current scene immediately.
+            // TestDemo owns any ordered-cursor adjustment before the escape.
+            if (advanceAnimationRoutine) {
+                TestDemo::requestNext(TestDemo::Deck::Animation);
+            }
             selectedMenuIndex = 0;
             changeState(SYS_STATE_RUN_APP);
         }

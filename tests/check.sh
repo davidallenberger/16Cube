@@ -51,8 +51,8 @@ stage "$command_src" "$command_include" "$work/command" \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
-common=(-std=c++11 -I "$root/tests/stubs" -I "$root/shared")
+    TestDemo.h TestDemoAudio.cpp PlaybackDeck.h SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h BpmRenderer.h Depth.cpp Depth.h
+common=(-DCUBINA_ENABLE_UART_RECEIVER=1 -std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/protocol_test"
@@ -70,6 +70,16 @@ echo 'Host syntax checks passed (API stubs, not a firmware/toolchain build).'
 
 "$CXX" "${common[@]}" -I "$work/render" tests/receiver_startup_test.cpp -o "$work/receiver_startup_test"
 "$work/receiver_startup_test"
+
+# Exercise the real physical LED arrays/mapping, rather than setVoxel stubs.
+# The enabled diagnostic test reads the real desktop arrays and proves that
+# all 265 unmapped positions (and only those) are checked, without repairs or
+# serial output inside a frame. Normal host tests leave the scanner disabled.
+"$CXX" "${common[@]}" -UCUBINA_ENABLE_UART_RECEIVER -DCUBINA_ENABLE_UART_RECEIVER=0 \
+    -DCUBINA_CHECK_SPACERS=1 -DFASTLED_ESP32_I2S_NUM_DMA_BUFFERS=2 \
+    -I "$work/render" -fsanitize=address,undefined -g tests/spacer_check_test.cpp \
+    -o "$work/spacer_check_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/spacer_check_test"
 
 # Exercise the real physical LED arrays/mapping, rather than setVoxel stubs.
 # Check both supported canvases using only a temporary header copy; the real
@@ -132,3 +142,18 @@ ASAN_OPTIONS=detect_leaks=0 "$work/sender_rate_limit_test"
 "$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
     tests/audio_frame_test.cpp -o "$work/audio_frame_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/audio_frame_test"
+
+# Test the actual TestDemo audio player with deterministic drawing routines,
+# independently of the physical cube or musical event detector.
+"$CXX" "${common[@]}" -I "$work/render" -fsanitize=address,undefined -g \
+    tests/audio_deck_test.cpp -o "$work/audio_deck_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/audio_deck_test"
+
+# Firmware's standalone switch defaults to OFF for the experiment. Existing
+# receiver tests above explicitly exercise the unchanged enabled backend.
+# This separate OFF test defines no Serial/Serial2, millis or FreeRTOS symbols:
+# an accidental dependency on those services makes the link fail.
+"$CXX" "${common[@]}" -UCUBINA_ENABLE_UART_RECEIVER -DCUBINA_ENABLE_UART_RECEIVER=0 \
+    -I "$work/render" -fsanitize=address,undefined -g \
+    tests/receiver_disabled_test.cpp -o "$work/receiver_disabled_test"
+ASAN_OPTIONS=detect_leaks=0 "$work/receiver_disabled_test"

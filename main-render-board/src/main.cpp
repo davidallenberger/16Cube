@@ -25,6 +25,11 @@ void setup()
   // This handles FastLED.addLeds, brightness, clearAll, show, and seeding
   initCube();
 
+  // Always show the wiring check before starting the OS or accepting remote
+  // modes: five seconds of rainbow X-planes, then one plane sweeping across
+  // the cube. This runs once on every boot, regardless of playlist/test flags.
+  TestDemo::runHardwareWiringTest();
+
   // Configuration of our state machine container
   CubeSystem::setup();
     

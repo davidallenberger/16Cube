@@ -12,13 +12,23 @@ CRGB CRGB::Black,CRGB::Green,CRGB::Yellow,CRGB::Red,CRGB::White,CRGB::Blue,CRGB:
 static uint32_t clockMs=100;
 unsigned long millis(){return clockMs;}uint32_t micros(){return clockMs*1000;}
 void clearAll(){}void showCube(){}void initAppMemory(){}void setVoxel(uint8_t,uint8_t,uint8_t,const CRGB&){}
-namespace TestDemo{void runEngine(bool){}void runHardwareWiringTest(){}}
-void Audio::run(){}
-void Audio::renderIcon(TextureState&){}
 static unsigned audioAdvanceRequests = 0;
-void Audio::nextRoutine() {
-    ++audioAdvanceRequests;
+static unsigned animationAdvanceRequests = 0;
+namespace TestDemo {
+    void runEngine(bool) {}
+    void runHardwareWiringTest() {}
+    void runAnimation() {}
+    void runAudio() {}
+    void stopPlayback() {}
+    void requestNext(Deck deck) {
+        if (deck == Deck::Audio) {
+            ++audioAdvanceRequests;
+        } else {
+            ++animationAdvanceRequests;
+        }
+    }
 }
+void Audio::renderIcon(TextureState&){}
 void Depth::run(){}
 void Depth::renderIcon(TextureState&){}
 int main(){
@@ -49,7 +59,7 @@ int main(){
     RemoteInputs::beginFrame();
     assert(!RemoteInputs::audio().midAttack);
     // Registry entry points remain wired to the correct input families.
-    assert (appRegistry[AUDIO_APP].run == &Audio::run);
+    assert (appRegistry[AUDIO_APP].run == &TestDemo::runAudio);
     assert (appRegistry[DEPTH_APP].run == &Depth::run);
 
     using namespace CubinaWire;RemoteInputs::begin();Packet p;
@@ -158,17 +168,20 @@ int main(){
     CubeSystem::frameCheckpoint();
     assert(audioAdvanceRequests == 0);
 
-    // A repeated source demand advances BEFORE the app escape, exactly once.
+    // A repeated source demand asks the managed effect to return, once.
+    // Audio does NOT longjmp/restart its OS app for this ordinary advance.
     ++p.sequence;
     ++p.modeRevision;
     accept(p);
     if (setjmp(engineJumpBuffer) == 0) {
         teleportArmed = true;
         CubeSystem::frameCheckpoint();
-        assert(false && "Repeated audio demand did not escape the current app");
+    } else {
+        assert(false && "Repeated audio demand unnecessarily escaped the app");
     }
     assert(audioAdvanceRequests == 1);
-    assert(!teleportArmed);
+    assert(teleportArmed);
+    teleportArmed = false;
     CubeSystem::frameCheckpoint();
     assert(audioAdvanceRequests == 1);
     ++p.sequence;
@@ -209,6 +222,28 @@ int main(){
     accept(p);
     CubeSystem::frameCheckpoint();
     assert(audioAdvanceRequests == 1);
+
+    // Normal Animation still uses its immediate OS escape. Its TestDemo
+    // cursor adjustment is delivered exactly once, before abandoning a scene.
+    ++p.sequence;
+    ++p.modeRevision;
+    p.mode = Mode::Animation;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(appRegistry[0].run == &TestDemo::runAnimation);
+    assert(animationAdvanceRequests == 0);
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
+    if (setjmp(engineJumpBuffer) == 0) {
+        teleportArmed = true;
+        CubeSystem::frameCheckpoint();
+        assert(false && "Animation button failed to skip current scene");
+    }
+    assert(animationAdvanceRequests == 1);
+    assert(!teleportArmed);
+    CubeSystem::frameCheckpoint();
+    assert(animationAdvanceRequests == 1);
 
     puts("Receiver/OS tests passed: stale input, session reboot, edge latches, beat latches, direct dispatch, one-shot mode tripwire.");
     puts("Audio dispatch tests passed: repeated source advances once; heartbeat, source switch, reboot, menu return, and reconnect preserve selection.");
