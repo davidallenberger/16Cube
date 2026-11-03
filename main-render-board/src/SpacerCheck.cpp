@@ -56,7 +56,11 @@ namespace SpacerCheck {
                 "order=%s step=%u/%u render=\"%s\" motion=\"%s\" "
                 "shader=\"%s\" palette=\"%s\" frames=%lu spacers=%u "
                 "badFrames=%lu badSamples=%lu first=[%s] scanMax=%luus "
+#if CUBINA_ENABLE_UART_RECEIVER
+                "elapsed=%lums UART=1 DMA=%u diagBytes=%u status=%s\n",
+#else
                 "elapsed=%lums UART=0 DMA=%u diagBytes=%u status=%s\n",
+#endif
                 static_cast<unsigned long>(record.run), record.info.name, record.previousName,
                 record.info.ordered ? "Ordered" : "Random", unsigned(record.info.step),
                 unsigned(record.info.totalSteps), record.info.render, record.info.motion,

@@ -10,8 +10,12 @@
 #endif
 
 #if CUBINA_CHECK_SPACERS
-#if !defined(CUBINA_ENABLE_UART_RECEIVER) || CUBINA_ENABLE_UART_RECEIVER != 0
-#error "Spacer baseline requires CUBINA_ENABLE_UART_RECEIVER=0 in build_flags"
+// Keep the same read-only scan through the standalone and UART stages.
+// Only the render task accesses these LED arrays and diagnostic records.
+#if !defined(CUBINA_ENABLE_UART_RECEIVER)
+#error "Set CUBINA_ENABLE_UART_RECEIVER explicitly to 0 or 1 in build_flags"
+#elif CUBINA_ENABLE_UART_RECEIVER != 0 && CUBINA_ENABLE_UART_RECEIVER != 1
+#error "CUBINA_ENABLE_UART_RECEIVER must be 0 or 1"
 #endif
 #if !defined(FASTLED_ESP32_I2S_NUM_DMA_BUFFERS)
 #error "Set FASTLED_ESP32_I2S_NUM_DMA_BUFFERS explicitly in build_flags"

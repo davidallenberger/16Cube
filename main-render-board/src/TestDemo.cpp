@@ -438,27 +438,12 @@ namespace TestDemo {
         return order;
     }
 
-    void runKinkyPizzaTest() {
-        Serial.println("MARQUEE_TEST: Kinky Pizza only; original rotating icons and noise background.");
-
-        for (;;) {
-            // Keep this call identical to the normal Pizza deck entry. Each
-            // invocation completes two scrolls, then starts again. Printing
-            // happens only on entry, never inside the frame/transmission loop.
-            Letters::scrollTextCycles("`R30` KINKY PIZZA `R30`", 2, 1.0f, 1.0f, SPEED_TEXT_ICONS, CRGB::Gold, OceanColors_p, MODE_NOISE_FIELD, false, 75);
-        }
-    }
-
     void runAnimation() {
         stopPlayback();
 
-#if CUBINA_TEST_KINKY_PIZZA_ONLY
-        runKinkyPizzaTest();
-#else
         for (;;) {
             runEngine(animationOrder() == PlaybackOrder::Sequential);
         }
-#endif
     }
 
     void Detail::advanceAnimation() {

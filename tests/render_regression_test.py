@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host checks for the production bouncing-balls body and marquee test route.
+"""Host checks for the production bouncing-balls body and animation deck entry.
 
 Only these production functions are extracted into small host harnesses.
 This exercises the actual function bodies without stubbing every unrelated
@@ -145,58 +145,53 @@ int main() {
 '''
 
 
-MARQUEE_HARNESS = r'''
+PLAYBACK_HARNESS = r'''
 #include <cassert>
-#include <cstring>
 #include "TestDemo.h"
-constexpr int SPEED_TEXT_ICONS = 95;
-constexpr int OceanColors_p = 7;
-constexpr int MODE_NOISE_FIELD = 5;
-struct CRGB { enum { Gold = 42 }; };
-struct SerialStub {
-    unsigned logs = 0;
-    void println(const char *) { ++logs; }
-} Serial;
 struct EndTest {};
-unsigned marqueeCalls = 0;
 unsigned engineCalls = 0;
 unsigned stopCalls = 0;
-namespace Letters {
-    void scrollTextCycles(const char *text, int cycles, float sx, float sy,
-                          int speed, int fg, int bg, int shader, bool overrideColor,
-                          int dimPercent) {
-        assert(strcmp(text, "`R30` KINKY PIZZA `R30`") == 0);
-        assert(cycles == 2 && sx == 1.0f && sy == 1.0f);
-        assert(speed == 95 && fg == CRGB::Gold && bg == OceanColors_p);
-        assert(shader == MODE_NOISE_FIELD && !overrideColor && dimPercent == 75);
-        if (++marqueeCalls == 3) {
-            throw EndTest();
-        }
-    }
-}
 namespace TestDemo {
-    void stopPlayback() { ++stopCalls; }
+    void stopPlayback() {
+        ++stopCalls;
+    }
+
     PlaybackOrder &animationOrder() {
         static PlaybackOrder order = PlaybackOrder::Shuffled;
         return order;
     }
-    void runEngine(bool) {
+
+    void runEngine(bool sequential) {
+        assert(sequential == (animationOrder() == PlaybackOrder::Sequential));
         ++engineCalls;
-        throw EndTest();
+
+        // Return twice to verify that playback keeps advancing through the
+        // normal deck. The third call ends this deliberately infinite player.
+        if (engineCalls == 3) {
+            throw EndTest();
+        }
     }
-__MARQUEE_CODE__
+__PLAYBACK_CODE__
 }
 int main() {
-    try { TestDemo::runAnimation(); } catch (EndTest) {}
-    assert(stopCalls == 1);
-#if CUBINA_TEST_KINKY_PIZZA_ONLY
-    assert(marqueeCalls == 3 && engineCalls == 0 && Serial.logs == 1);
-#else
-    assert(marqueeCalls == 0 && engineCalls == 1 && Serial.logs == 0);
-#endif
-    marqueeCalls = 0;
-    try { TestDemo::runKinkyPizzaTest(); } catch (EndTest) {}
-    assert(marqueeCalls == 3);
+    const TestDemo::PlaybackOrder orders[] = {
+        TestDemo::PlaybackOrder::Shuffled,
+        TestDemo::PlaybackOrder::Sequential
+    };
+
+    for (TestDemo::PlaybackOrder order : orders) {
+        TestDemo::animationOrder() = order;
+        engineCalls = 0;
+        stopCalls = 0;
+
+        try {
+            TestDemo::runAnimation();
+        } catch (EndTest) {
+        }
+
+        assert(stopCalls == 1);
+        assert(engineCalls == 3);
+    }
 }
 '''
 
@@ -220,7 +215,7 @@ def main():
     ending = streamers.index('    static void animateBpmVolumetric(', beginning)
     ball_code = streamers[beginning:ending]
     demo = (SOURCE / 'TestDemo.cpp').read_text()
-    marquee_code = function(demo, 'void runKinkyPizzaTest()') + '\n' + function(demo, 'void runAnimation()')
+    playback_code = function(demo, 'void runAnimation()')
 
     with tempfile.TemporaryDirectory(prefix='cubina-render-regression-') as temp:
         folder = Path(temp)
@@ -228,11 +223,9 @@ def main():
             compile_and_run(folder, 'balls_' + str(canvas),
                             BALL_HARNESS.replace('__BALL_CODE__', ball_code),
                             '-DCANVAS=' + str(canvas))
-        for enabled in (0, 1):
-            compile_and_run(folder, 'marquee_' + str(enabled),
-                            MARQUEE_HARNESS.replace('__MARQUEE_CODE__', marquee_code),
-                            '-DCUBINA_TEST_KINKY_PIZZA_ONLY=' + str(enabled))
-        print('Marquee route: direct calls and both boot-switch settings pass.')
+        compile_and_run(folder, 'playback',
+                        PLAYBACK_HARNESS.replace('__PLAYBACK_CODE__', playback_code))
+        print('Animation entry: shuffled and sequential deck playback pass.')
 
 
 if __name__ == '__main__':

@@ -2,16 +2,6 @@
 
 #include <stdint.h>
 
-// TEMPORARY ISOLATION TEST:
-// 1 boots the Animation app directly into the original Kinky Pizza marquee
-//   and repeats it. No shuffled art/billboard deck runs before or between it.
-// 0 restores normal Animation playback, including your existing durations.
-// This switch does not enable or disable UART; keep that separate switch OFF
-// for the standalone test. A compiler -D flag can override this default.
-#ifndef CUBINA_TEST_KINKY_PIZZA_ONLY
-#define CUBINA_TEST_KINKY_PIZZA_ONLY 1
-#endif
-
 // Playback belongs here. Audio/Streamers/Surfaces contain effects; they do
 // not own approved lists, selected indices, shuffles or mode-button policy.
 // Everything below is owned by the render task. No UART task calls it.
@@ -31,9 +21,6 @@ namespace TestDemo {
     PlaybackOrder &animationOrder(); // Defaults to existing shuffled playback.
     void runAudio();
     void runAnimation();
-    // Direct, repeating test entry point; also callable from another app.
-    // It uses exactly the text, rotating icons, colors and speed in the deck.
-    void runKinkyPizzaTest();
     const char *currentAudioRoutineName();
 
     // CubeSystem calls this for another press of the active mode button.
