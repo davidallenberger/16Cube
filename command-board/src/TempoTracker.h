@@ -22,8 +22,9 @@ class TempoTracker {
         *this = TempoTracker();
     }
 
-    Result process(const float *bands, bool audible, float seconds) {
+    Result process(const float *bands, bool audible, float seconds, bool bassKick = false) {
         phase = wrap(phase + seconds * bpm / 60.0f);
+        updateKickClock(bassKick, seconds);
         quietSeconds = audible ? 0.0f : quietSeconds + seconds;
 
         // One shared attack measurement supplies both the public attack event
@@ -97,6 +98,87 @@ class TempoTracker {
     static constexpr unsigned MaximumLag = 62;
     static constexpr float NoveltyRate = 31250.0f / 512.0f;
     static constexpr float LockConfidence = 0.45f;
+
+    // Eight recent inter-kick intervals are independent of spectral loudness.
+    // Only a repeated direct interval can nominate a tempo; multiples tolerate
+    // missing kicks, but cannot manufacture double time from sparse kicks.
+    float kickIntervals[8] = {};
+    unsigned kickCount = 0;
+    unsigned kickWrite = 0;
+    float kickAge = 4.0f;
+    float kickPeriod = 0.0f;
+    bool kickSupported = false;
+
+    void updateKickClock(bool event, float seconds) {
+        kickAge += seconds;
+        if (kickAge > 2.1f) {
+            kickSupported = false;
+            kickCount = 0;
+            kickWrite = 0;
+        }
+        if (!event) {
+            return;
+        }
+        const float interval = kickAge;
+        kickAge = 0.0f;
+        if (interval < 0.18f || interval > 2.1f) {
+            return;
+        }
+        kickIntervals[kickWrite] = interval;
+        kickWrite = (kickWrite + 1) % 8;
+        if (kickCount < 8) {
+            ++kickCount;
+        }
+        float bestPeriod = 0.0f;
+        unsigned bestDirect = 0;
+        unsigned bestSupported = 0;
+        for (unsigned i = 0; i < kickCount; ++i) {
+            const float candidate = kickIntervals[i];
+            if (candidate < 0.295f || candidate > 1.01f) {
+                continue;
+            }
+            unsigned direct = 0;
+            unsigned supported = 0;
+            float sum = 0.0f;
+            for (unsigned j = 0; j < kickCount; ++j) {
+                const float ratio = kickIntervals[j] / candidate;
+                const float multiple = roundf(ratio);
+                if (multiple >= 1.0f && multiple <= 3.0f &&
+                    fabsf(ratio - multiple) < 0.08f) {
+                    ++supported;
+                    if (multiple == 1.0f) {
+                        ++direct;
+                        sum += kickIntervals[j];
+                    }
+                }
+            }
+            if (direct >= 4 && supported * 4 >= kickCount * 3 &&
+                (direct > bestDirect || (direct == bestDirect && supported > bestSupported))) {
+                bestDirect = direct;
+                bestSupported = supported;
+                bestPeriod = sum / direct;
+            }
+        }
+        const bool establishingKickGrid = !kickSupported;
+        kickSupported = bestPeriod > 0.0f;
+        if (!kickSupported) {
+            return;
+        }
+        kickPeriod = bestPeriod;
+        const float targetBpm = fmaxf(60.0f, fminf(200.0f, 60.0f / kickPeriod));
+        const bool acquiring = establishingKickGrid || !haveTempo || !lockHeld || fabsf(targetBpm - bpm) > bpm * 0.15f;
+        bpm = acquiring ? targetBpm : bpm + 0.25f * (targetBpm - bpm);
+        haveTempo = true;
+        confidence = fmaxf(confidence, 0.75f);
+        pendingEstimates = 0;
+        // Correct only kicks near the predicted beat after acquisition. A
+        // syncopated kick must not drag every subsequent beat off the grid.
+        float error = -phase;
+        error -= floorf(error + 0.5f);
+        if (acquiring || fabsf(error) < 0.20f) {
+            phase = wrap(phase + error * (acquiring ? 1.0f : 0.5f));
+        }
+    }
 
     float history[Capacity] = {};
     float scores[MaximumLag + 2] = {};
@@ -179,6 +261,12 @@ class TempoTracker {
     }
 
     void chooseTempo() {
+        // A recent, regular dedicated kick train takes precedence over
+        // alternating spectral accents and offbeat hats. Release it promptly
+        // when kicks disappear; the spectral history continues throughout.
+        if (kickSupported && kickAge < fminf(2.1f, kickPeriod * 2.5f)) {
+            return;
+        }
         unsigned best = MinimumLag;
         float merit = -1.0f;
         for (unsigned lag = MinimumLag; lag <= MaximumLag; ++lag) {

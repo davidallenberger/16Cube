@@ -160,3 +160,6 @@ ASAN_OPTIONS=detect_leaks=0 "$work/audio_deck_test"
     -I "$work/render" -fsanitize=address,undefined -g \
     tests/receiver_disabled_test.cpp -o "$work/receiver_disabled_test"
 ASAN_OPTIONS=detect_leaks=0 "$work/receiver_disabled_test"
+
+# The production Julia body and ordered selector run on both canvas sizes.
+python3 tests/julia_test.py

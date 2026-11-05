@@ -16,12 +16,26 @@ namespace TestDemo {
         return held;
     }
 
+    // Development default: keep each selected animation running until Next.
+    // Separate from the command-board Hold button and scoped to animation only.
+    inline bool &animationHoldUntilNext() {
+        static bool enabled = true;
+        return enabled;
+    }
+
+    namespace Detail {
+        inline bool &animationDurationHeld() {
+            static bool active = false;
+            return active;
+        }
+    }
+
     inline bool routineTimeRemaining(uint32_t elapsedMs, uint32_t durationMs) {
-        return playbackHeld() || elapsedMs < durationMs;
+        return playbackHeld() || Detail::animationDurationHeld() || elapsedMs < durationMs;
     }
 
     enum class Deck { Animation, Audio };
-    enum class PlaybackOrder { Sequential, Shuffled };
+    enum class PlaybackOrder { Sequential, Descending, Shuffled };
 
     struct AudioPlaybackSettings {
         PlaybackOrder order = PlaybackOrder::Sequential;
@@ -32,7 +46,7 @@ namespace TestDemo {
     // It never enters the art/billboard decks. Changing order keeps the current
     // routine and applies the new ordering to subsequent selection.
     AudioPlaybackSettings &audioPlayback();
-    PlaybackOrder &animationOrder(); // Defaults to existing shuffled playback.
+    PlaybackOrder &animationOrder(); // Descending ordered tests start at the newest/last entry.
     void runAudio();
     void runAnimation();
     const char *currentAudioRoutineName();

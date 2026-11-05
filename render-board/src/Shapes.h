@@ -35,11 +35,12 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
             
             if (isWhite) {
                 // Only Merkaba is allowed to use White
-                if (shape == SHAPE_MERKABA) return PaletteUtils::getDynamicContrastPalette(CRGB::White);
+                if (shape == SHAPE_MERKABA) return PaletteUtils::getMerkabaPalette(true);
                 return CRGBPalette16(PaletteUtils::getRandomVibrantColor());
             }
             
             if (isGray) {
+                if (shape == SHAPE_MERKABA) return PaletteUtils::getMerkabaPalette(false);
                 // The universal dynamic contrast hook
                 if (shape == SHAPE_OCTAHEDRON || shape == SHAPE_MERKABA || shape == SHAPE_CYLINDER || shape == SHAPE_HEMISPHERES || shape == SHAPE_HOURGLASS) {
                     return PaletteUtils::getDynamicContrastPalette(CRGB::Gray);

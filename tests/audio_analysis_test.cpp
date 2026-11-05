@@ -295,6 +295,24 @@ int main () {
     assert(i2sReady);
     assert(installs == initialInstalls + 3);
     assert(modeSelections == 3);
+    // Real acquisition path: PCM -> dedicated kick detector + FFT -> shared
+    // tracker -> wire payload. No hand-injected tempo or kick events.
+    resetSource(MODE_ADC);
+    toneHz = 70.0;
+    invertedRight = true;
+    for (unsigned i = 0; i < 1600; ++i) {
+        const double position = double(sampleIndex) / SAMPLING_FREQ * 126.0 / 60.0;
+        const double age = (position - floor(position)) * 60.0 / 126.0;
+        amplitude = 500000.0 + 80000000.0 * exp(-age / 0.045);
+        hop();
+    }
+    assert(published.tempoFlags & CubinaWire::TEMPO_LOCKED);
+    assert(std::abs(int(published.tempoBpm100) - 12600) < 300);
+    const double position = double(sampleIndex) / SAMPLING_FREQ * 126.0 / 60.0;
+    double error = double(published.tempoPhase) / 65536.0 - (position - floor(position));
+    error -= floor(error + 0.5);
+    assert(std::abs(error) < 0.10);
+    puts("Kick-guided tempo passed through production PCM acquisition and wire publication at 126 BPM.");
     puts("Acquisition dispatch passed: repeat preserves I2S and levels, Mic/ADC pins, single PCM source, failed-setup retry.");
     puts ("Common audio tests passed: overlap, DC removal, phase-safe RMS/spectrum, bass coverage, "
           "common source calibration, single-fed kick, partial reads, silence, clipping recovery, "

@@ -50,7 +50,7 @@ static void draw(unsigned id) {
     if (launches.size() >= launchLimit) {
         throw StopTest();
     }
-    launches.push_back(id);
+    launches.push_back(id == 9 ? 0 : id >= 4 && id <= 7 ? 5 : id + 1);
     const uint32_t start = clockMs;
     bool pressed = false;
     while (TestDemo::audioRoutineRunning()) {
@@ -70,52 +70,43 @@ static void draw(unsigned id) {
 }
 
 void Audio::animatePuddles() {
-    draw(0);
-}
-
-void Audio::animatePuddlesVertical() {
-    draw(1);
-}
-
-void Audio::animatePuddlesCubes() {
     draw(2);
 }
+
+
 
 void Audio::animatePuddlePeak() {
     draw(3);
 }
 
-void Audio::animatePuddlePeakVertical() {
+
+
+void Audio::animateBpmSphere() {
     draw(4);
 }
 
-void Audio::animatePuddlePeakCubes() {
+void Audio::animateBpmCheckerboard() {
     draw(5);
 }
 
-void Audio::animateBpmSphere() {
+void Audio::animateBpmDiagonal() {
     draw(6);
 }
 
-void Audio::animateBpmCheckerboard() {
+void Audio::animateBpmHelix() {
     draw(7);
 }
 
-void Audio::animateBpmDiagonal() {
-    draw(8);
-}
-
-void Audio::animateBpmHelix() {
-    draw(9);
-}
-
 void Audio::animateAttackMonitor() {
-    draw(10);
+    draw(8);
 }
 
 static void reset(TestDemo::PlaybackOrder order = TestDemo::PlaybackOrder::Sequential) {
     TestDemo::stopPlayback();
     audioDeckBuilt = false;
+    breathePatternSelected = false;
+    waverlyLook = 0;
+    waverlyLookSelected = false;
     TestDemo::audioPlayback().order = order;
     TestDemo::audioPlayback().durationMs = 50;
     launches.clear();
@@ -139,7 +130,43 @@ static void play(unsigned count) {
 int main() {
     using namespace TestDemo;
     reset();
-    assert(std::strcmp(currentAudioRoutineName(), "Puddles Horizontal") == 0);
+    assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
+    const unsigned rememberedLook = waverlyLook;
+    stopPlayback();
+    currentAudioRoutineName();
+    assert(waverlyLook == rememberedLook);
+    bool seen[WAVERLY_LOOK_COUNT] = {};
+    for (unsigned trial = 0; trial < 1000; ++trial) {
+        waverlyLookSelected = false;
+        ensureWaverlyLook();
+        assert(waverlyLook < WAVERLY_LOOK_COUNT);
+        seen[waverlyLook] = true;
+    }
+    for (bool visited : seen) {
+        assert(visited);
+    }
+    // All patterns are available, selection stays fixed through restarts,
+    // and leaving the card releases it for the next visit.
+    reset();
+    for (unsigned i = 0; i < 5; ++i) {
+        requestNext(Deck::Audio);
+    }
+    bool patternsSeen[BREATHE_PATTERN_COUNT] = {};
+    for (unsigned trial = 0; trial < 200; ++trial) {
+        breathePatternSelected = false;
+        currentAudioRoutineName();
+        patternsSeen[breathePattern] = true;
+        const auto chosen = breathePattern;
+        stopPlayback();
+        currentAudioRoutineName();
+        assert(breathePattern == chosen && breathePatternSelected);
+    }
+    for (bool seen : patternsSeen) {
+        assert(seen);
+    }
+    requestNext(Deck::Audio);
+    assert(!breathePatternSelected);
+    reset();
     std::vector<unsigned> enabled;
     for (unsigned i = 0; i < AUDIO_ROUTINE_COUNT; ++i) {
         if (audioRoutines[i].enabled) {
@@ -192,11 +219,12 @@ int main() {
     // A just-applied manual step is retained even if a switch follows it.
     reset();
     requestNext(Deck::Audio);
+    requestNext(Deck::Audio);
     stopPlayback();
-    assert(std::strcmp(currentAudioRoutineName(), "Puddles Vertical") == 0);
+    assert(std::strncmp(currentAudioRoutineName(), "Waverly ", 8) == 0);
     assert(audioRoutineRunning()); // A direct experimental call is untimed.
     play(1);
-    assert(launches[0] == 1);
+    assert(launches[0] == 2);
 
     reset(PlaybackOrder::Shuffled);
     play(count * 3);
@@ -215,10 +243,11 @@ int main() {
     reset();
     requestNext(Deck::Audio);
     requestNext(Deck::Audio);
+    requestNext(Deck::Audio);
     audioPlayback().order = PlaybackOrder::Shuffled;
-    assert(std::strcmp(currentAudioRoutineName(), "Puddles Cubes") == 0);
+    assert(std::strcmp(currentAudioRoutineName(), "Puddles") == 0);
     audioPlayback().order = PlaybackOrder::Sequential;
-    assert(std::strcmp(currentAudioRoutineName(), "Puddles Cubes") == 0);
+    assert(std::strcmp(currentAudioRoutineName(), "Puddles") == 0);
 
     // Selector tests use approved IDs 0 and 2 only: disabled/unlisted ID 1
     // cannot leak in. Empty/single-entry/capacity limits stay well defined.
@@ -262,3 +291,12 @@ int main() {
     assert(durations[0] == 50 && durations[1] == 50);
     puts("TestDemo audio deck passed: ordered/shuffled cycles, approved IDs, timers/hold, immediate single-step, deadline collision, source preservation, deck separation, clock wrap.");
 }
+
+
+void Audio::waverly(ShaderMode, CRGBPalette16, bool, uint32_t) {
+    draw(1);
+}
+
+void Audio::animateGravityMeter() { draw(0); }
+
+void Audio::animateJulia() { draw(9); }

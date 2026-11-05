@@ -8,22 +8,92 @@ namespace {
         void (*draw)();
     };
 
+    // Approved Waverly looks: Rainbow and Party for each palette-driven
+    // mechanism, plus Hiphotic's native colors. One look is chosen per visit.
+    struct WaverlyLook {
+        const char *name;
+        ShaderMode shader;
+        uint8_t palette;
+        bool columnGradient;
+    };
+
+    const WaverlyLook waverlyLooks[] = {
+        {"Waverly Gradient Cycle Rainbow", MODE_LINEAR_FLOW, 0, true},
+        {"Waverly Gradient Cycle Party", MODE_LINEAR_FLOW, 4, true},
+        {"Waverly Linear Flow Rainbow", MODE_LINEAR_FLOW, 0, false},
+        {"Waverly Linear Flow Party", MODE_LINEAR_FLOW, 4, false},
+        {"Waverly Noise Field Rainbow", MODE_NOISE_FIELD, 0, false},
+        {"Waverly Noise Field Party", MODE_NOISE_FIELD, 4, false},
+        {"Waverly Distance Field Rainbow", MODE_DISTANCE_FIELD, 0, false},
+        {"Waverly Distance Field Party", MODE_DISTANCE_FIELD, 4, false},
+        {"Waverly Distortion Waves Rainbow", MODE_DISTORTION_WAVES, 0, false},
+        {"Waverly Distortion Waves Party", MODE_DISTORTION_WAVES, 4, false},
+        {"Waverly Hiphotic Native", MODE_HIPHOTIC, 0, false},
+    };
+    constexpr size_t WAVERLY_LOOK_COUNT = sizeof(waverlyLooks) / sizeof(waverlyLooks[0]);
+    uint8_t waverlyLook = 0;
+    bool waverlyLookSelected = false;
+
+    void ensureWaverlyLook() {
+        if (!waverlyLookSelected) {
+            // Equal chances for six mechanisms; Hiphotic ignores palettes.
+            // Keep all approved palettes available to the other mechanisms.
+            const uint8_t mechanism = uint8_t(random(6));
+            waverlyLook = mechanism == 5 ? 10 : mechanism * 2 + uint8_t(random(2));
+            waverlyLookSelected = true;
+        }
+    }
+
+    // One registered wrapper supplies the chosen look to the single drawing
+    // function. Palette objects stay local; the table stores only small IDs.
+    void drawWaverly() {
+        ensureWaverlyLook();
+        const WaverlyLook &look = waverlyLooks[waverlyLook];
+        CRGBPalette16 palette = RainbowColors_p;
+        if (look.palette == 4) {
+            palette = PartyColors_p;
+        }
+        // Use the normal managed duration, Next and Hold policy.
+        Audio::waverly(look.shader, palette, look.columnGradient);
+    }
+
+    // One breathing card, with equal chances for each spatial pattern.
+    // Remember the choice across source/mode restarts, just like Waverly.
+    const AudioRoutine breathePatterns[] = {
+        {true, "Breathe Sphere", &Audio::animateBpmSphere},
+        {true, "Breathe Checkerboard", &Audio::animateBpmCheckerboard},
+        {true, "Breathe Diagonal", &Audio::animateBpmDiagonal},
+        {true, "Breathe Helix", &Audio::animateBpmHelix},
+    };
+    constexpr size_t BREATHE_PATTERN_COUNT = sizeof(breathePatterns) / sizeof(breathePatterns[0]);
+    uint8_t breathePattern = 0;
+    bool breathePatternSelected = false;
+
+    void ensureBreathePattern() {
+        if (!breathePatternSelected) {
+            breathePattern = uint8_t(random(long(BREATHE_PATTERN_COUNT)));
+            breathePatternSelected = true;
+        }
+    }
+
+    void drawBreathe() {
+        ensureBreathePattern();
+        breathePatterns[breathePattern].draw();
+    }
+
     // THE APPROVED AUDIO DECK. Set enabled=false to leave a work-in-progress
     // routine out of unattended playback. Its Audio:: method can still exist
     // and be called directly. These entries NEVER mix with the normal deck.
     // Add new routines at the TOP: sequential playback starts with the first
     // enabled entry after a flash, ready for the debug Hold button.
     const AudioRoutine audioRoutines[] = {
-        {true, "Puddles Horizontal", &Audio::animatePuddles},
-        {true, "Puddles Vertical", &Audio::animatePuddlesVertical},
-        {true, "Puddles Cubes", &Audio::animatePuddlesCubes},
-        {true, "Puddle Peak Horizontal", &Audio::animatePuddlePeak},
-        {true, "Puddle Peak Vertical", &Audio::animatePuddlePeakVertical},
-        {true, "Puddle Peak Cubes", &Audio::animatePuddlePeakCubes},
-        {true, "BPM Sphere", &Audio::animateBpmSphere},
-        {true, "BPM Checkerboard", &Audio::animateBpmCheckerboard},
-        {true, "BPM Diagonal", &Audio::animateBpmDiagonal},
-        {true, "BPM Helix", &Audio::animateBpmHelix},
+        {true, "Julia Volume", &Audio::animateJulia},
+        {true, "GravityMeter", &Audio::animateGravityMeter},
+        {true, "Waverly", &drawWaverly},
+
+        {true, "Puddles", &Audio::animatePuddles},
+        {true, "Puddle Peak", &Audio::animatePuddlePeak},
+        {true, "Breathe", &drawBreathe},
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
@@ -60,6 +130,14 @@ namespace {
 
     void advanceAudio() {
         ensureAudioDeck();
+        if (!audioDeck.empty() && audioRoutines[audioDeck.current()].draw == &drawWaverly) {
+            // Next/expiry leaves Waverly after one look. Select afresh on its
+            // next visit; source/mode restarts keep the remembered choice.
+            waverlyLookSelected = false;
+        }
+        if (!audioDeck.empty() && audioRoutines[audioDeck.current()].draw == &drawBreathe) {
+            breathePatternSelected = false;
+        }
         audioDeck.advance(appliedOrder == TestDemo::PlaybackOrder::Shuffled, pickAudioIndex);
     }
 }
@@ -71,7 +149,18 @@ TestDemo::AudioPlaybackSettings &TestDemo::audioPlayback() {
 
 const char *TestDemo::currentAudioRoutineName() {
     ensureAudioDeck();
-    return audioDeck.empty() ? "No enabled audio routines" : audioRoutines[audioDeck.current()].name;
+    if (audioDeck.empty()) {
+        return "No enabled audio routines";
+    }
+    if (audioRoutines[audioDeck.current()].draw == &drawWaverly) {
+        ensureWaverlyLook();
+    }
+    if (audioRoutines[audioDeck.current()].draw == &drawBreathe) {
+        ensureBreathePattern();
+        return breathePatterns[breathePattern].name;
+    }
+    return audioRoutines[audioDeck.current()].draw == &drawWaverly ?
+        waverlyLooks[waverlyLook].name : audioRoutines[audioDeck.current()].name;
 }
 
 void TestDemo::requestNext(Deck deck) {
@@ -121,7 +210,7 @@ void TestDemo::runAudio() {
         audioStartedMs = millis();
         audioAdvanceRequested = false;
         audioRunning = true;
-        Serial.printf("Audio routine: %s\r\n", routine.name);
+        Serial.printf("Audio routine: %s\r\n", currentAudioRoutineName());
         routine.draw();
 
         const bool manuallyAdvanced = audioAdvanceRequested;

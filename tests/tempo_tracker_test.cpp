@@ -38,7 +38,53 @@ static TempoTracker::Result rhythm(TempoTracker &tracker, float bpm, float durat
     return result;
 }
 
+// Strong alternating accents and offbeat treble can favor the wrong spectral
+// period. Dedicated kicks retain their own timing, including missing beats.
+static void kickGuided(float tempo, bool missing, bool extra) {
+    TempoTracker tracker;
+    constexpr float dt = 256.0f / 31250.0f;
+    int previousBeat = -1;
+    int previousHalf = -1;
+    unsigned measured = 0;
+    for (unsigned i = 0; i < unsigned(24.0f / dt); ++i) {
+        const float position = i * dt * tempo / 60.0f;
+        const int beat = int(position);
+        const int half = int(position * 2.0f);
+        const bool edge = beat != previousBeat;
+        const bool offbeat = half != previousHalf && (half % 2);
+        const bool kick = (edge && (!missing || beat % 5 != 3)) ||
+                          (extra && offbeat && beat % 7 == 4);
+        float bands[16] = {};
+        bands[0] = edge ? ((beat % 2) ? 0.003f : 0.03f) : 0.0001f;
+        bands[12] = offbeat ? 0.08f : 0.0001f;
+        const auto result = tracker.process(bands, true, dt, kick);
+        previousBeat = beat;
+        previousHalf = half;
+        if (i * dt > 10.0f) {
+            assert(result.locked);
+            assert(fabsf(result.bpm - tempo) < 3.0f);
+            float error = result.phase - (position - beat);
+            error -= floorf(error + 0.5f);
+            if (fabsf(error) >= 0.10f) {
+                fprintf(stderr, "tempo %.1f missing %d extra %d time %.2f phase error %.3f BPM %.2f\n",
+                        tempo, missing, extra, i * dt, error, result.bpm);
+            }
+            assert(fabsf(error) < 0.10f);
+            ++measured;
+        }
+    }
+    assert(measured > 1000);
+    // Loss of kicks must not pin the old tempo forever.
+    const auto recovered = rhythm(tracker, 150.0f, 24.0f);
+    assert(recovered.locked && fabsf(recovered.bpm - 150.0f) < 3.0f);
+}
+
 int main() {
+    for (float bpm : {60.0f, 90.0f, 126.0f, 150.0f, 180.0f, 200.0f}) {
+        kickGuided(bpm, false, false);
+        kickGuided(bpm, true, false);
+        kickGuided(bpm, false, true);
+    }
     for (float bpm : {60.0f, 90.0f, 120.0f, 128.0f, 150.0f, 180.0f, 200.0f}) {
         TempoTracker tracker;
         const auto result = rhythm(tracker, bpm, 16.0f);

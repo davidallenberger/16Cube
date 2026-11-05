@@ -17,7 +17,23 @@ class Audio {
     struct Controls {
         float puddlesSensitivity = 1.0f;    // Volume-to-size response.
         float puddlePeakSensitivity = 2.0f; // Shared-event admission.
-        float bpmSensitivity = 1.0f;        // Volume-to-brightness response.
+        float gravitySensitivity = 1.0f;  // Volume-to-radius artistic gain.
+        uint32_t gravityStepMs = 16;       // Drawing interval; checkpoints stay responsive.
+        bool gravityFromUpperCorner = false; // Otherwise expand from cube center.
+        uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
+        float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
+        float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
+        float juliaVolumeGamma = 1.0f;     // <1 boosts quiet levels; >1 favors louder levels.
+        uint32_t juliaAttackMs = 100;      // Geometry smoothing time constant on volume rises; 0 bypasses.
+        uint32_t juliaReleaseMs = 220;     // Geometry smoothing time constant on falls; 0 bypasses.
+        uint32_t juliaStepMs = 40;         // Drawing interval; color timing stays in milliseconds.
+        float waverlySensitivity = 1.5f;    // Artistic height gain; no source calibration.
+        uint32_t waverlyStepMs = 32;        // Geometry/color update interval.
+        float waverlyNoiseRate = 0.12f;     // Noise-coordinate units per millisecond.
+        float waverlyAttackSensitivity = 1.0f; // Shared mid/high event admission.
+        float waverlyAttackReach = 0.15f;      // Maximum extra reach as a fraction of Z.
+        uint32_t waverlyAttackDecayMs = 200;   // Refreshable pulse; never accumulates.
+        uint8_t waverlyFade = 55;           // Fade amount per 32 ms, time-normalized.
         float attackSensitivity = 1.0f;     // Shared-event admission.
         uint8_t maxCubeEdge = 4;            // Clamped to 1..5 and cube bounds.
 
@@ -44,15 +60,29 @@ class Audio {
     // retention belong to the audio adapter, not to the animation.
     static void animatePuddlePeak();
 
-    static void animatePuddlesVertical();
-    static void animatePuddlesCubes();
-    static void animatePuddlePeakVertical();
-    static void animatePuddlePeakCubes();
 
     // Main reusable puddle loop. Call directly to supply sensitivity/geometry
     // externally, or use the playlist wrappers and controls() above.
     static void puddles(bool peakDetect, PuddleShape shape, float sensitivity = 1.0f,
                         uint8_t maxCubeEdge = 4, float peakDensity = 1.0f);
+
+    // One shared Waverly drawing loop. TestDemo selects audition colors;
+    // effects do not own the playback cursor or the sequence of combinations.
+    // Cycling column gradients use the palette along each column. Otherwise
+    // shader selects a normal moving TextureState at its usual 1.0x rate.
+    static void waverly(ShaderMode shader, CRGBPalette16 palette,
+                        bool cyclingGradient = false, uint32_t durationMs = 0);
+
+    enum class GravityShape : uint8_t { Sphere, Box, Merkaba };
+    enum class GravityOrigin : uint8_t { Center, UpperCorner };
+    static void animateJulia();
+    static void animateGravityMeter();
+    // corner bits select X/Y sides; Z is always the top for UpperCorner.
+    // Radius follows volumeSm directly; zero volume draws no shape.
+    static void gravityMeter(GravityShape shape, GravityOrigin origin,
+                             ShaderMode shader, CRGBPalette16 palette,
+                             uint32_t durationMs = 0, uint8_t corner = 0,
+                             const char *paletteName = "Custom");
 
     static void animateBpmSphere();
     static void animateBpmCheckerboard();
@@ -69,6 +99,6 @@ class Audio {
     static void debug();
     // Reuse the routine's existing snapshot so the report describes the
     // same audio values that produced this frame.
-    static void debug(const RemoteInputs::AudioFrame &audio);
+    static void debug(const RemoteInputs::AudioFrame &audio, const char *detail = "");
 
 };

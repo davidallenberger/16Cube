@@ -104,11 +104,11 @@ namespace {
         CONCEPT_SCENE_TEXT_FYB = 42, CONCEPT_SCENE_ICONS_CCW = 43, CONCEPT_SCENE_ICONS_CW = 44, CONCEPT_SCENE_TEXT_PIZZA = 45,
         CONCEPT_SCENE_TEXT_CUBINA = 46, CONCEPT_SCENE_TEXT_YES = 47, CONCEPT_SCENE_TEXT_YEAH = 48, CONCEPT_SCENE_TEXT_ISRAEL = 49,
         // Games (Shifted down)
-        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51
+        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51, CONCEPT_SCENE_JULIA = 52
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 42; 
+    static const int NUM_SCENES = 43;
     static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
@@ -118,12 +118,12 @@ namespace {
         /* BOX         */ { true,  7, MASK_STATIC, MASK_SOLID }, // Boosted to 7 for Distortion Waves Invocation
         /* SPHERE      */ { true,  1, MASK_STATIC | MASK_EXPAND_COLLAPSE, MASK_SOLID  },
         /* OVOID       */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID  },
-        /* TETRAHEDRON */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID | MASK_WIREFRAME },
-        /* OCTAHEDRON  */ { false, 1, MASK_STATIC | MASK_SPINNING, MASK_SOLID | MASK_WIREFRAME },
+        /* TETRAHEDRON */ { true, 1, MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID | MASK_WIREFRAME },
+        /* OCTAHEDRON  */ { true, 1, MASK_SPINNING, MASK_SOLID },
         /* MERKABA     */ { true,  2, MASK_TUMBLING, MASK_SOLID },
         /* TORUS       */ { false, 1, MASK_TUMBLING | MASK_SPINNING, MASK_SOLID },
         /* CYLINDER    */ { true,  1, MASK_TUMBLING, MASK_SOLID },
-        /* HEMISPHERES */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID },
+        /* HEMISPHERES */ { true, 1, MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID },
         /* HOURGLASS   */ { true,  1, MASK_TUMBLING, MASK_SOLID }
     };
 
@@ -141,7 +141,7 @@ namespace {
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { false,  1 }, /* Icons CW     */ { true,  2},
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
-        /* Tetris       */ { true,  1 }
+        /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -152,7 +152,7 @@ namespace {
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
         "Drift 3D", "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
-        "Rubiks Cube", "Tetris"
+        "Rubiks Cube", "Tetris", "Julia 3D"
     };
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
@@ -191,7 +191,7 @@ namespace {
     int currentArtRep = 0;
     int currentBillboardRep = 0;
     
-    uint8_t seqConcept = 0;
+    int seqConcept = -1; // Initialized from the selected ordered direction.
     ConceptDebugState states[TOTAL_CONCEPTS]; 
 
     // Only playback state lives here. Rendering, durations and weighted normal
@@ -221,7 +221,7 @@ namespace {
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                             (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                             (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
+                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_JULIA);
         }
 
         const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
@@ -347,6 +347,7 @@ namespace {
         }
         else { 
             switch(concept) {
+                case CONCEPT_SCENE_JULIA:          Surfaces::animateJulia(durationMs, 40 * SCALE_MS); break;
                 case CONCEPT_SCENE_RAIN:           Streamers::animateRain(durationMs, random8(1, 4), SPEED_SCENE_RAIN, pal, sModeTracker); break;
                 case CONCEPT_SCENE_CYCLONE:        Streamers::animateCyclone(durationMs, random8(2, 3), 0.04f, pal, sModeTracker, SPEED_SCENE_CYCLONE); break;
                 case CONCEPT_SCENE_VERT_STREAMER:  Streamers::animateVerticalStreamer(durationMs, SPEED_SCENE_VERT_STREAMER, 0.1875f, pal, sModeTracker); break;
@@ -428,7 +429,7 @@ namespace {
 namespace TestDemo {
 
     PlaybackOrder &animationOrder() {
-        static PlaybackOrder order = PlaybackOrder::Shuffled;
+        static PlaybackOrder order = PlaybackOrder::Descending;
 #if CUBINA_CHECK_SPACERS
         // The requested baseline is the complete RANDOMIZED playlist.
         // Keep any local ten-second duration settings elsewhere in this file.
@@ -441,7 +442,7 @@ namespace TestDemo {
         stopPlayback();
 
         for (;;) {
-            runEngine(animationOrder() == PlaybackOrder::Sequential);
+            runEngine(animationOrder() != PlaybackOrder::Shuffled);
         }
     }
 
@@ -450,11 +451,12 @@ namespace TestDemo {
             // Shuffled decks already moved their cursor BEFORE drawing.
             // Ordered tests move it AFTER returning, so an abandoned scene
             // must explicitly step over the current concept on a button.
-            ++seqConcept;
+            seqConcept += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
         }
     }
 
     void Detail::stopAnimation() {
+        Detail::animationDurationHeld() = false;
         animationSceneActive = false;
     }
 
@@ -522,25 +524,23 @@ namespace TestDemo {
         int currentStep = 0, totalSteps = 0;
 
         if (isTestMode) {
-            while (seqConcept < TOTAL_CONCEPTS) {
-                bool enabled = (seqConcept < NUM_SHAPES) ? SHAPE_RULES[seqConcept].enabled : SCENE_RULES[seqConcept - NUM_SHAPES].enabled;
-                if (enabled) break;
-                seqConcept++;
-            }
-            if (seqConcept >= TOTAL_CONCEPTS) {
-                seqConcept = 0;
-                Serial.println("\n=========================================================================================");
-                Serial.println("   END OF TEST CYCLE. RESTARTING INDEPENDENT AXIS EXHAUSTION");
-                Serial.println("=========================================================================================");
-                while (seqConcept < TOTAL_CONCEPTS) {
-                    bool enabled = (seqConcept < NUM_SHAPES) ? SHAPE_RULES[seqConcept].enabled : SCENE_RULES[seqConcept - NUM_SHAPES].enabled;
-                    if (enabled) break;
-                    seqConcept++;
+            const int direction = animationOrder() == PlaybackOrder::Descending ? -1 : 1;
+            // Signed cursor wraps in either direction and skips disabled cards.
+            // Shape motion exhaustion still happens before moving to a card.
+            for (int checked = 0; checked < TOTAL_CONCEPTS; ++checked) {
+                if (seqConcept < 0 || seqConcept >= TOTAL_CONCEPTS) {
+                    seqConcept = direction < 0 ? TOTAL_CONCEPTS - 1 : 0;
                 }
+                const bool enabled = seqConcept < NUM_SHAPES ?
+                    SHAPE_RULES[seqConcept].enabled : SCENE_RULES[seqConcept - NUM_SHAPES].enabled;
+                if (enabled) {
+                    break;
+                }
+                seqConcept += direction;
             }
             concept = seqConcept;
             durationMs = 10000;
-            currentStep = seqConcept + 1;
+            currentStep = direction < 0 ? TOTAL_CONCEPTS - seqConcept : seqConcept + 1;
             totalSteps = TOTAL_CONCEPTS;
 
         } else {
@@ -716,7 +716,7 @@ namespace TestDemo {
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                                  (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                                  (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_TETRIS);
+                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_JULIA);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 
             else {
@@ -746,18 +746,20 @@ namespace TestDemo {
             }        
         }
 
+        Detail::animationDurationHeld() = animationHoldUntilNext();
         animationSceneActive = true;
         animationSceneOrdered = isTestMode;
         // Finite shows (for example Rubiks) may return without a duration
         // loop. While held, repeat this same selected scene and its parameters.
         do {
             renderScene(concept, shape, motion, rMode, sModeTracker, pal, stretch, durationMs, isTestMode, currentStep, totalSteps);
-        } while (TestDemo::playbackHeld());
+        } while (TestDemo::playbackHeld() || Detail::animationDurationHeld());
+        Detail::animationDurationHeld() = false;
         animationSceneActive = false;
 
         if (isTestMode) {
             if (concept < NUM_SHAPES && states[concept].motionMask != 0) { /* Holding */ }
-            else seqConcept++; 
+            else seqConcept += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
         }
     }
 }

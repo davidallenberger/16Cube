@@ -25,6 +25,16 @@ static unsigned frame = 0;
 static uint32_t session = 0;
 static bool variedPlacement = false;
 static uint32_t placementState = 1;
+static CRGB buffer[RNDR_X * RNDR_Y * RNDR_Z];
+static bool checkWaverly = false;
+static unsigned gravityShapeUnderTest = 0;
+static unsigned gravityOriginUnderTest = 0;
+static void gravityUnderTest() {
+    Audio::gravityMeter(Audio::GravityShape(gravityShapeUnderTest),
+        gravityOriginUnderTest == 0 ? Audio::GravityOrigin::Center : Audio::GravityOrigin::UpperCorner,
+        MODE_LINEAR_FLOW, RainbowColors_p, 0, gravityOriginUnderTest == 0 ? 0 : gravityOriginUnderTest - 1);
+}
+static std::vector<unsigned> lightTotals;
 static bool drawn[RNDR_X * RNDR_Y * RNDR_Z] = {};
 static unsigned uniqueThisFrame = 0;
 static unsigned firstUniqueCount = 0;
@@ -83,6 +93,7 @@ void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB &color) {
     assert(y < RNDR_Y);
     assert(z < RNDR_Z);
     const unsigned index = x + RNDR_X * (y + RNDR_Y * z);
+    buffer[index] = color;
     if (!drawn[index]) {
         drawn[index] = true;
         ++uniqueThisFrame;
@@ -103,13 +114,35 @@ void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB &color) {
     ++voxelsThisFrame;
 }
 
-void clearAll() {
+CRGB getVoxel(uint8_t x, uint8_t y, uint8_t z) {
+    assert(x < RNDR_X && y < RNDR_Y && z < RNDR_Z);
+    return buffer[x + RNDR_X * (y + RNDR_Y * z)];
 }
 
-void fadeAll(uint8_t) {
+void clearAll() {
+    for (auto &color : buffer) {
+        color = CRGB();
+    }
+}
+
+void fadeAll(uint8_t amount) {
+    for (auto &color : buffer) {
+        color.nscale8(255 - amount);
+    }
 }
 
 void showCube() {
+    if (checkWaverly) {
+        unsigned total = 0;
+        for (unsigned i = 0; i < RNDR_X * RNDR_Y * RNDR_Z; ++i) {
+            const auto &a = buffer[i];
+            const auto &b = buffer[RNDR_X * RNDR_Y * RNDR_Z - 1 - i];
+            assert(a.r == b.r && a.g == b.g && a.b == b.b);
+            total += a.r + a.g + a.b;
+        }
+        assert(voxelsThisFrame <= 2 * RNDR_X * RNDR_Y * RNDR_Z);
+        lightTotals.push_back(total);
+    }
     routineNames.push_back(TestDemo::currentAudioRoutineName());
     if (frame == buttonFrame) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
@@ -163,6 +196,9 @@ static void receiveFrame() {
 
 static void render(void (*routine)()) {
     TestDemo::stopPlayback();
+    GeometryEngine::gravityCalls.clear();
+    clearAll();
+    lightTotals.clear();
     clockMs = initialClock;
     frame = 0;
     ++session;
@@ -189,6 +225,42 @@ static void render(void (*routine)()) {
     }
 
     assert(false && "Audio routine unexpectedly returned");
+}
+
+static void testanimatePuddles() {
+    Audio::puddles(false, Audio::PuddleShape::Horizontal,
+        Audio::controls().puddlesSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
+}
+
+static void testanimatePuddlesVertical() {
+    Audio::puddles(false, Audio::PuddleShape::Vertical,
+        Audio::controls().puddlesSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
+}
+
+static void testanimatePuddlesCubes() {
+    Audio::puddles(false, Audio::PuddleShape::Cube,
+        Audio::controls().puddlesSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
+}
+
+static void testanimatePuddlePeak() {
+    Audio::puddles(true, Audio::PuddleShape::Horizontal,
+        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
+}
+
+static void testanimatePuddlePeakVertical() {
+    Audio::puddles(true, Audio::PuddleShape::Vertical,
+        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
+}
+
+static void testanimatePuddlePeakCubes() {
+    Audio::puddles(true, Audio::PuddleShape::Cube,
+        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
 }
 
 static void makeStream(unsigned count = 80) {
@@ -229,7 +301,7 @@ int main() {
     for (unsigned band = 0; band < 16; ++band) {
         makeStream();
         addAttack(10, uint16_t(1u << band));
-        render(&Audio::animatePuddlePeak);
+        render(&testanimatePuddlePeak);
         assert(lineFrames == std::vector<unsigned>({10}));
         assert(litVoxels == defaultLines * expectedLength);
     }
@@ -237,7 +309,7 @@ int main() {
     addAttack(10, 0xFFFF);
     addAttack(30, 0x0080);
     addAttack(50, 0x8000);
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10, 30, 50}));
 
     // A dedicated kick merges with the general bass event into ONE spawn.
@@ -247,7 +319,7 @@ int main() {
     }
     input[10].values.beat = 1;
     addAttack(10, 0x0001);
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10}));
 
     // Loud or fluctuating display bins alone must not invent shared events.
@@ -257,12 +329,12 @@ int main() {
             band = i % 2 ? 230 : 20;
         }
     }
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(lineFrames.empty());
 
     makeStream();
     addAttack(10, 0x0080, 20);
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(lineFrames.empty());
     render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 2.0f); });
     assert(lineFrames == std::vector<unsigned>({10}));
@@ -274,9 +346,9 @@ int main() {
     for (auto &sample : input) {
         sample.values.volumeSm = 255;
     }
-    render(&Audio::animatePuddlesVertical);
+    render(&testanimatePuddlesVertical);
     assert(firstExtents[0] == 1 && firstExtents[1] == 1 && firstExtents[2] == RNDR_Z);
-    render(&Audio::animatePuddlesCubes);
+    render(&testanimatePuddlesCubes);
     assert(firstCount == 64);
     render(+[] { Audio::puddles(false, Audio::PuddleShape::Cube, 1.0f, 200); });
     assert(firstCount == 125);
@@ -285,10 +357,10 @@ int main() {
 
     makeStream();
     addAttack(10, 0x8000);
-    render(&Audio::animatePuddlePeakVertical);
+    render(&testanimatePuddlePeakVertical);
     assert(lineFrames == std::vector<unsigned>({10}));
     assert(firstExtents[0] == 1 && firstExtents[1] == 1 && firstExtents[2] > 1);
-    render(&Audio::animatePuddlePeakCubes);
+    render(&testanimatePuddlePeakCubes);
     assert(lineFrames == std::vector<unsigned>({10}));
     assert(firstExtents[0] == firstExtents[1] && firstExtents[1] == firstExtents[2]);
 
@@ -298,7 +370,7 @@ int main() {
     // It is not a claim about exact physical occupancy or perceived brightness.
     if (RNDR_X == 16 && RNDR_Y == 16 && RNDR_Z == 16) {
         makeStream(200);
-        render(&Audio::animatePuddles);
+        render(&testanimatePuddles);
         const unsigned lastSpawn = lineFrames.back();
         float ordinaryCoverage = 0.0f;
         for (unsigned i = 0; i <= lastSpawn; ++i) {
@@ -306,7 +378,7 @@ int main() {
         }
         makeStream();
         addAttack(10, 0x0080);
-        render(&Audio::animatePuddlePeak);
+        render(&testanimatePuddlePeak);
         assert(firstCount > ordinaryCoverage * 0.8f);
         assert(firstCount < ordinaryCoverage * 1.2f);
     }
@@ -328,7 +400,7 @@ int main() {
     // Random placement actually spreads the burst: check distinct voxels,
     // not only repeated writes to a single line in a deterministic stub.
     variedPlacement = true;
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(firstUniqueCount >= 3 * expectedLength);
     assert(firstCount == defaultLines * expectedLength);
     variedPlacement = false;
@@ -337,7 +409,7 @@ int main() {
     for (auto &sample : input) {
         sample.values.volumeSm = 255;
     }
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     const unsigned fullLines = RNDR_X == 16 ? 6 : 4;
     assert(firstCount == fullLines * RNDR_X);
     assert(firstExtents[0] == RNDR_X);
@@ -356,6 +428,78 @@ int main() {
     makeStream();
     render(+[] { Audio::puddles(true, Audio::PuddleShape::Horizontal, 1.0f, 4, 100.0f); });
     assert(lineFrames.empty());
+
+    // The real receiver snapshot drives the shared Julia renderer. Silence
+    // holds its open endpoint, full volume holds the closed endpoint; neither
+    // should oscillate on its own while the color clock keeps running.
+    Audio::controls().juliaSensitivity = 1.5f;
+    Audio::controls().juliaVolumeGamma = 1.0f;
+    makeStream(12);
+    for (auto &sample : input) sample.values.volumeSm = 0;
+    render(&Audio::animateJulia);
+    const auto openJulia = writeCounts;
+    assert(std::all_of(openJulia.begin(), openJulia.end(), [&](unsigned n) { return n == openJulia[0]; }));
+    assert(juliaAudioClosure() == 0.0f);
+    makeStream(12);
+    for (auto &sample : input) sample.values.volumeSm = 255;
+    render(&Audio::animateJulia);
+    const auto closedJulia = writeCounts;
+    assert(std::all_of(closedJulia.begin(), closedJulia.end(), [&](unsigned n) { return n == closedJulia[0]; }));
+    assert(closedJulia[0] > openJulia[0]);
+    assert(closedJulia[0] <= RNDR_X * RNDR_Y * RNDR_Z * 8 / 10);
+    assert(juliaAudioClosure() == 1.0f);
+    makeStream(12);
+    render(&Audio::animateJulia);
+    const float linearJulia = juliaAudioClosure();
+    Audio::controls().juliaVolumeGamma = 2.0f;
+    const float restrainedJulia = juliaAudioClosure();
+    Audio::controls().juliaVolumeGamma = 0.5f;
+    assert(juliaAudioClosure() > linearJulia && restrainedJulia < linearJulia);
+    Audio::controls().juliaSensitivity = 0.0f;
+    assert(juliaAudioClosure() == 0.0f);
+    Audio::controls().juliaSensitivity = std::numeric_limits<float>::quiet_NaN();
+    Audio::controls().juliaVolumeGamma = std::numeric_limits<float>::infinity();
+    assert(std::isfinite(juliaAudioClosure()));
+    Audio::controls().juliaSensitivity = 1.5f;
+    Audio::controls().juliaVolumeGamma = 1.0f;
+
+    // Geometry follows volume steps gradually; setting both time constants
+    // to zero reproduces the direct response. Check release and clock wrap.
+    makeStream(20);
+    for (unsigned i = 0; i < input.size(); ++i) input[i].values.volumeSm = i ? 255 : 0;
+    render(&Audio::animateJulia);
+    const auto smoothedRise = writeCounts;
+    assert(smoothedRise[0] == openJulia[0]);
+    assert(smoothedRise[1] != closedJulia[0]);
+    initialClock = 0xffffffe0u;
+    render(&Audio::animateJulia);
+    assert(writeCounts == smoothedRise);
+    Audio::controls().juliaAttackMs = 0;
+    Audio::controls().juliaReleaseMs = 0;
+    render(&Audio::animateJulia);
+    assert(writeCounts[1] == closedJulia[0]);
+    Audio::controls().juliaAttackMs = 100;
+    Audio::controls().juliaReleaseMs = 220;
+    makeStream(20);
+    for (unsigned i = 0; i < input.size(); ++i) input[i].values.volumeSm = i ? 0 : 255;
+    render(&Audio::animateJulia);
+    assert(writeCounts[0] == closedJulia[0]);
+    assert(writeCounts[1] != openJulia[0]);
+
+    // Checkerboard follows transported musical phase, not local volume speed.
+    makeStream(160);
+    for (unsigned i = 0; i < input.size(); ++i) {
+        input[i].values.tempoBpm100 = 12000;
+        input[i].values.tempoFlags = CubinaWire::AUDIO_ACTIVE | CubinaWire::TEMPO_LOCKED;
+        input[i].values.tempoPhase = uint16_t(fmodf(i * 0.016f * 2.0f, 1.0f) * 65536.0f);
+    }
+    render(&Audio::animateBpmCheckerboard);
+    const std::vector<CRGB> onBeat(buffer, buffer + RNDR_X * RNDR_Y * RNDR_Z);
+    for (auto &sample : input) {
+        sample.values.tempoPhase += 16384;
+    }
+    render(&Audio::animateBpmCheckerboard);
+    assert(std::memcmp(onBeat.data(), buffer, sizeof(buffer)) != 0);
 
     // Idle keeps the full five-second dim breath; locked music drives it.
     makeStream(400);
@@ -388,35 +532,214 @@ int main() {
     initialClock = 0xFFFFFFC0u;
     addAttack(10, 0x0001);
     addAttack(30, 0x8000);
-    render(&Audio::animatePuddlePeak);
+    render(&testanimatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10, 30}));
 
+    // GravityMeter reuses existing renderers. Verify dispatch and continuous
+    // radius mapping for all shapes and all corner origins on both canvases.
+    const float span = float(min(int(RNDR_X) - 1, min(int(RNDR_Y) - 1, int(RNDR_Z) - 1)));
+    for (unsigned shape = 0; shape < 3; ++shape) {
+        for (unsigned origin = 0; origin < 5; ++origin) {
+            makeStream(4);
+            input[0].values.volumeSm = 0;
+            input[1].values.volumeSm = 64;
+            input[2].values.volumeSm = 128;
+            input[3].values.volumeSm = 255;
+            gravityShapeUnderTest = shape;
+            gravityOriginUnderTest = origin;
+            render(&gravityUnderTest);
+            assert(GeometryEngine::gravityCalls.size() == 3); // Silence draws nothing.
+            const unsigned levels[] = {64, 128, 255};
+            const unsigned corner = origin == 0 ? 0 : origin - 1;
+            const float maxRadius = span * (origin == 0 ? 0.5f : 1.0f);
+            for (unsigned i = 0; i < 3; ++i) {
+                const auto &call = GeometryEngine::gravityCalls[i];
+                assert(call.shape == shape);
+                if (shape == unsigned(Audio::GravityShape::Merkaba)) {
+                    assert(call.shader == MODE_SOLID);
+                    assert(call.palette == 100 || call.palette == 101);
+                } else {
+                    assert(call.shader == MODE_LINEAR_FLOW);
+                }
+                assert(fabsf(call.radius - maxRadius * levels[i] / 255.0f) < 0.0001f);
+                assert(call.x == (origin == 0 ? RNDR_CX : (corner & 1) ? RNDR_X - 1.0f : 0.0f));
+                assert(call.y == (origin == 0 ? RNDR_CY : (corner & 2) ? RNDR_Y - 1.0f : 0.0f));
+                assert(call.z == (origin == 0 ? RNDR_CZ : RNDR_Z - 1.0f));
+            }
+        }
+    }
+
+    // Same geometry across every named look, independent of texturing. Real
+    // receiver snapshots, silence, dimensions, symmetry, cadence and work cap.
+    assert(WAVERLY_LOOK_COUNT == 11);
+    // Every allowed palette-driven mechanism is crossed with Rainbow and Party,
+    // without duplicates. Forbidden/frozen shaders cannot enter this table.
+    unsigned coverage[5][5] = {};
+    for (unsigned i = 0; i < WAVERLY_LOOK_COUNT; ++i) {
+        const auto &look = waverlyLooks[i];
+        if (look.shader == MODE_HIPHOTIC) {
+            assert(i == 10 && !look.columnGradient);
+            continue;
+        }
+        assert(look.palette == 0 || look.palette == 4);
+        unsigned group = 0;
+        if (!look.columnGradient) {
+            if (look.shader == MODE_LINEAR_FLOW) group = 1;
+            else if (look.shader == MODE_NOISE_FIELD) group = 2;
+            else if (look.shader == MODE_DISTANCE_FIELD) group = 3;
+            else if (look.shader == MODE_DISTORTION_WAVES) group = 4;
+            else assert(false && "Excluded shader in audition");
+        }
+        ++coverage[group][look.palette];
+    }
+    for (const auto &group : coverage) {
+        for (unsigned palette = 0; palette < 5; ++palette) {
+            assert(group[palette] == unsigned(palette == 0 || palette == 4));
+        }
+    }
+    checkWaverly = true;
+    std::vector<unsigned> referenceWrites;
+    for (unsigned i = 0; i < WAVERLY_LOOK_COUNT; ++i) {
+        makeStream(40);
+        waverlyLook = i;
+        waverlyLookSelected = true;
+        render(&drawWaverly);
+        assert(!lineFrames.empty());
+        if (i == 0) {
+            referenceWrites = writeCounts;
+        } else {
+            assert(writeCounts == referenceWrites);
+        }
+    }
+    while (std::strncmp(TestDemo::currentAudioRoutineName(), "Waverly ", 8) != 0) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
+    // Global duration=0 holds an audition beyond its normal 15-second slot.
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    TestDemo::audioPlayback().durationMs = 0;
+    makeStream(1000);
+    render(&TestDemo::runAudio);
+    for (const auto &name : routineNames) {
+        assert(name == "Waverly Gradient Cycle Rainbow");
+    }
+    assert(waverlyLook == 0);
+    TestDemo::audioPlayback().durationMs = 30000;
+
+    // At modest volume, neighboring depth slices must have distinct lower
+    // profiles: the new spatial dimension cannot be a repeated 2D curtain.
+    makeStream(1);
+    for (auto &sample : input) {
+        sample.values.volumeSm = 64;
+    }
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    render(&drawWaverly);
+    bool differentDepth = false;
+    for (unsigned y = 1; y < RNDR_Y; ++y) {
+        for (unsigned x = 0; x < RNDR_X; ++x) {
+            for (unsigned z = 0; z < RNDR_Z / 2; ++z) {
+                if (getVoxel(x, y, z).r != getVoxel(x, 0, z).r) {
+                    differentDepth = true;
+                }
+            }
+        }
+    }
+    assert(differentDepth);
+    makeStream(40);
+    for (auto &sample : input) {
+        sample.values.volumeSm = 0;
+    }
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    render(&drawWaverly);
+    assert(lineFrames.empty());
+    assert(*std::max_element(lightTotals.begin(), lightTotals.end()) == 0);
+    makeStream(80);
+    for (unsigned i = 12; i < input.size(); ++i) {
+        input[i].values.volumeSm = 0;
+    }
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    render(&drawWaverly);
+    assert(lightTotals.back() == 0);
+    assert(*std::max_element(lightTotals.begin(), lightTotals.end()) > 0);
+    makeStream(12);
+    initialClock = 0xFFFFFFC0u;
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    render(&drawWaverly);
+    assert(!lineFrames.empty());
+    // Duration is also usable by direct calls, independently of the deck.
+    makeStream(80);
+    render(+[]() {
+        Audio::waverly(MODE_LINEAR_FLOW, RainbowColors_p, true, 64);
+        throw StopTest();
+    });
+    assert(frame == 4);
+    // Same volume/noise trajectory: only accepted non-bass events add reach.
+    makeStream(80);
+    waverlyLook = 0;
+    waverlyLookSelected = true;
+    render(&drawWaverly);
+    const auto baseline = writeCounts;
+    const uint16_t regions[] = {0x0001, 0x0080, 0x8000};
+    for (uint16_t region : regions) {
+        makeStream(80);
+        addAttack(10, region, 180);
+        render(&drawWaverly);
+        if (region == 0x0001) {
+            assert(writeCounts == baseline);
+        } else {
+            bool grew = false;
+            for (unsigned i = 10; i < 28; ++i) {
+                grew |= writeCounts[i] > baseline[i];
+            }
+            assert(grew);
+            for (unsigned i = 32; i < writeCounts.size(); ++i) {
+                assert(writeCounts[i] == baseline[i]);
+            }
+        }
+    }
+    // Amount zero restores the original geometry even with mid/high attacks.
+    Audio::controls().waverlyAttackReach = 0.0f;
+    makeStream(80);
+    addAttack(10, 0xFF80, 180);
+    render(&drawWaverly);
+    assert(writeCounts == baseline);
+    Audio::controls().waverlyAttackReach = 0.15f;
+    checkWaverly = false;
+
     const char *names[] = {
-        "Puddles Horizontal", "Puddles Vertical", "Puddles Cubes",
-        "Puddle Peak Horizontal", "Puddle Peak Vertical", "Puddle Peak Cubes",
-        "BPM Sphere", "BPM Checkerboard", "BPM Diagonal", "BPM Helix", "Attack Monitor"
+        "Puddles", "Puddle Peak", "Breathe Sphere", "Attack Monitor"
     };
-    for (unsigned entry = 0; entry < AUDIO_ROUTINE_COUNT; ++entry) {
-        if (!audioRoutines[entry].enabled) {
+    while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
+    for (unsigned entry = 0; entry < 4; ++entry) {
+        if (!audioRoutines[entry + 3].enabled) {
             continue;
         }
         makeStream();
         assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[entry]) == 0);
         render(&TestDemo::runAudio);
-        assert(((entry >= 3 && entry <= 5) || entry == 10) ? lineFrames.empty() : !lineFrames.empty());
+        assert((entry == 1 || entry == 3) ? lineFrames.empty() : !lineFrames.empty());
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
-    assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) == 0);
+    assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Julia Volume") == 0);
+    while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
+        TestDemo::requestNext(TestDemo::Deck::Audio);
+    }
     // Actual effects return to the actual TestDemo player on expiry. This
     // crosses the real player/receiver/effect boundary, rather than testing
     // only a fake timer callback or a separate selection helper.
     makeStream(32);
     TestDemo::audioPlayback().durationMs = 64;
     render(&TestDemo::runAudio);
-    assert(routineNames[0] == "Puddles Horizontal");
-    assert(routineNames[3] == "Puddles Horizontal");
-    assert(routineNames[4] == "Puddles Vertical");
-    assert(routineNames[8] == "Puddles Cubes");
+    assert(routineNames[0] == "Puddles");
+    assert(routineNames[3] == "Puddles");
+    assert(routineNames[4] == "Puddle Peak");
+    assert(routineNames[8] == "Breathe Sphere");
     TestDemo::stopPlayback();
     while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
@@ -427,7 +750,7 @@ int main() {
     makeStream(16);
     buttonFrame = 3;
     render(&TestDemo::runAudio);
-    assert(routineNames[4] == "Puddles Vertical");
+    assert(routineNames[4] == "Puddle Peak");
     TestDemo::stopPlayback();
     while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
@@ -435,10 +758,10 @@ int main() {
     TestDemo::audioPlayback().durationMs = 0;
     buttonFrame = 1;
     render(&TestDemo::runAudio);
-    assert(routineNames[0] == "Puddles Horizontal");
-    assert(routineNames[1] == "Puddles Horizontal");
+    assert(routineNames[0] == "Puddles");
+    assert(routineNames[1] == "Puddles");
     for (unsigned i = 2; i < routineNames.size(); ++i) {
-        assert(routineNames[i] == "Puddles Vertical");
+        assert(routineNames[i] == "Puddle Peak");
     }
     buttonFrame = std::numeric_limits<unsigned>::max();
 

@@ -4,6 +4,7 @@
 #include "TextureEngine.h"
 #include "GeometryEngine.h"
 #include "Shapes.h"
+#include "Streamers.h"
 
 class Surfaces {
 private:
@@ -211,6 +212,12 @@ private:
     }
 }
 public:
+    // Shared with Audio::animateJulia; normal animation retains timed c motion.
+    static void animateJulia(uint32_t durationMs, uint32_t speedMs = 40,
+                             bool cycleColors = true, bool varyC = true) {
+        JuliaRenderer::animateJulia(durationMs, speedMs, cycleColors, varyC);
+    }
+
     // ==========================================
     // PURE OVERLOADS (Intent Inference)
     // ==========================================

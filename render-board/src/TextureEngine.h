@@ -112,6 +112,27 @@ public:
         return plan;
     }
 
+    // Moving, spatially varied paints for volume-driven shapes. Every
+    // palette-driven mode can use Rainbow or any of the four organic palettes.
+    // Hiphotic generates its own hues. Solid, uniform cycle and scatter are
+    // deliberately outside this pool so the shape retains spatial color detail.
+    static TexturePlan getRandomMovingTexturePlan() {
+        const ShaderMode modes[] = {MODE_LINEAR_FLOW, MODE_NOISE_FIELD,
+            MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
+        TexturePlan plan;
+        plan.sMode = modes[random8(5)];
+        if (random8(5) == 0) {
+            plan.palette = RainbowColors_p;
+            strcpy(getPaletteNameBuffer(), "Rainbow");
+        } else {
+            plan.palette = getRandomOrganicPalette();
+        }
+        if (plan.sMode == MODE_HIPHOTIC) {
+            strcpy(getPaletteNameBuffer(), "Hiphotic Native");
+        }
+        return plan;
+    }
+
     static TexturePlan getRandomTexturePlan() {
         // 33% Chance for a Solid Color
         if (random8(100) < 33) {
@@ -123,6 +144,14 @@ public:
         
         // 67% Chance to just route directly into the flattened non-solid pool
         return getRandomNonSolidTexturePlan();
+    }
+
+    // Merkaba's approved component colors. Callers choose the four-color
+    // symmetry scheme or a curated two-component split; arbitrary textures
+    // must not hide its interlocking geometry. MODE_SOLID activates these
+    // sentinel palettes in GeometryEngine::drawMerkaba().
+    static CRGBPalette16 getMerkabaPalette(bool fourColorSymmetry) {
+        return getDynamicContrastPalette(fourColorSymmetry ? CRGB::White : CRGB::Gray);
     }
 
     static CRGBPalette16 getDynamicContrastPalette(CRGB sentinel) {

@@ -193,7 +193,9 @@
  * TempoTracker reuses linear band RMS before display EQ/gamma/smoothing.
  * Adaptive-gated linear power increases form a novelty curve; a fixed 8.4-second history
  * supports an incremental autocorrelation search over roughly 60-200 BPM.
- * The weighted novelty history aligns phase; hysteresis retains lock through short gaps.
+ * A regular dedicated kick train guides tempo and phase; spectral correlation
+ * remains the fallback when kicks are absent or irregular. Hysteresis retains
+ * lock through short gaps. Neither detector's thresholds or gain are changed.
  * A calibrated volume floor of 5 distinguishes activity from tiny idle noise.
  * This is an experimental musical clock: half/double-time ambiguity, weak
  * percussion and rapid tempo changes remain limitations. WorkMax includes it.
@@ -957,8 +959,9 @@ static void acquireAudio(bool sd) {
     const bool kickLeft = kickDetector.finishBlock(uiKickSensitivity, uiKickMinRMS);
     const bool kickRight =
         channels == 2 && kickDetectorRight.finishBlock(uiKickSensitivity, uiKickMinRMS);
-    if ((kickLeft || kickRight) &&
-        (beatCount == 0 || uint32_t(millis() - lastBeatEventMs) >= KICK_MIN_INTERVAL_MS)) {
+    const bool tempoKick = (kickLeft || kickRight) &&
+        (beatCount == 0 || uint32_t(millis() - lastBeatEventMs) >= KICK_MIN_INTERVAL_MS);
+    if (tempoKick) {
         // Two channel detections of one hit remain ONE transported event.
         recordKickEvent(millis());
     }
@@ -1002,7 +1005,7 @@ static void acquireAudio(bool sd) {
     // Rhythm uses pre-EQ/pre-gamma bands. A modest calibrated activity floor
     // keeps a tiny electrical baseline from counting as music during silence.
     const TempoTracker::Result rhythm = tempoTracker.process(
-        tempoBands, audible && volumeRawFloat >= 5.0f, AudioAnalysis::HopSeconds);
+        tempoBands, audible && volumeRawFloat >= 5.0f, AudioAnalysis::HopSeconds, tempoKick);
     if (rhythm.attack.event) {
         ++attackCount;
         payload.attackStrength = uint8_t(lroundf(rhythm.attack.strength * 255.0f));

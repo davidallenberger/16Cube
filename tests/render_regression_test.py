@@ -163,7 +163,7 @@ namespace TestDemo {
     }
 
     void runEngine(bool sequential) {
-        assert(sequential == (animationOrder() == PlaybackOrder::Sequential));
+        assert(sequential == (animationOrder() != PlaybackOrder::Shuffled));
         ++engineCalls;
 
         // Return twice to verify that playback keeps advancing through the
@@ -177,7 +177,8 @@ __PLAYBACK_CODE__
 int main() {
     const TestDemo::PlaybackOrder orders[] = {
         TestDemo::PlaybackOrder::Shuffled,
-        TestDemo::PlaybackOrder::Sequential
+        TestDemo::PlaybackOrder::Sequential,
+        TestDemo::PlaybackOrder::Descending
     };
 
     for (TestDemo::PlaybackOrder order : orders) {

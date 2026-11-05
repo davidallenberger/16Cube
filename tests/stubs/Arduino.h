@@ -20,3 +20,5 @@ double ledcSetup(int,double,int); void ledcAttachPin(int,int); void ledcWrite(in
 
 uint32_t esp_random();uint32_t micros();void delayMicroseconds(unsigned);long random(long);
 inline void randomSeed(unsigned){}
+
+inline void yield() {}
