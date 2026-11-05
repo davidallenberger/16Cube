@@ -17,11 +17,10 @@ class Audio {
     struct Controls {
         float puddlesSensitivity = 1.0f;    // Volume-to-size response.
         float puddlePeakSensitivity = 2.0f; // Shared-event admission.
-        float gravitySensitivity = 1.0f;  // Volume-to-radius artistic gain.
-        uint32_t gravityStepMs = 16;       // Drawing interval; checkpoints stay responsive.
-        bool gravityFromUpperCorner = false; // Otherwise expand from cube center.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
+        float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
+        float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
         float juliaVolumeGamma = 1.0f;     // <1 boosts quiet levels; >1 favors louder levels.
         uint32_t juliaAttackMs = 100;      // Geometry smoothing time constant on volume rises; 0 bypasses.
@@ -73,16 +72,8 @@ class Audio {
     static void waverly(ShaderMode shader, CRGBPalette16 palette,
                         bool cyclingGradient = false, uint32_t durationMs = 0);
 
-    enum class GravityShape : uint8_t { Sphere, Box, Merkaba };
-    enum class GravityOrigin : uint8_t { Center, UpperCorner };
     static void animateJulia();
-    static void animateGravityMeter();
-    // corner bits select X/Y sides; Z is always the top for UpperCorner.
-    // Radius follows volumeSm directly; zero volume draws no shape.
-    static void gravityMeter(GravityShape shape, GravityOrigin origin,
-                             ShaderMode shader, CRGBPalette16 palette,
-                             uint32_t durationMs = 0, uint8_t corner = 0,
-                             const char *paletteName = "Custom");
+    static void animateSurroundGEQ();
 
     static void animateBpmSphere();
     static void animateBpmCheckerboard();

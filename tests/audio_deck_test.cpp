@@ -50,7 +50,7 @@ static void draw(unsigned id) {
     if (launches.size() >= launchLimit) {
         throw StopTest();
     }
-    launches.push_back(id == 9 ? 0 : id >= 4 && id <= 7 ? 5 : id + 1);
+    launches.push_back(id);
     const uint32_t start = clockMs;
     bool pressed = false;
     while (TestDemo::audioRoutineRunning()) {
@@ -86,19 +86,19 @@ void Audio::animateBpmSphere() {
 }
 
 void Audio::animateBpmCheckerboard() {
-    draw(5);
+    draw(4);
 }
 
 void Audio::animateBpmDiagonal() {
-    draw(6);
+    draw(4);
 }
 
 void Audio::animateBpmHelix() {
-    draw(7);
+    draw(4);
 }
 
 void Audio::animateAttackMonitor() {
-    draw(8);
+    draw(5);
 }
 
 static void reset(TestDemo::PlaybackOrder order = TestDemo::PlaybackOrder::Sequential) {
@@ -129,6 +129,11 @@ static void play(unsigned count) {
 
 int main() {
     using namespace TestDemo;
+    assert(audioPlayback().order == PlaybackOrder::Descending);
+    reset(PlaybackOrder::Descending);
+    assert(std::strcmp(currentAudioRoutineName(), "Surround GEQ") == 0);
+    play(3);
+    assert(launches == std::vector<unsigned>({6, 4, 3}));
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
     const unsigned rememberedLook = waverlyLook;
@@ -148,7 +153,7 @@ int main() {
     // All patterns are available, selection stays fixed through restarts,
     // and leaving the card releases it for the next visit.
     reset();
-    for (unsigned i = 0; i < 5; ++i) {
+    for (unsigned i = 0; i < 4; ++i) {
         requestNext(Deck::Audio);
     }
     bool patternsSeen[BREATHE_PATTERN_COUNT] = {};
@@ -219,12 +224,11 @@ int main() {
     // A just-applied manual step is retained even if a switch follows it.
     reset();
     requestNext(Deck::Audio);
-    requestNext(Deck::Audio);
     stopPlayback();
     assert(std::strncmp(currentAudioRoutineName(), "Waverly ", 8) == 0);
     assert(audioRoutineRunning()); // A direct experimental call is untimed.
     play(1);
-    assert(launches[0] == 2);
+    assert(launches[0] == 1);
 
     reset(PlaybackOrder::Shuffled);
     play(count * 3);
@@ -241,7 +245,6 @@ int main() {
 
     // Changing order preserves the selected entry rather than jumping to 0.
     reset();
-    requestNext(Deck::Audio);
     requestNext(Deck::Audio);
     requestNext(Deck::Audio);
     audioPlayback().order = PlaybackOrder::Shuffled;
@@ -297,6 +300,6 @@ void Audio::waverly(ShaderMode, CRGBPalette16, bool, uint32_t) {
     draw(1);
 }
 
-void Audio::animateGravityMeter() { draw(0); }
+void Audio::animateSurroundGEQ() { draw(6); }
 
-void Audio::animateJulia() { draw(9); }
+void Audio::animateJulia() { draw(0); }

@@ -84,17 +84,16 @@ namespace {
     // THE APPROVED AUDIO DECK. Set enabled=false to leave a work-in-progress
     // routine out of unattended playback. Its Audio:: method can still exist
     // and be called directly. These entries NEVER mix with the normal deck.
-    // Add new routines at the TOP: sequential playback starts with the first
-    // enabled entry after a flash, ready for the debug Hold button.
+    // Descending playback starts at the last enabled card after a flash.
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
-        {true, "GravityMeter", &Audio::animateGravityMeter},
         {true, "Waverly", &drawWaverly},
 
         {true, "Puddles", &Audio::animatePuddles},
         {true, "Puddle Peak", &Audio::animatePuddlePeak},
         {true, "Breathe", &drawBreathe},
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
+        {true, "Surround GEQ", &Audio::animateSurroundGEQ},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;
@@ -118,7 +117,9 @@ namespace {
         }
         const int preserve = audioDeckBuilt && !audioDeck.empty() ? int(audioDeck.current()) : -1;
         audioDeck.clear();
-        for (size_t i = 0; i < AUDIO_ROUTINE_COUNT; ++i) {
+        for (size_t offset = 0; offset < AUDIO_ROUTINE_COUNT; ++offset) {
+            const size_t i = order == TestDemo::PlaybackOrder::Descending ?
+                AUDIO_ROUTINE_COUNT - 1 - offset : offset;
             if (audioRoutines[i].enabled) {
                 audioDeck.add(uint8_t(i));
             }

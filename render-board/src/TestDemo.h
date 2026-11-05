@@ -38,7 +38,7 @@ namespace TestDemo {
     enum class PlaybackOrder { Sequential, Descending, Shuffled };
 
     struct AudioPlaybackSettings {
-        PlaybackOrder order = PlaybackOrder::Sequential;
+        PlaybackOrder order = PlaybackOrder::Descending;
         uint32_t durationMs = 30000; // 0 holds until the next button press.
     };
 

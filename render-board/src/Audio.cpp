@@ -1,5 +1,4 @@
 #include "Audio.h"
-#include "GeometryEngine.h"
 #include "TestDemo.h"
 #include "AppMemory.h"
 #include <math.h>
@@ -485,118 +484,140 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
     }
 }
 
-void Audio::animateGravityMeter() {
-    const auto shape = GravityShape(random(3));
-    const auto origin = controls().gravityFromUpperCorner ?
-        GravityOrigin::UpperCorner : GravityOrigin::Center;
-    const uint8_t corner = origin == GravityOrigin::UpperCorner ? uint8_t(random(4)) : 0;
+void Audio::animateSurroundGEQ() {
+    constexpr uint8_t groupCount = 8;
+    // Keep the four lowest bands for the sphere. Preserve the first four
+    // non-bass bands individually and combine pairs higher up the spectrum.
+    constexpr uint8_t edges[] = {4, 5, 6, 7, 8, 10, 12, 14, 16};
+    const CRGB colors[groupCount] = {
+        CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
+        CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3), CRGB(0xFFFFFF)
+    };
+    // Two-deep blocks on the full cube. One-deep on the narrower cuboid
+    // keeps the corner bands unambiguous and leaves room for the sphere.
+    const int thickness = min(RNDR_X, RNDR_Y) / groupCount;
+    const float maxRadius = min(RNDR_CX, RNDR_CY) - thickness + 0.5f;
+    const int maxBarHeight = RNDR_Z - 1; // Top row is available for the peak.
     const TexturePlan plan = PaletteUtils::getRandomMovingTexturePlan();
-    gravityMeter(shape, origin, plan.sMode, plan.palette, 0, corner,
-                 PaletteUtils::getPaletteNameBuffer());
-}
+    TextureState texture(plan.sMode, plan.palette, 1.0f);
+    float peaks[groupCount] = {};
+    uint32_t peakMs[groupCount] = {};
+    // All voxels at the same distance share coverage, so store one value
+    // per half-voxel shell instead of keeping another cube buffer.
+    constexpr int shellCount = RNDR_X + RNDR_Y;
+    constexpr float recessionMs = 180.0f;
+    float sphereCoverage[shellCount] = {};
+    uint32_t lastMs = millis();
 
-void Audio::gravityMeter(GravityShape shape, GravityOrigin origin,
-                         ShaderMode shader, CRGBPalette16 palette,
-                         uint32_t durationMs, uint8_t corner, const char *paletteName) {
-    if (shape != GravityShape::Sphere && shape != GravityShape::Box &&
-        shape != GravityShape::Merkaba) {
-        return;
-    }
-    if (shape == GravityShape::Merkaba) {
-        // Same two choices as TestDemo. Enforce here, including direct calls,
-        // so a caller cannot accidentally make the component geometry illegible.
-        shader = MODE_SOLID;
-        palette = PaletteUtils::getMerkabaPalette(random(2) == 0);
-        paletteName = PaletteUtils::getPaletteNameBuffer();
-    }
-    const bool fromCorner = origin == GravityOrigin::UpperCorner;
-    corner &= 3;
-    const float cx = fromCorner ? ((corner & 1) ? RNDR_X - 1.0f : 0.0f) : RNDR_CX;
-    const float cy = fromCorner ? ((corner & 2) ? RNDR_Y - 1.0f : 0.0f) : RNDR_CY;
-    const float cz = fromCorner ? RNDR_Z - 1.0f : RNDR_CZ;
-    // Preserve isotropic shape geometry on rectangular canvases: the shortest
-    // axis sets the available radius. Center uses a half-span, corner a full
-    // span. Corner origins intentionally show a clipped portion growing inward.
-    const float span = float(min(int(RNDR_X) - 1, min(int(RNDR_Y) - 1, int(RNDR_Z) - 1)));
-    const float maximumRadius = span * (fromCorner ? 1.0f : 0.5f);
-    const char *shapeName = shape == GravityShape::Sphere ? "Sphere" :
-        shape == GravityShape::Box ? "Box" : "Merkaba";
-    const char *shaderName = "Custom";
-    switch (shader) {
-    case MODE_LINEAR_FLOW:
-        shaderName = "LinearFlow";
-        break;
-    case MODE_NOISE_FIELD:
-        shaderName = "Noise";
-        break;
-    case MODE_DISTANCE_FIELD:
-        shaderName = "Distance";
-        break;
-    case MODE_HIPHOTIC:
-        shaderName = "Hiphotic";
-        break;
-    case MODE_DISTORTION_WAVES:
-        shaderName = "Distortion";
-        break;
-    case MODE_SOLID:
-        shaderName = "Solid";
-        break;
-    case MODE_SPATIAL_GRADIENT:
-        shaderName = "Spatial";
-        break;
-    default:
-        break;
-    }
-    // Snapshot the helper's diagnostic label before drawing. All state is
-    // local plain data: no resource ownership spans the OS escape checkpoint.
-    char paletteLabel[64];
-    snprintf(paletteLabel, sizeof(paletteLabel), "%s", paletteName);
-    TextureState texture(shader, palette, 1.0f);
-    const uint32_t startedMs = millis();
-    uint32_t lastDrawMs = startedMs;
-    bool firstFrame = true;
-    float radius = 0.0f;
-    while (TestDemo::audioRoutineRunning() &&
-           (durationMs == 0 || TestDemo::routineTimeRemaining(uint32_t(millis() - startedMs), durationMs))) {
+    while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio();
         const uint32_t now = millis();
-        const uint32_t deltaMs = uint32_t(now - lastDrawMs);
-        const uint32_t stepMs = min(uint32_t(250), max(uint32_t(1), controls().gravityStepMs));
-        const float gain = std::isfinite(controls().gravitySensitivity) ?
-            min(8.0f, max(0.0f, controls().gravitySensitivity)) : 1.0f;
-        if (firstFrame || deltaMs >= stepMs) {
-            const float level = min(1.0f, float(audio.volumeSm) * gain / 255.0f);
-            radius = maximumRadius * level;
-            texture.advance(deltaMs);
-            clearAll();
-            // Explicit silence avoids the renderer's anti-alias fringe at
-            // radius zero. Keep its fractional radii for intermediate levels.
-            if (level > 0.0f && radius > 0.0f) {
-                switch (shape) {
-                case GravityShape::Sphere:
-                    GeometryEngine::drawSphere(cx, cy, cz, radius, RENDER_SOLID,
-                                               texture, 0.0f, 0.0f, 0.0f);
-                    break;
-                case GravityShape::Box:
-                    GeometryEngine::drawBox(cx, cy, cz, radius, RENDER_SOLID,
-                                            texture, 0.0f, 0.0f, 0.0f);
-                    break;
-                case GravityShape::Merkaba:
-                    // Existing Merkaba renderer draws the interlocking surface;
-                    // its established appearance is preserved, including width.
-                    GeometryEngine::drawMerkaba(cx, cy, cz, radius, RENDER_SHELL,
-                                                texture, 0.0f, 0.0f, 0.0f);
-                    break;
+        const uint32_t elapsedMs = uint32_t(now - lastMs);
+        texture.advance(elapsedMs);
+        lastMs = now;
+
+        uint8_t bass = 0;
+        for (uint8_t band = 0; band < edges[0]; ++band) {
+            bass = max(bass, audio.fftResult[band]);
+        }
+        const float setting = controls().surroundGeqGain;
+        const float gain = std::isfinite(setting) ? min(8.0f, max(0.0f, setting)) : 3.0f;
+        const float bassSetting = controls().surroundGeqBassGain;
+        const float bassGain = std::isfinite(bassSetting) ?
+            min(8.0f, max(0.0f, bassSetting)) : 2.5f;
+        const float radius = maxRadius * min(1.0f, bass * bassGain / 255.0f);
+        // Loudness lifts all bars together. Spectrum strength determines
+        // how much of the remaining height each bar fills.
+        const float baseline = RNDR_Z * (3.0f / 16.0f) * min(1.0f, audio.volumeSm * gain / 255.0f);
+        float heights[groupCount];
+        int peakRows[groupCount];
+        for (uint8_t group = 0; group < groupCount; ++group) {
+            uint8_t level = 0;
+            for (uint8_t band = edges[group]; band < edges[group + 1]; ++band) {
+                level = max(level, audio.fftResult[band]);
+            }
+            const float height = baseline + (maxBarHeight - baseline) * min(1.0f, level * gain / 255.0f);
+            heights[group] = height;
+            if (height >= peaks[group]) {
+                peaks[group] = height;
+                peakMs[group] = now;
+            } else if (uint32_t(now - peakMs[group]) >= 120) {
+                // Drop at eight voxels per second after a brief hold.
+                peaks[group] = max(height, peaks[group] - 0.008f * elapsedMs);
+            }
+            peakRows[group] = min(maxBarHeight, int(ceilf(peaks[group])));
+        }
+
+        clearAll();
+        const int radiusSteps = int(radius * 2.0f);
+        const float fade = 255.0f * elapsedMs / recessionMs;
+        int outerShell = -1;
+        for (int shell = 0; shell < shellCount; ++shell) {
+            // Match the solid sphere's half-voxel radius and edge coverage.
+            const int edge = shell - radiusSteps + 2;
+            const int target = radius > 0.0f ? 255 - min(4, max(0, edge)) * 255 / 4 : 0;
+            sphereCoverage[shell] = max(float(target), sphereCoverage[shell] - fade);
+            if (sphereCoverage[shell] >= 1.0f) {
+                outerShell = shell;
+            }
+        }
+        if (outerShell >= 0) {
+            const int distanceLimit = (outerShell + 1) * (outerShell + 1);
+            for (int x = 0; x < RNDR_X; ++x) {
+                const int dx = 2 * x - int(2 * RNDR_CX);
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    const int dy = 2 * y - int(2 * RNDR_CY);
+                    const int xySquared = dx * dx + dy * dy;
+                    if (xySquared >= distanceLimit) continue;
+                    for (int z = 0; z < RNDR_Z; ++z) {
+                        const int dz = 2 * z - int(2 * RNDR_CZ);
+                        const int distanceSquared = xySquared + dz * dz;
+                        if (distanceSquared >= distanceLimit) continue;
+                        const int shell = int(sqrtf(float(distanceSquared)));
+                        const uint8_t coverage = uint8_t(sphereCoverage[shell]);
+                        if (coverage > 0) {
+                            CRGB color = texture.getColor(x, y, z);
+                            color.nscale8(coverage);
+                            setVoxel(x, y, z, color);
+                        }
+                    }
                 }
             }
-            firstFrame = false;
-            lastDrawMs = now;
         }
-        char detail[256];
-        snprintf(detail, sizeof(detail),
-                 "Gravity shape=%s origin=%s corner=%u radius=%.2f/%.2f gain=%.2f shader=%s palette=%s",
-                 shapeName, fromCorner ? "top-corner" : "center", unsigned(corner),
-                 double(radius), double(maximumRadius), double(gain), shaderName, paletteLabel);
+        // Traverse each footprint voxel once. Reversing successive faces
+        // gives their shared corners the same band at either side of a seam.
+        for (int y = 0; y < RNDR_Y; ++y) {
+            for (int x = 0; x < RNDR_X; ++x) {
+                int group;
+                if (y < thickness) {
+                    group = x * groupCount / RNDR_X;
+                } else if (x >= RNDR_X - thickness) {
+                    group = (RNDR_Y - 1 - y) * groupCount / RNDR_Y;
+                } else if (y >= RNDR_Y - thickness) {
+                    group = (RNDR_X - 1 - x) * groupCount / RNDR_X;
+                } else if (x < thickness) {
+                    group = y * groupCount / RNDR_Y;
+                } else {
+                    continue;
+                }
+                const float height = heights[group];
+                for (int z = 0; z < RNDR_Z && z < height; ++z) {
+                    CRGB color = colors[group];
+                    color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
+                    setVoxel(x, y, z, color);
+                }
+                // The full-brightness cap sits one row above the peak body.
+                const int peakRow = peakRows[group];
+                if (peaks[group] >= 1.0f) {
+                    setVoxel(x, y, peakRow, colors[group]);
+                }
+            }
+        }
+        char detail[176];
+        snprintf(detail, sizeof(detail), "GEQ gain=%.2f bassGain=%.2f baseline=%.2f bass=%u radius=%.2f bars=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+                 double(gain), double(bassGain), double(baseline), unsigned(bass), double(radius),
+                 double(heights[0]), double(heights[1]), double(heights[2]), double(heights[3]),
+                 double(heights[4]), double(heights[5]), double(heights[6]), double(heights[7]));
         Audio::debug(audio, detail);
         showCube();
     }

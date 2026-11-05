@@ -27,13 +27,6 @@ static bool variedPlacement = false;
 static uint32_t placementState = 1;
 static CRGB buffer[RNDR_X * RNDR_Y * RNDR_Z];
 static bool checkWaverly = false;
-static unsigned gravityShapeUnderTest = 0;
-static unsigned gravityOriginUnderTest = 0;
-static void gravityUnderTest() {
-    Audio::gravityMeter(Audio::GravityShape(gravityShapeUnderTest),
-        gravityOriginUnderTest == 0 ? Audio::GravityOrigin::Center : Audio::GravityOrigin::UpperCorner,
-        MODE_LINEAR_FLOW, RainbowColors_p, 0, gravityOriginUnderTest == 0 ? 0 : gravityOriginUnderTest - 1);
-}
 static std::vector<unsigned> lightTotals;
 static bool drawn[RNDR_X * RNDR_Y * RNDR_Z] = {};
 static unsigned uniqueThisFrame = 0;
@@ -196,7 +189,6 @@ static void receiveFrame() {
 
 static void render(void (*routine)()) {
     TestDemo::stopPlayback();
-    GeometryEngine::gravityCalls.clear();
     clearAll();
     lightTotals.clear();
     clockMs = initialClock;
@@ -284,6 +276,7 @@ static void addAttack(unsigned at, uint16_t bands, uint8_t strength = 128) {
 }
 
 int main() {
+    TestDemo::audioPlayback().order = TestDemo::PlaybackOrder::Sequential;
     // Artist-tuned defaults in Audio.h must not change this test fixture.
     Audio::controls().puddlesSensitivity = 1.0f;
     Audio::controls().puddlePeakSensitivity = 1.0f;
@@ -535,39 +528,57 @@ int main() {
     render(&testanimatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10, 30}));
 
-    // GravityMeter reuses existing renderers. Verify dispatch and continuous
-    // radius mapping for all shapes and all corner origins on both canvases.
-    const float span = float(min(int(RNDR_X) - 1, min(int(RNDR_Y) - 1, int(RNDR_Z) - 1)));
-    for (unsigned shape = 0; shape < 3; ++shape) {
-        for (unsigned origin = 0; origin < 5; ++origin) {
-            makeStream(4);
-            input[0].values.volumeSm = 0;
-            input[1].values.volumeSm = 64;
-            input[2].values.volumeSm = 128;
-            input[3].values.volumeSm = 255;
-            gravityShapeUnderTest = shape;
-            gravityOriginUnderTest = origin;
-            render(&gravityUnderTest);
-            assert(GeometryEngine::gravityCalls.size() == 3); // Silence draws nothing.
-            const unsigned levels[] = {64, 128, 255};
-            const unsigned corner = origin == 0 ? 0 : origin - 1;
-            const float maxRadius = span * (origin == 0 ? 0.5f : 1.0f);
-            for (unsigned i = 0; i < 3; ++i) {
-                const auto &call = GeometryEngine::gravityCalls[i];
-                assert(call.shape == shape);
-                if (shape == unsigned(Audio::GravityShape::Merkaba)) {
-                    assert(call.shader == MODE_SOLID);
-                    assert(call.palette == 100 || call.palette == 101);
-                } else {
-                    assert(call.shader == MODE_LINEAR_FLOW);
-                }
-                assert(fabsf(call.radius - maxRadius * levels[i] / 255.0f) < 0.0001f);
-                assert(call.x == (origin == 0 ? RNDR_CX : (corner & 1) ? RNDR_X - 1.0f : 0.0f));
-                assert(call.y == (origin == 0 ? RNDR_CY : (corner & 2) ? RNDR_Y - 1.0f : 0.0f));
-                assert(call.z == (origin == 0 ? RNDR_CZ : RNDR_Z - 1.0f));
-            }
-        }
+    // Separate bass, volume and frequency inputs on both canvases.
+    makeStream(1);
+    input[0].values.volumeSm = 0;
+    for (auto &band : input[0].values.fftResult) band = 0;
+    render(&Audio::animateSurroundGEQ);
+    assert(writeCounts[0] == 0);
+    input[0].values.volumeSm = 255;
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(0, 0, 2).r == 192 && getVoxel(0, 0, 3).r == 255);
+    assert(getVoxel(0, 0, 4).r == 0);
+    assert(getVoxel(int(RNDR_CX), int(RNDR_CY), int(RNDR_CZ)).r == 0);
+    input[0].values.fftResult[4] = 255;
+    input[0].values.fftResult[0] = 255;
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(0, 0, RNDR_Z - 1).r == 255);
+    assert(getVoxel(RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 1).r == 255);
+    assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
+    const int cx = int(RNDR_CX), cy = int(RNDR_CY), cz = int(RNDR_CZ);
+    assert(getVoxel(cx, cy, cz).r > 0);
+
+    // An isolated bass hit lights the sphere promptly and leaves a dim
+    // sphere on the next frame. After the recession interval it is dark.
+    makeStream(1);
+    input[0].values.volumeSm = 0;
+    for (auto &band : input[0].values.fftResult) band = 0;
+    input[0].values.fftResult[0] = 255;
+    render(&Audio::animateSurroundGEQ);
+    const auto bright = getVoxel(cx, cy, cz).r;
+    assert(bright > 0);
+    Input silent = input[0];
+    silent.values.fftResult[0] = 0;
+    input.push_back(silent);
+    render(&Audio::animateSurroundGEQ);
+    const auto faded = getVoxel(cx, cy, cz).r;
+    assert(faded > 0 && faded < bright);
+    input.resize(14, silent);
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(cx, cy, cz).r == 0);
+
+    // A short peak leaves a same-color marker that falls after the bar goes dark.
+    makeStream(16);
+    for (auto &sample : input) {
+        sample.values.volumeSm = 0;
+        for (auto &band : sample.values.fftResult) band = 0;
     }
+    input[0].values.fftResult[4] = 255;
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(0, 0, 0).r == 0);
+    assert(getVoxel(0, 0, RNDR_Z - 1).r == 0);
+    assert(getVoxel(0, 0, RNDR_Z - 2).r == 255);
+    assert(getVoxel(0, 0, RNDR_Z - 2).g == 0);
 
     // Same geometry across every named look, independent of texturing. Real
     // receiver snapshots, silence, dimensions, symmetry, cadence and work cap.
@@ -717,7 +728,7 @@ int main() {
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
     for (unsigned entry = 0; entry < 4; ++entry) {
-        if (!audioRoutines[entry + 3].enabled) {
+        if (!audioRoutines[entry + 2].enabled) {
             continue;
         }
         makeStream();
@@ -726,7 +737,7 @@ int main() {
         assert((entry == 1 || entry == 3) ? lineFrames.empty() : !lineFrames.empty());
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
-    assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Julia Volume") == 0);
+    assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Surround GEQ") == 0);
     while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
