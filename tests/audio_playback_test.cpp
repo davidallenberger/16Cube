@@ -284,7 +284,7 @@ int main() {
     Audio::controls().bpmSensitivity = 1.0f;
     Audio::controls().attackSensitivity = 1.0f;
     Audio::controls().maxCubeEdge = 4;
-    const unsigned expectedLength = 1 + 128 * (RNDR_X - 1) / 255;
+    const unsigned expectedLength = 1 + 160 * (RNDR_X - 1) / 255;
     // Explicit expectations for the two supported canvases. Same fractional
     // footprint needs fewer lines on 10x10x16 than on the full 16^3 cube.
     const unsigned defaultLines = RNDR_X == 16 ? 6 : 4;
@@ -372,8 +372,10 @@ int main() {
         makeStream();
         addAttack(10, 0x0080);
         render(&testanimatePuddlePeak);
-        assert(firstCount > ordinaryCoverage * 0.8f);
-        assert(firstCount < ordinaryCoverage * 1.2f);
+        const unsigned ordinaryLength = 1 + 128 * (RNDR_X - 1) / 255;
+        const float normalizedBurst = float(firstCount) * ordinaryLength / expectedLength;
+        assert(normalizedBurst > ordinaryCoverage * 0.8f);
+        assert(normalizedBurst < ordinaryCoverage * 1.2f);
     }
 
     // Density changes BURST coverage, not event timing or shape length.
@@ -533,12 +535,15 @@ int main() {
     input[0].values.volumeSm = 0;
     for (auto &band : input[0].values.fftResult) band = 0;
     render(&Audio::animateSurroundGEQ);
-    assert(writeCounts[0] == 0);
+    assert(getVoxel(0, 0, 0).r == 192);
+    assert(getVoxel(0, 0, 1).r == 0);
+    const auto idleSphere = getVoxel(int(RNDR_CX), int(RNDR_CY), int(RNDR_CZ)).r;
+    assert(idleSphere > 0);
     input[0].values.volumeSm = 255;
     render(&Audio::animateSurroundGEQ);
     assert(getVoxel(0, 0, 2).r == 192 && getVoxel(0, 0, 3).r == 255);
     assert(getVoxel(0, 0, 4).r == 0);
-    assert(getVoxel(int(RNDR_CX), int(RNDR_CY), int(RNDR_CZ)).r == 0);
+    assert(getVoxel(int(RNDR_CX), int(RNDR_CY), int(RNDR_CZ)).r == idleSphere);
     input[0].values.fftResult[4] = 255;
     input[0].values.fftResult[0] = 255;
     render(&Audio::animateSurroundGEQ);
@@ -549,7 +554,7 @@ int main() {
     assert(getVoxel(cx, cy, cz).r > 0);
 
     // An isolated bass hit lights the sphere promptly and leaves a dim
-    // sphere on the next frame. After the recession interval it is dark.
+    // sphere on the next frame. After the recession interval it returns to idle.
     makeStream(1);
     input[0].values.volumeSm = 0;
     for (auto &band : input[0].values.fftResult) band = 0;
@@ -565,9 +570,9 @@ int main() {
     assert(faded > 0 && faded < bright);
     input.resize(14, silent);
     render(&Audio::animateSurroundGEQ);
-    assert(getVoxel(cx, cy, cz).r == 0);
+    assert(getVoxel(cx, cy, cz).r == idleSphere);
 
-    // A short peak leaves a same-color marker that falls after the bar goes dark.
+    // A short peak leaves a same-color marker that falls after the bar returns to idle.
     makeStream(16);
     for (auto &sample : input) {
         sample.values.volumeSm = 0;
@@ -575,7 +580,7 @@ int main() {
     }
     input[0].values.fftResult[4] = 255;
     render(&Audio::animateSurroundGEQ);
-    assert(getVoxel(0, 0, 0).r == 0);
+    assert(getVoxel(0, 0, 0).r == 192);
     assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
     assert(getVoxel(0, 0, RNDR_Z - 2).r == 255);
     assert(getVoxel(0, 0, RNDR_Z - 2).g == 0);
@@ -587,7 +592,8 @@ int main() {
         for (int z = 0; z < RNDR_Z; ++z) {
             for (int y = 0; y < RNDR_Y; ++y) {
                 for (int x = 0; x < RNDR_X; ++x) {
-                    if (getVoxel(x, y, z).r) depth = max(depth, RNDR_Y - 1 + x - y + z);
+                    const int offset = RNDR_Y - 1 + x - y + z;
+                    if (offset > 0 && getVoxel(x, y, z).r) depth = max(depth, offset);
                 }
             }
         }
@@ -606,6 +612,7 @@ int main() {
     input.resize(55, input.back());
     render(&Audio::animateCornerBurst);
     assert(furthestBurstVoxel() == -1);
+    assert(writeCounts.back() == 1);
 
     // Every shape starts at the clockwise bottom corner.
     for (auto draw : {&Audio::animateCornerBurst, &Audio::animateCornerBurstSphere,
@@ -613,7 +620,7 @@ int main() {
         makeStream(1);
         input[0].values.volumeSm = 80;
         render(draw);
-        const auto fill = getVoxel(0, RNDR_Y - 1, 0).r;
+        const auto fill = getVoxel(1, RNDR_Y - 1, 0).r;
         assert(fill > 0 && fill <= 39);
         assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
         assert(brightnessFrames.back() > 4 * fill);
@@ -709,8 +716,8 @@ int main() {
     waverlyLook = 0;
     waverlyLookSelected = true;
     render(&drawWaverly);
-    assert(lineFrames.empty());
-    assert(*std::max_element(lightTotals.begin(), lightTotals.end()) == 0);
+    assert(firstExtents[0] == RNDR_X && firstExtents[1] == RNDR_Y);
+    assert(firstCount == 2 * RNDR_X * RNDR_Y);
     makeStream(80);
     for (unsigned i = 12; i < input.size(); ++i) {
         input[i].values.volumeSm = 0;
@@ -718,7 +725,8 @@ int main() {
     waverlyLook = 0;
     waverlyLookSelected = true;
     render(&drawWaverly);
-    assert(lightTotals.back() == 0);
+    assert(lightTotals.back() > 0);
+    assert(getVoxel(0, 0, 1).r == 0);
     assert(*std::max_element(lightTotals.begin(), lightTotals.end()) > 0);
     makeStream(12);
     initialClock = 0xFFFFFFC0u;
@@ -733,6 +741,7 @@ int main() {
         throw StopTest();
     });
     assert(frame == 4);
+    Audio::controls().midrangeBoostEnabled = false;
     // Same volume/noise trajectory: only accepted non-bass events add reach.
     makeStream(80);
     waverlyLook = 0;
@@ -764,6 +773,35 @@ int main() {
     render(&drawWaverly);
     assert(writeCounts == baseline);
     Audio::controls().waverlyAttackReach = 0.15f;
+    // FFT fallback grows quiet instrumental passages, but bass/volume suppress
+    // it. Disabling the switch leaves FFT-only changes invisible to geometry.
+    auto fftStream = [] (bool rise, unsigned bass, unsigned volume) {
+        makeStream(100);
+        for (unsigned i = 0; i < input.size(); ++i) {
+            input[i].values.volumeSm = volume;
+            input[i].values.fftResult[0] = bass;
+            if (rise && i >= 10 && i < 20) input[i].values.fftResult[4] = 55;
+        }
+    };
+    for (unsigned scenario = 0; scenario < 4; ++scenario) {
+        const unsigned bass = scenario == 1 ? 97 : 20;
+        const unsigned volume = scenario == 2 ? 67 : 8;
+        Audio::controls().midrangeBoostEnabled = scenario != 3;
+        fftStream(false, bass, volume);
+        render(&drawWaverly);
+        const auto quietWrites = writeCounts;
+        fftStream(true, bass, volume);
+        render(&drawWaverly);
+        if (scenario == 0) {
+            bool grew = false;
+            for (unsigned i = 10; i < 30; ++i) grew |= writeCounts[i] > quietWrites[i];
+            assert(grew);
+            for (unsigned i = 50; i < writeCounts.size(); ++i) assert(writeCounts[i] == quietWrites[i]);
+        } else {
+            assert(writeCounts == quietWrites);
+        }
+    }
+    Audio::controls().midrangeBoostEnabled = true;
     checkWaverly = false;
 
     const char *names[] = {

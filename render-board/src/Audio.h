@@ -16,12 +16,14 @@ class Audio {
     // tune these for artistic response without changing that calibration.
     struct Controls {
         float puddlesSensitivity = 1.0f;    // Volume-to-size response.
-        float puddlePeakSensitivity = 2.0f; // Shared-event admission.
+        float puddlePeakSensitivity = 2.5f; // Shared-event admission.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
         float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
         float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
+        bool midrangeBoostEnabled = true; // Shared by audio Julia and Waverly.
+        float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
         float juliaVolumeGamma = 1.0f;     // <1 boosts quiet levels; >1 favors louder levels.
         uint32_t juliaAttackMs = 100;      // Geometry smoothing time constant on volume rises; 0 bypasses.

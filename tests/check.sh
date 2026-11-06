@@ -51,7 +51,7 @@ stage "$command_src" "$command_include" "$work/command" \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h Audio.cpp Audio.h Depth.cpp Depth.h
+    TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h MidrangeBoost.h Audio.cpp Audio.h Depth.cpp Depth.h
 # Compile the production BPM section co-resident in Streamers.h. Full
 # Streamers effects require the ESP32/FastLED build, verified separately.
 sed '/^#include "GeometryEngine.h"/,$d' "$render_src/Streamers.h" > "$work/render/Streamers.h"

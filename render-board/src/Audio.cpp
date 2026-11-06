@@ -1,4 +1,5 @@
 #include "Audio.h"
+#include "MidrangeBoost.h"
 #include "TestDemo.h"
 #include "AppMemory.h"
 #include <math.h>
@@ -16,6 +17,14 @@ Audio::Controls &Audio::controls() {
 }
 
 namespace {
+    float midrangeBoostGain() {
+        const float gain = Audio::controls().midrangeBoostGain;
+        return std::isfinite(gain) ? min(1.0f, max(0.0f, gain)) : Audio::Controls{}.midrangeBoostGain;
+    }
+
+    // The renderer takes a plain callback. Reset its state on each entry.
+    MidrangeBoost juliaBoost;
+
     float juliaAudioClosure() {
         const auto audio = RemoteInputs::audio();
         const auto &settings = Audio::controls();
@@ -23,17 +32,20 @@ namespace {
             min(8.0f, max(0.0f, settings.juliaSensitivity)) : 1.5f;
         const float gamma = std::isfinite(settings.juliaVolumeGamma) ?
             min(4.0f, max(0.25f, settings.juliaVolumeGamma)) : 1.0f;
-        const float volume = min(1.0f, float(audio.volumeSm) * gain / 255.0f);
+        juliaBoost.update(audio, millis(), settings.midrangeBoostEnabled);
+        const float lift = juliaBoost.lift * midrangeBoostGain();
+        const float volume = min(1.0f, float(audio.volumeSm) * gain / 255.0f + lift);
         const float closure = gamma == 1.0f ? volume : powf(volume, gamma);
         char detail[96];
-        snprintf(detail, sizeof(detail), "Julia volume=%u target=%.3f gain=%.2f gamma=%.2f",
-            unsigned(audio.volumeSm), double(closure), double(gain), double(gamma));
+        snprintf(detail, sizeof(detail), "Julia volume=%u target=%.3f gain=%.2f gamma=%.2f fft=%.3f",
+            unsigned(audio.volumeSm), double(closure), double(gain), double(gamma), double(lift));
         Audio::debug(audio, detail);
         return closure;
     }
 }
 
 void Audio::animateJulia() {
+    juliaBoost = MidrangeBoost{};
     // Volume replaces the timed open/close oscillator. Small contour motion
     // and the approved 4s hold / 2s hue transitions continue independently.
     JuliaRenderer::animateJulia(0, controls().juliaStepMs, true, true,
@@ -196,9 +208,9 @@ void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8
         if (spawn && sensitivity > 0.0f) {
             lastSpawn = now;
 
-            // Peak sensitivity changes the trigger; ordinary sensitivity
-            // changes size. Both use the SAME volume for all geometry choices.
-            const float response = peakDetect ? 1.0f : sensitivity;
+            // Peak uses a separate size gain because its sensitivity controls
+            // event admission. Apply the size gain before voxel quantization.
+            const float response = peakDetect ? 1.25f : sensitivity;
             const uint8_t volume = uint8_t(min(255.0f, audio.volumeSm * response));
             // Original regime: one solid hue per spawn/burst, retained while
             // fading. Hue advances on the next spawn; no spatial shader.
@@ -381,6 +393,7 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
     float tallest = 0.0f;
     bool attackActive = false;
     uint32_t lastAttackMs = startedMs;
+    MidrangeBoost boost;
     clearAll();
 
     while (TestDemo::audioRoutineRunning() &&
@@ -410,6 +423,10 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
         const float attackReach = attackActive ?
             float(RNDR_Z) * attackFraction * (1.0f - float(attackAgeMs) / float(decayMs)) : 0.0f;
 
+        const bool fftEnabled = controls().midrangeBoostEnabled;
+        boost.update(audio, now, fftEnabled);
+        const float extraReach = fftEnabled ? boost.lift * midrangeBoostGain() * float(RNDR_Z) * 0.9f : attackReach;
+
         if (firstFrame || deltaMs >= stepMs) {
             // Decay follows real elapsed time rather than frame count. Faster
             // rendering therefore does not shorten trails or brighten buildup.
@@ -435,11 +452,12 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
                     const uint16_t nx = 1379 + uint32_t(x) * 768 / max(1, int(RNDR_X) - 1);
                     const uint16_t ny = 7919 + uint32_t(y) * 768 / max(1, int(RNDR_Y) - 1);
                     const float noise = float(inoise8(nx, ny, noiseTime)) / 255.0f;
-                    const float height = min(float(RNDR_Z), noise * (volume * gain * maximumReach + attackReach));
+                    const float height = max(1.0f,
+                        min(float(RNDR_Z), noise * (volume * gain * maximumReach + extraReach)));
                     tallest = max(tallest, height);
                     for (uint8_t z = 0; z < RNDR_Z; ++z) {
                         // Fractional tips avoid whole layers popping on/off.
-                        // At zero volume no new light is added; trails decay.
+                        // The two outer planes remain fully covered at idle.
                         const float coverage = min(1.0f, max(0.0f, height - float(z)));
                         if (coverage <= 0.0f) {
                             break;
@@ -473,10 +491,11 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
 
         char detail[192];
         snprintf(detail, sizeof(detail),
-                 "Waverly height=%.1f/%u gain=%.2f step=%lums color=%s mid=%u high=%u push=%.2f",
+                 "Waverly height=%.1f/%u gain=%.2f step=%lums color=%s mid=%u high=%u push=%.2f fft=%u gate=%.2f bin=%u rise=%.1f",
                  double(tallest), unsigned(RNDR_Z), double(gain),
                  (unsigned long)stepMs, columnGradient ? "gradient-cycle" : "moving@1x",
-                 unsigned(audio.midAttack), unsigned(audio.highAttack), double(attackReach));
+                 unsigned(audio.midAttack), unsigned(audio.highAttack), double(extraReach), unsigned(fftEnabled),
+                 double(boost.gate), boost.strongestBand, double(boost.strongestRise));
         Audio::debug(audio, detail);
         // Keep servicing buttons/UART even between slower geometry updates.
         // showCube() supplies the existing 60 Hz limiter; no blocking sleep.
@@ -525,7 +544,8 @@ void Audio::animateSurroundGEQ() {
         const float bassSetting = controls().surroundGeqBassGain;
         const float bassGain = std::isfinite(bassSetting) ?
             min(8.0f, max(0.0f, bassSetting)) : 2.5f;
-        const float radius = maxRadius * min(1.0f, bass * bassGain / 255.0f);
+        // Half a voxel of radius lights the center cluster on an even grid.
+        const float radius = max(0.5f, maxRadius * min(1.0f, bass * bassGain / 255.0f));
         // Loudness lifts all bars together. Spectrum strength determines
         // how much of the remaining height each bar fills.
         const float baseline = RNDR_Z * (3.0f / 16.0f) * min(1.0f, audio.volumeSm * gain / 255.0f);
@@ -537,7 +557,8 @@ void Audio::animateSurroundGEQ() {
                 level = max(level, audio.fftResult[band]);
             }
             const float height = baseline + (maxBarHeight - baseline) * min(1.0f, level * gain / 255.0f);
-            heights[group] = height;
+            // Keep one row lit without feeding the visual floor into peak tracking.
+            heights[group] = max(1.0f, height);
             if (height >= peaks[group]) {
                 peaks[group] = height;
                 peakMs[group] = now;
@@ -606,10 +627,13 @@ void Audio::animateSurroundGEQ() {
                     color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
                     setVoxel(x, y, z, color);
                 }
-                // The full-brightness cap sits one row above the peak body.
+                // Draw the peak cap above the bar body.
                 const int peakRow = peakRows[group];
                 if (peaks[group] >= 1.0f) {
-                    setVoxel(x, y, peakRow, colors[group]);
+                    CRGB cap = colors[group];
+                    // Fade the cap in above the idle row so tiny peaks cannot flash.
+                    cap.nscale8(uint8_t(255.0f * min(1.0f, peaks[group] - 1.0f)));
+                    setVoxel(x, y, peakRow, cap);
                 }
             }
         }
@@ -729,6 +753,8 @@ void drawCornerBurst(CornerFront shape) {
                 }
             }
         }
+        // Keep the origin visible even after a released wave has left the cube.
+        setVoxel(0, farY, 0, rainbow);
         char detail[120];
         snprintf(detail, sizeof(detail), "Burst phase=%s crest=%d dropMs=%lu fill=%.1f front=%.1f gain=%.2f",
                  phase == Phase::Traveling ? "travel" : phase == Phase::Crest ? "crest" : "waiting",

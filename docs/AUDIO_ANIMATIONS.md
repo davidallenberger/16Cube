@@ -206,12 +206,14 @@ Build and host checks do not establish the appearance or update rate on real
 hardware. Host texture/noise substitutes verify geometry/control contracts;
 the firmware build compiles the real FastLED noise and TextureState modes.
 
-Waverly also refreshes a bounded reach pulse for shared mid/high attacks. Bass
+With the FFT fallback switched off, Waverly refreshes a bounded reach pulse
+for shared mid/high attacks. Bass
 events alone do not trigger it. waverlyAttackSensitivity defaults to 1.0,
 waverlyAttackReach to 0.15 of Z (clamped to 0..0.25), and
 waverlyAttackDecayMs to 200. The extra reach follows the same noise contour,
 decays linearly and never stacks; simultaneous/repeated events refresh one
-pulse. Setting reach to zero restores volume-only geometry. Debug reports
+pulse. In this mode, setting attack reach to zero leaves only volume and the
+idle planes. Debug reports
 mid/high flags and the pre-noise push in voxels. Volume gain, source smoothing,
 noise rate and gradient cycling are unchanged.
 
@@ -689,3 +691,33 @@ If another effect needs the moment after a volume crest, factor Corner
 Burst's release detection into a shared cue. Preserve the sustained-drop
 confirmation and fresh-rise rearm. Puddle Peak already consumes shared
 attack events, which mark the start of a hit.
+
+### Midrange FFT fallback in Waverly and Julia Volume
+
+Waverly and Julia Volume use the render-board detector in MidrangeBoost.h.
+It measures rises above recent levels in FFT bands 2–9 and suppresses the
+lift when bass or smoothed volume is strong. Each playback keeps its own
+detector history.
+
+Audio::controls() provides one switch (midrangeBoostEnabled, default true)
+and one strength (midrangeBoostGain, default approximately 0.2604) for both effects. Waverly
+maps the lift to 3.75 voxels of maximum reach on a 16-high cube before noise.
+Julia adds the same normalized lift before closure gamma and motion smoothing.
+With the switch off, Waverly uses its prior attack push and Julia uses volume.
+
+Artistic volume gains belong to each effect. Input calibration on the command
+board affects the source signal shared by the audio deck. Other render
+effects can opt into the same detector and map its lift to their own motion.
+
+
+### Idle rendering and Puddle Peak tuning
+
+Waverly keeps both outer planes lit. Surround GEQ keeps one row per bar
+and a small center sphere, with the peak cap fading in above the idle row.
+Corner Burst draws one rainbow-cycling voxel at its origin for all three
+front shapes, including between waves. These are render-side visual floors.
+
+Puddle Peak defaults to 2.5 event sensitivity and applies a 1.25 size gain
+to smoothed volume before rounding line lengths and cube edges to voxels.
+Sensitivity admits weaker shared attacks, while size gain affects the
+geometry of bursts that already fired.
