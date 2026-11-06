@@ -669,3 +669,23 @@ Julia smoothing decision: retain the previous 100ms attack / 220ms release
 values. The stronger 300/600ms audition is reverted. The animation is accepted
 for now; further boundary smoothing is deferred. No tests/build run for this
 configuration-only restoration.
+
+### Corner Burst audition
+
+Corner Burst is the last audio card and opens first in descending order. A
+dim fill follows smoothed volume from a fixed corner. The diagonal front
+holds its crest while volume stays at least 12% or four points below it,
+whichever is larger. After 40 ms below threshold the front releases at that
+position, keeps its release hue, and travels independently toward the far
+corner while fading. One front travels at a time. A fresh rise rearms it
+after travel completes. The attached front and fill cycle rainbow hues.
+
+The single card randomly selects Plane, Sphere, or Box on entry. All launch
+one bottom corner clockwise from the original and use 15% fill brightness.
+The centered box outline with moving or cycling texture and overlapping
+fronts remain separate experiments.
+
+If another effect needs the moment after a volume crest, factor Corner
+Burst's release detection into a shared cue. Preserve the sustained-drop
+confirmation and fresh-rise rearm. Puddle Peak already consumes shared
+attack events, which mark the start of a hit.

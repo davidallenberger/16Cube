@@ -576,9 +576,54 @@ int main() {
     input[0].values.fftResult[4] = 255;
     render(&Audio::animateSurroundGEQ);
     assert(getVoxel(0, 0, 0).r == 0);
-    assert(getVoxel(0, 0, RNDR_Z - 1).r == 0);
+    assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
     assert(getVoxel(0, 0, RNDR_Z - 2).r == 255);
     assert(getVoxel(0, 0, RNDR_Z - 2).g == 0);
+
+    // A brief dip cancels at rebound. A sustained drop releases the
+    // front past the crest and it travels even after volume reaches zero.
+    const auto furthestBurstVoxel = [] {
+        int depth = -1;
+        for (int z = 0; z < RNDR_Z; ++z) {
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    if (getVoxel(x, y, z).r) depth = max(depth, RNDR_Y - 1 + x - y + z);
+                }
+            }
+        }
+        return depth;
+    };
+    makeStream(20);
+    for (unsigned i = 0; i < input.size(); ++i) {
+        input[i].values.volumeSm = i == 3 || i == 4 ? 0 : 80;
+    }
+    render(&Audio::animateCornerBurst);
+    const int crestDepth = furthestBurstVoxel();
+    assert(crestDepth > 0 && crestDepth < (RNDR_X + RNDR_Y + RNDR_Z - 3) * 0.7f);
+    for (unsigned i = 3; i < input.size(); ++i) input[i].values.volumeSm = 0;
+    render(&Audio::animateCornerBurst);
+    assert(furthestBurstVoxel() > crestDepth);
+    input.resize(55, input.back());
+    render(&Audio::animateCornerBurst);
+    assert(furthestBurstVoxel() == -1);
+
+    // Every shape starts at the clockwise bottom corner.
+    for (auto draw : {&Audio::animateCornerBurst, &Audio::animateCornerBurstSphere,
+                      &Audio::animateCornerBurstBox}) {
+        makeStream(1);
+        input[0].values.volumeSm = 80;
+        render(draw);
+        const auto fill = getVoxel(0, RNDR_Y - 1, 0).r;
+        assert(fill > 0 && fill <= 39);
+        assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
+        assert(brightnessFrames.back() > 4 * fill);
+
+        // VolumeSm 75 reaches the common bottom point for every front.
+        input[0].values.volumeSm = 75;
+        render(draw);
+        const int capOffset = min(11, min(int(RNDR_X) - 1, int(RNDR_Y) - 1));
+        assert(getVoxel(capOffset, RNDR_Y - 1 - capOffset, 0).r == 255);
+    }
 
     // Same geometry across every named look, independent of texturing. Real
     // receiver snapshots, silence, dimensions, symmetry, cadence and work cap.

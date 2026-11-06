@@ -85,6 +85,14 @@ namespace {
     // routine out of unattended playback. Its Audio:: method can still exist
     // and be called directly. These entries NEVER mix with the normal deck.
     // Descending playback starts at the last enabled card after a flash.
+    void drawRandomCornerBurst() {
+        void (*const shapes[])() = {
+            &Audio::animateCornerBurst, &Audio::animateCornerBurstSphere,
+            &Audio::animateCornerBurstBox
+        };
+        shapes[random(3)]();
+    }
+
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
         {true, "Waverly", &drawWaverly},
@@ -94,6 +102,7 @@ namespace {
         {true, "Breathe", &drawBreathe},
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
         {true, "Surround GEQ", &Audio::animateSurroundGEQ},
+        {true, "Corner Burst", &drawRandomCornerBurst},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

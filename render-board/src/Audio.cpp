@@ -622,3 +622,132 @@ void Audio::animateSurroundGEQ() {
         showCube();
     }
 }
+
+namespace {
+enum class CornerFront { Plane, Sphere, Box };
+
+void drawCornerBurst(CornerFront shape) {
+    enum class Phase { Waiting, Crest, Traveling };
+    constexpr int farX = RNDR_X - 1, farY = RNDR_Y - 1, farZ = RNDR_Z - 1;
+    const auto depthAt = [shape](int dx, int dy, int dz) {
+        if (shape == CornerFront::Sphere) {
+            return sqrtf(float(dx * dx + dy * dy + dz * dz));
+        }
+        if (shape == CornerFront::Box) {
+            return float(max(dx, max(dy, dz)));
+        }
+        return float(dx + dy + dz);
+    };
+    const float maxDepth = depthAt(farX, farY, farZ);
+    // Use a shared physical point on the bottom diagonal for attachment.
+    const int capOffset = min(11, min(farX, farY));
+    const float attachedCap = depthAt(capOffset, capOffset, 0);
+    const float gainSetting = Audio::controls().cornerBurstGain;
+    const float volumeGain = std::isfinite(gainSetting) ?
+        max(0.0f, gainSetting) : 255.0f / 75.0f;
+    const auto attachedDepth = [attachedCap, volumeGain](int volume) {
+        return attachedCap * min(1.0f, volume * volumeGain / 255.0f);
+    };
+    constexpr uint32_t releaseMs = 40;
+    constexpr float travelMs = 750.0f;
+    constexpr int minDrop = 4;
+    Phase phase = Phase::Waiting;
+    int trough = 0;
+    int crest = 0;
+    bool confirming = false;
+    uint32_t dropStarted = 0;
+    uint32_t released = 0;
+    float releaseDepth = 0.0f;
+    CRGB releaseColor;
+    const uint32_t started = millis();
+
+    while (TestDemo::audioRoutineRunning()) {
+        const auto audio = RemoteInputs::audio();
+        const uint32_t now = millis();
+        const int volume = audio.volumeSm;
+        const float fill = attachedDepth(volume);
+        const CRGB rainbow = CHSV(uint8_t(uint32_t(now - started) / 25), 255, 255);
+        if (phase == Phase::Waiting) {
+            trough = min(trough, volume);
+            if (volume - trough >= minDrop) {
+                crest = volume;
+                confirming = false;
+                phase = Phase::Crest;
+            }
+        }
+
+        float front = 0.0f;
+        float frontStrength = 0.0f;
+        CRGB frontColor = rainbow;
+        if (phase == Phase::Crest) {
+            crest = max(crest, volume);
+            // Keep the bright edge at the crest while the dim fill recedes.
+            front = attachedDepth(crest);
+            frontStrength = 1.0f;
+            const int threshold = max(minDrop, (crest * 12 + 99) / 100);
+            if (crest - volume < threshold) {
+                confirming = false;
+            } else if (!confirming) {
+                dropStarted = now;
+                confirming = true;
+            // A rebound cancels confirmation. A sustained drop hands the
+            // held crest to the traveling front at the same position and hue.
+            } else if (uint32_t(now - dropStarted) >= releaseMs) {
+                releaseDepth = front;
+                releaseColor = rainbow;
+                released = now;
+                confirming = false;
+                phase = Phase::Traveling;
+            }
+        } else if (phase == Phase::Traveling) {
+            front = releaseDepth + maxDepth * uint32_t(now - released) / travelMs;
+            if (front < maxDepth) {
+                frontStrength = (maxDepth - front) / (maxDepth - releaseDepth);
+                frontColor = releaseColor;
+            } else {
+                trough = volume;
+                phase = Phase::Waiting;
+            }
+        }
+
+        clearAll();
+        // Measure from the bottom corner 90 degrees clockwise from (0,0,0). Sum gives
+        // a diagonal plane, Euclidean distance a sphere, and max a box.
+        for (int z = 0; z < RNDR_Z; ++z) {
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const int dx = x, dy = farY - y, dz = z;
+                    const float depth = depthAt(dx, dy, dz);
+                    const float body = 0.15f * min(1.0f, max(0.0f, fill - depth));
+                    const float edge = frontStrength * max(0.0f, 1.0f - fabsf(depth - front) / 1.5f);
+                    const uint8_t brightness = uint8_t(255.0f * max(body, edge));
+                    if (brightness > 0) {
+                        CRGB color = edge > body ? frontColor : rainbow;
+                        color.nscale8(brightness);
+                        setVoxel(x, y, z, color);
+                    }
+                }
+            }
+        }
+        char detail[120];
+        snprintf(detail, sizeof(detail), "Burst phase=%s crest=%d dropMs=%lu fill=%.1f front=%.1f gain=%.2f",
+                 phase == Phase::Traveling ? "travel" : phase == Phase::Crest ? "crest" : "waiting",
+                 crest, (unsigned long)(confirming ? uint32_t(now - dropStarted) : 0),
+                 double(fill), double(front), double(volumeGain));
+        Audio::debug(audio, detail);
+        showCube();
+    }
+}
+} // namespace
+
+void Audio::animateCornerBurst() {
+    drawCornerBurst(CornerFront::Plane);
+}
+
+void Audio::animateCornerBurstSphere() {
+    drawCornerBurst(CornerFront::Sphere);
+}
+
+void Audio::animateCornerBurstBox() {
+    drawCornerBurst(CornerFront::Box);
+}

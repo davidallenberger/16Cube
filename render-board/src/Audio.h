@@ -19,6 +19,7 @@ class Audio {
         float puddlePeakSensitivity = 2.0f; // Shared-event admission.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
+        float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
         float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
@@ -74,6 +75,9 @@ class Audio {
 
     static void animateJulia();
     static void animateSurroundGEQ();
+    static void animateCornerBurst();
+    static void animateCornerBurstSphere();
+    static void animateCornerBurstBox();
 
     static void animateBpmSphere();
     static void animateBpmCheckerboard();
