@@ -85,8 +85,21 @@ int main(){
     // Do not accept duplicate/stale data or contradictory same-revision modes.
     accept(p);assert(RemoteInputs::stats().duplicates==1);
     Packet bad=p;bad.sequence=3;bad.mode=Mode::AudioDJ;accept(bad);assert(RemoteInputs::control().mode==Mode::AudioBluetooth);
-    // Actual nonlocal dispatch: revision committed BEFORE jump, then no repeat.
-    if(setjmp(engineJumpBuffer)==0){teleportArmed=true;CubeSystem::frameCheckpoint();assert(false);}
+    // A mode change commits its revision and unwinds app-owned resources.
+    bool destroyed = false;
+    struct ExitProbe {
+        bool &destroyed;
+        ~ExitProbe() { destroyed = true; }
+    };
+    try {
+        ExitProbe probe{destroyed};
+        teleportArmed = true;
+        CubeSystem::frameCheckpoint();
+        assert(false);
+    } catch (AppExit exit) {
+        assert(exit == AppExit::ModeChanged);
+    }
+    assert(destroyed);
     assert(!teleportArmed);assert(CubeSystem::selectedMenuIndex==10);
     CubeSystem::frameCheckpoint();assert(CubeSystem::currentState==SYS_STATE_RUN_APP);
     p={};p.session=1;p.modeRevision=2;p.sequence=4;p.mode=Mode::Game;p.flags=SOURCE_READY;
@@ -125,11 +138,11 @@ int main(){
         clockMs += 501;
         ++p.sequence;
         accept (p);
-        if (setjmp (engineJumpBuffer) == 0) {
+        try {
             teleportArmed = true;
             CubeSystem::frameCheckpoint ();
             teleportArmed = false;
-        } else {
+        } catch (AppExit) {
             assert (false && "Non-System button triggered menu exit");
         }
     }
@@ -142,7 +155,13 @@ int main(){
     ++p.sequence;
     writePad(p.payload,g);writePad(p.payload+15,GamepadState());
     accept(p);CubeSystem::frameCheckpoint();clockMs+=501;++p.sequence;accept(p);
-    if(setjmp(engineJumpBuffer)==0){teleportArmed=true;CubeSystem::frameCheckpoint();assert(false);}
+    try {
+        teleportArmed = true;
+        CubeSystem::frameCheckpoint();
+        assert(false);
+    } catch (AppExit exit) {
+        assert(exit == AppExit::Home);
+    }
     assert(!teleportArmed);
     teleportArmed=true;CubeSystem::frameCheckpoint(); // held Home must NOT jump twice
     teleportArmed=false;
@@ -197,14 +216,14 @@ int main(){
     assert(audioAdvanceRequests == 0);
 
     // A repeated source demand asks the managed effect to return, once.
-    // Audio does NOT longjmp/restart its OS app for this ordinary advance.
+    // Audio does NOT unwind/restart its OS app for this ordinary advance.
     ++p.sequence;
     ++p.modeRevision;
     accept(p);
-    if (setjmp(engineJumpBuffer) == 0) {
+    try {
         teleportArmed = true;
         CubeSystem::frameCheckpoint();
-    } else {
+    } catch (AppExit) {
         assert(false && "Repeated audio demand unnecessarily escaped the app");
     }
     assert(audioAdvanceRequests == 1);
@@ -263,10 +282,12 @@ int main(){
     ++p.sequence;
     ++p.modeRevision;
     accept(p);
-    if (setjmp(engineJumpBuffer) == 0) {
+    try {
         teleportArmed = true;
         CubeSystem::frameCheckpoint();
         assert(false && "Animation button failed to skip current scene");
+    } catch (AppExit exit) {
+        assert(exit == AppExit::ModeChanged);
     }
     assert(animationAdvanceRequests == 1);
     assert(!teleportArmed);

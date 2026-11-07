@@ -1,11 +1,10 @@
 #pragma once
 #include <Arduino.h>
-#include <setjmp.h>
 #include "CubeCore.h"
 #include "GamepadState.h"
 #include "TextureEngine.h"
 
-extern jmp_buf engineJumpBuffer;
+enum class AppExit { Home, ModeChanged };
 extern bool teleportArmed;
 
 // The render engine either displays diagnostics, the menu, or an app.

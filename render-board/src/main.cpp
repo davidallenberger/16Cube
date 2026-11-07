@@ -53,8 +53,7 @@ Streamers::animateTartan3D(10000, PartyColors_p, 128); // High-contrast neon thr
 Streamers::animateTartan3D(10000, OceanColors_p, 64); // Slower, moody deep-sea woven intersecting laser grid
 
 return;
-Streamers::animateWavingCell3D(10000, LavaColors_p, 128); // Searing hot, rapidly pulsing volumetric interference plasma
-Streamers::animateWavingCell3D(10000, RainbowColors_p, 64); // Slower, hypnotic full-spectrum mathematical interference waves
+Planes::animateWavingCell(10000);
 
 Streamers::animateSoapFilm3D(10000, RainbowColors_p, 128); // Classic oil-slick/soap bubble topological domain warping
 Streamers::animateSoapFilm3D(10000, ForestColors_p, 200); // Fast, churning toxic jungle topological contour lines

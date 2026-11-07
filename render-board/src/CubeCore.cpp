@@ -277,13 +277,8 @@ namespace {
 void showCube () {
     // This function runs on the animation task. Before showing another frame,
     // act on remote mode demands and the held gamepad Home button.
-    // frameCheckpoint() may longjmp out of the current app, in which case
-    // the remainder of this function does not run.
-    //
-    // Snapshot accessors release their internal mutexes before returning.
-    // Callers must also avoid holding locks or objects requiring destructor
-    // cleanup across this call, because longjmp skips normal stack unwinding.
-    CubeSystem::frameCheckpoint (); //We need to check for an escape command
+    // An app exit unwinds to the launcher before the next frame is sent.
+    CubeSystem::frameCheckpoint();
 
     // Remember the start of the previous LED transmission. The unsigned
     // subtraction below also handles the micros() counter wrapping around.

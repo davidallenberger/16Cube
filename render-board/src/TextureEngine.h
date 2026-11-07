@@ -377,3 +377,110 @@ struct TextureState {
         return CRGB::Black;
     }
 };
+
+
+// Stateful Soap brush. The caller owns the scratch space for one field.
+// Store palette positions so a full 16-cube fits in the shared arena.
+class SoapTextureState {
+public:
+    static constexpr size_t ScratchBytes = size_t(RNDR_X) * RNDR_Y * RNDR_Z
+        + RNDR_X * RNDR_Y + RNDR_X * RNDR_Z + RNDR_Y * RNDR_Z;
+
+    SoapTextureState(const CRGBPalette16 &palette, uint8_t *scratch, uint32_t seed)
+        : palette_(palette), field_(scratch),
+          origin_{seed, seed + 0x2356B1u, seed + 0x61798Du} {
+        const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        for (int z = 0; z < RNDR_Z; ++z) {
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const int position[] = {x, y, z};
+                    field_[index(x, y, z)] = palettePosition(noiseAt(position, dims));
+                }
+            }
+        }
+        // Seed the line filters on the first sweep.
+        sweep(0, true);
+    }
+
+    void advance(uint32_t deltaMs) {
+        // Time controls both the moving noise slice and the amount carried
+        // per frame. Cap missed time so a long stall cannot jump the field.
+        deltaMs = min(deltaMs, uint32_t(60));
+        if (deltaMs == 0) return;
+        phase_ += 48 * deltaMs;
+        sweep(deltaMs, false);
+    }
+
+    CRGB getColor(uint8_t x, uint8_t y, uint8_t z) const {
+        return ColorFromPalette(palette_, field_[index(x, y, z)], 255, LINEARBLEND);
+    }
+
+private:
+    CRGBPalette16 palette_;
+    uint8_t *field_;
+    uint32_t origin_[3];
+    uint32_t phase_ = 0;
+
+    static size_t index(int x, int y, int z) {
+        return x + RNDR_X * (y + RNDR_Y * z);
+    }
+
+    uint8_t noiseAt(const int position[3], const int dims[3]) const {
+        uint32_t sample[3];
+        for (int axis = 0; axis < 3; ++axis) {
+            sample[axis] = origin_[axis] + phase_ + uint32_t(position[axis] * (160000 / dims[axis]));
+        }
+        return inoise16(sample[0], sample[1], sample[2]) >> 8;
+    }
+
+    static uint8_t palettePosition(uint8_t noise) {
+        return uint8_t(3 * (255 - noise));
+    }
+
+    void sweep(uint32_t deltaMs, bool initialize) {
+        const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        const int strides[] = {1, RNDR_X, RNDR_X * RNDR_Y};
+        uint8_t *lineNoise = field_ + size_t(RNDR_X) * RNDR_Y * RNDR_Z;
+        constexpr int maxSide = RNDR_X > RNDR_Y ? RNDR_X : RNDR_Y;
+        uint8_t line[maxSide > RNDR_Z ? maxSide : RNDR_Z];
+        for (int axis = 0; axis < 3; ++axis) {
+            const int uAxis = (axis + 1) % 3;
+            const int vAxis = (axis + 2) % 3;
+            int position[3];
+            for (position[vAxis] = 0; position[vAxis] < dims[vAxis]; ++position[vAxis]) {
+                for (position[uAxis] = 0; position[uAxis] < dims[uAxis]; ++position[uAxis]) {
+                    position[axis] = 0;
+                    const uint8_t noise = noiseAt(position, dims);
+                    uint8_t &filtered = *lineNoise++;
+                    if (initialize) {
+                        filtered = noise;
+                        continue;
+                    }
+                    filtered = uint8_t((3 * filtered + noise + 2) / 4);
+                    const int shift = (int(filtered) - 128) * int(deltaMs) / 8;
+                    const int whole = shift >= 0 ? shift / 256 : (shift - 255) / 256;
+                    const uint8_t fraction = uint8_t(shift - whole * 256);
+                    const int stride = strides[axis];
+                    uint8_t *base = field_ + index(position[0], position[1], position[2]);
+
+                    const auto sample = [&](int source) {
+                        if (source >= 0 && source < dims[axis]) return base[source * stride];
+                        // Newly exposed edges take fresh dye from the noise field.
+                        position[axis] = source;
+                        return palettePosition(noiseAt(position, dims));
+                    };
+                    for (int i = 0; i < dims[axis]; ++i) {
+                        const uint8_t a = sample(i + whole);
+                        const uint8_t b = sample(i + whole + 1);
+                        // Follow the short way around the palette's wrap.
+                        const int difference = int(uint8_t(b - a + 128)) - 128;
+                        const int offset = difference * fraction;
+                        const int rounded = (offset >= 0 ? offset + 128 : offset - 128) / 256;
+                        line[i] = uint8_t(a + rounded);
+                    }
+                    for (int i = 0; i < dims[axis]; ++i) base[i * stride] = line[i];
+                }
+            }
+        }
+    }
+};

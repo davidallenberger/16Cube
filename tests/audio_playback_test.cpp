@@ -159,7 +159,7 @@ void showCube() {
 
     if (++frame >= input.size()) {
         // Host-only escape from the animation loop. Production still uses
-        // CubeSystem's existing same-task checkpoint/longjmp mechanism.
+        // CubeSystem's same-task app exit at the frame checkpoint.
         throw StopTest();
     }
 

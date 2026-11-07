@@ -1,5 +1,6 @@
 #include "CubeSystem.h"
 #include "AppMemory.h"
+#include "SpacerCheck.h"
 #include "TestDemo.h"
 #include "Shapes.h"
 #include "Audio.h"
@@ -18,13 +19,7 @@ SystemState CubeSystem::currentState = SYS_STATE_RUN_APP;
 int16_t CubeSystem::selectedMenuIndex = 0;
 uint32_t CubeSystem::stateTimer = 0;
 
-// handleApp() establishes the return point in this buffer using setjmp().
-// Only the animation task may jump back to that point. The UART task must
-// never use this buffer: it has a different call stack.
-jmp_buf engineJumpBuffer;
-
-// True only while an app is running inside handleApp()'s active return point.
-// Checkpoints also run in the menu, where no app escape is needed.
+// Armed only while an app is running on the animation task.
 bool teleportArmed = false;
 
 namespace {
@@ -148,11 +143,11 @@ void CubeSystem::frameCheckpoint() {
     //
     // UART task: validate packets and store their latest values under a mutex.
     // Animation task: copy those values here, choose the app, and escape from
-    // the old app if needed. longjmp must stay on the task that called setjmp.
+    // the old app if needed. Only the animation task can exit its running app.
     //
     // beginFrame() returns control and freezes matching audio/gamepad input
     // under the same mutex, then releases it. No receiver mutex is held when
-    // we jump below, and a concurrent packet cannot mix two source demands.
+    // the app exits below, and a concurrent packet cannot mix two source demands.
     // Freeze audio and gamepad input before a possible app escape. The new
     // app must start with the new source's frame, not the preceding source.
     // This also advances the single musical clock once for the drawing pass.
@@ -189,7 +184,7 @@ void CubeSystem::frameCheckpoint() {
             currentState == SYS_STATE_RUN_APP && selectedMenuIndex == 0;
 
         // Mark the demand as handled BEFORE escaping the old app. Otherwise
-        // the next checkpoint would see it as new and jump again forever.
+        // the next checkpoint would see it as new and exit again forever.
         appliedControl = true;
         appliedSession = c.session;
         appliedRevision = c.revision;
@@ -201,7 +196,7 @@ void CubeSystem::frameCheckpoint() {
         if (CubinaWire::audioMode(c.mode)) {
             if (advanceAudioRoutine) {
                 // TestDemo selects once and ends the old effect at its next
-                // loop boundary. No OS restart/longjmp is needed for an audio
+                // loop boundary. No OS restart is needed for an audio
                 // routine change. The revision above is already acknowledged.
                 TestDemo::requestNext(TestDemo::Deck::Audio);
                 return;
@@ -225,12 +220,10 @@ void CubeSystem::frameCheckpoint() {
             changeState(SYS_STATE_RUN_APP);
         }
 
-        // Return to handleApp() with code 2. It leaves the state selected
-        // above intact, so the OS can launch the newly demanded mode.
-        // In a menu/between apps, no jump is needed: the normal loop sees it.
+        // Unwind the running app. The launcher preserves the new mode.
         if (teleportArmed) {
             teleportArmed = false;
-            longjmp(engineJumpBuffer, 2);
+            throw AppExit::ModeChanged;
         }
     }
 
@@ -255,13 +248,13 @@ void CubeSystem::frameCheckpoint() {
         }
 
         if (!homeConsumed && uint32_t(millis() - homeStart) >= 500) {
-            // Consume before jumping: a continuously held button must not
+            // Consume before exiting: a continuously held button must not
             // trigger another escape immediately when the menu appears.
             homeConsumed = true;
 
             if (teleportArmed) {
                 teleportArmed = false;
-                longjmp(engineJumpBuffer, 1);
+                throw AppExit::Home;
             }
         }
     }
@@ -342,33 +335,22 @@ void CubeSystem::handleMenu() {
 void CubeSystem::handleApp() {
     clearAll();
 
-    // Establish this task's escape destination BEFORE calling the app.
-    // setjmp returns 0 initially; a later longjmp makes it return 1 or 2.
-    //
-    // This legacy mechanism bypasses normal stack unwinding. App code must
-    // not hold mutexes or automatic objects requiring nontrivial destruction
-    // across showCube()/frameCheckpoint(), since longjmp skips that cleanup.
-    switch (setjmp(engineJumpBuffer)) {
-    case 1:
-        // A held gamepad Home button requested the game menu.
+    teleportArmed = true;
+    try {
+        Serial.printf("Launching %s\n", appRegistry[selectedMenuIndex].name);
+        appRegistry[selectedMenuIndex].run();
+    } catch (AppExit exit) {
+        // The app stack has unwound, including scene and game locals.
+#if CUBINA_CHECK_SPACERS
+        SpacerCheck::endScene(true);
+#endif
         teleportArmed = false;
-        changeState(SYS_STATE_MENU);
+        if (exit == AppExit::Home) {
+            changeState(SYS_STATE_MENU);
+        }
         return;
-
-    case 2:
-        // A command-board mode demand already selected the next state.
-        teleportArmed = false;
-        return;
-
-    default:
-        break;
     }
 
-    teleportArmed = true;
-    Serial.printf("Launching %s\n", appRegistry[selectedMenuIndex].name);
-    appRegistry[selectedMenuIndex].run();
-
-    // An app can also return normally, without going through the checkpoint.
     teleportArmed = false;
     changeState(SYS_STATE_MENU);
 }

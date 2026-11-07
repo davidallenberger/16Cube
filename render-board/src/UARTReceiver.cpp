@@ -17,9 +17,9 @@
  * encoded in shared/SharedProtocol.h. Never transmit sizeof(AudioPayload).
  *
  * The receive task only caches input. It never draws, advances the musical
- * clock, selects an app, or longjmps. CubeSystem::frameCheckpoint(), on the
+ * clock, selects an app, or exits an app. CubeSystem::frameCheckpoint(), on the
  * animation task, freezes the next frame BEFORE taking a same-task escape.
- * All mutexes have been released before drawing or jumping begins.
+ * All mutexes have been released before drawing or app exit begins.
  *
  * ANIMATION CONTRACT
  * RemoteInputs::audio() returns one AudioFrame: flat volumeRaw/volumeSm/
@@ -81,7 +81,7 @@
  * inter-byte gap on the next byte. Oversized frames discard through delimiter.
  * The task drains available UART bytes before yielding one FreeRTOS tick.
  * Initialization failures assert. The mutex uses portMAX_DELAY, with short
- * copy-only critical sections. No resource-owning object crosses longjmp.
+ * copy-only critical sections. Snapshot locks are released before dispatch.
  */
 
 using namespace CubinaWire;

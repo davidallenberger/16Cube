@@ -104,11 +104,16 @@ namespace {
         CONCEPT_SCENE_TEXT_FYB = 42, CONCEPT_SCENE_ICONS_CCW = 43, CONCEPT_SCENE_ICONS_CW = 44, CONCEPT_SCENE_TEXT_PIZZA = 45,
         CONCEPT_SCENE_TEXT_CUBINA = 46, CONCEPT_SCENE_TEXT_YES = 47, CONCEPT_SCENE_TEXT_YEAH = 48, CONCEPT_SCENE_TEXT_ISRAEL = 49,
         // Games (Shifted down)
-        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51, CONCEPT_SCENE_JULIA = 52
+        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51, CONCEPT_SCENE_JULIA = 52, CONCEPT_SCENE_ATOMIC_ORBITS = 53,
+        CONCEPT_SCENE_OCTOPUS = 54,
+        CONCEPT_SCENE_PASSING_PLANES = 55, CONCEPT_SCENE_PLANE_SPLIT = 56,
+        CONCEPT_SCENE_PLASMA_BALL = 57, CONCEPT_SCENE_TARTAN = 58,
+        CONCEPT_SCENE_SOAP_TEXTURE = 59, CONCEPT_SCENE_WAVING_CELL = 60,
+        CONCEPT_SCENE_POLAR_LIGHTS = 61
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 43;
+    static const int NUM_SCENES = 52;
     static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
@@ -141,7 +146,12 @@ namespace {
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { false,  1 }, /* Icons CW     */ { true,  2},
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
-        /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }
+        /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }, /* Atomic Orbits */ { true, 1 },
+        /* Octopus (paused) */ { false, 1 },
+        /* Passing Planes */ { true, 1 }, /* Plane Split */ { true, 1 },
+        /* Plasma Ball */ { true, 1 }, /* Tartan */ { true, 1 },
+        /* Soap Texture */ { true, 1 }, /* Waving Cell 3D */ { true, 1 },
+        /* Polar Lights */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -152,7 +162,9 @@ namespace {
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
         "Drift 3D", "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
-        "Rubiks Cube", "Tetris", "Julia 3D"
+        "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
+        "Passing Planes", "Plane Split", "Plasma Ball", "Tartan",
+        "Soap Texture", "Waving Cell 3D", "Polar Lights"
     };
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
@@ -221,7 +233,7 @@ namespace {
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                             (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                             (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_JULIA);
+                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_POLAR_LIGHTS);
         }
 
         const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
@@ -347,6 +359,15 @@ namespace {
         }
         else { 
             switch(concept) {
+                case CONCEPT_SCENE_OCTOPUS:   Surfaces::animateOctopus(durationMs); break;
+                case CONCEPT_SCENE_PASSING_PLANES:  Planes::animatePassingPlanes(durationMs); break;
+                case CONCEPT_SCENE_PLANE_SPLIT:      Planes::animatePlaneSplit(durationMs); break;
+                case CONCEPT_SCENE_PLASMA_BALL:     Streamers::animateWledPlasmaBall(durationMs); break;
+                case CONCEPT_SCENE_TARTAN:          Planes::animateTartan(durationMs); break;
+                case CONCEPT_SCENE_SOAP_TEXTURE:    Planes::animateSoapTexture(durationMs); break;
+                case CONCEPT_SCENE_WAVING_CELL:     Planes::animateWavingCell(durationMs); break;
+                case CONCEPT_SCENE_POLAR_LIGHTS:    Surfaces::animatePolarLights(durationMs); break;
+                case CONCEPT_SCENE_ATOMIC_ORBITS:    Streamers::animateAtomicOrbits(durationMs); break;
                 case CONCEPT_SCENE_JULIA:          Surfaces::animateJulia(durationMs, 40 * SCALE_MS); break;
                 case CONCEPT_SCENE_RAIN:           Streamers::animateRain(durationMs, random8(1, 4), SPEED_SCENE_RAIN, pal, sModeTracker); break;
                 case CONCEPT_SCENE_CYCLONE:        Streamers::animateCyclone(durationMs, random8(2, 3), 0.04f, pal, sModeTracker, SPEED_SCENE_CYCLONE); break;
@@ -716,7 +737,7 @@ namespace TestDemo {
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                                  (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                                  (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_JULIA);
+                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_POLAR_LIGHTS);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 
             else {

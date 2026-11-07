@@ -77,9 +77,7 @@ namespace SpacerCheck {
     }
 
     void beginScene(const SceneInfo &info) {
-        // longjmp does not unwind C++ objects. If an app was abandoned, the
-        // next dispatcher entry can still close its record explicitly. There
-        // is no destructor-based logging that a jump could accidentally skip.
+        // Close any outstanding record before reusing its storage.
         if (active) {
             active = false;
             printSummary("interrupted");
@@ -135,13 +133,13 @@ namespace SpacerCheck {
         record.badSamples += scan.nonblack;
     }
 
-    void endScene() {
+    void endScene(bool interrupted) {
         if (!active) {
             return;
         }
 
         active = false;
-        printSummary("complete");
+        printSummary(interrupted ? "interrupted" : "complete");
     }
 }
 

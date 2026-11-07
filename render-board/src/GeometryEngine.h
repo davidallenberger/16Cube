@@ -124,6 +124,37 @@ namespace GeometryEngine {
         plot(ix+1, iy+1, iz+1, col, w111);
     }
 
+    struct Point3 { float x, y, z; };
+
+    // Shared shape tumble in degrees. The caller supplies its own phase and speed.
+    inline Point3 tumbleAngles(float phase, float speed) {
+        return {phase * (0.5f * speed), phase * (0.8f * speed), phase * (0.3f * speed)};
+    }
+
+    // Draw an ellipse centered at center. Orthogonal semi-axis vectors set
+    // its radii and plane. The reveal fraction advances in parameter angle.
+    inline void drawEllipse3D(Point3 center, Point3 u, Point3 v, float reveal,
+                              const CRGBPalette16 &palette, uint8_t hueOffset) {
+        const float a = sqrtf(u.x*u.x + u.y*u.y + u.z*u.z);
+        const float b = sqrtf(v.x*v.x + v.y*v.y + v.z*v.z);
+        if (a <= 0.0f || b <= 0.0f || reveal <= 0.0f) return;
+        // Sample at most half a voxel apart, even on the faster part of an
+        // eccentric ellipse. Omit the duplicate endpoint on a complete ring.
+        const unsigned steps = max(8u, unsigned(ceilf(2.0f * TWO_PI * max(a, b))));
+        const float visible = min(1.0f, reveal) * steps;
+        for (unsigned i = 0; i < steps && i < visible; ++i) {
+            const uint16_t phase = uint16_t((uint32_t(i) * 65536u) / steps);
+            const float c = cos16(phase) / 32768.0f;
+            const float s = sin16(phase) / 32768.0f;
+            const uint8_t brightness = uint8_t(180.0f * min(1.0f, visible - i));
+            const CRGB color = ColorFromPalette(palette, uint8_t((phase >> 8) + hueOffset),
+                                               brightness, LINEARBLEND);
+            drawWuVoxel(lroundf(256.0f * (center.x + u.x*c + v.x*s)),
+                        lroundf(256.0f * (center.y + u.y*c + v.y*s)),
+                        lroundf(256.0f * (center.z + u.z*c + v.z*s)), color);
+        }
+    }
+
     // ==========================================
     // 3D WU LINE (Fixed-Point Interpolation)
     // ==========================================
@@ -159,7 +190,7 @@ namespace GeometryEngine {
     // ==========================================
     // 3D SDF LINE (Mathematically Perfect Capsule)
     // ==========================================
-    inline void drawSdfLine3D(float x0, float y0, float z0, float x1, float y1, float z1, float radius, CRGB col) {
+    inline void drawSdfLine3D(float x0, float y0, float z0, float x1, float y1, float z1, float radius, CRGB col, bool additive = true) {
         // 1. Line segment vector and squared length
         float dx = x1 - x0;
         float dy = y1 - y0;
@@ -230,9 +261,12 @@ namespace GeometryEngine {
                             CRGB drawn = col;
                             drawn.nscale8((uint8_t)(intensity * 255.0f));
                             
-                            // Additive blend prevents dark halos when lines cross
+                            // Curved polylines can use max blending to avoid
+                            // repeatedly brightening shared segment endpoints.
                             CRGB existing = getVoxel(x, y, z);
-                            setVoxel(x, y, z, existing + drawn);
+                            setVoxel(x, y, z, additive ? existing + drawn : CRGB(
+                                max(existing.r, drawn.r), max(existing.g, drawn.g),
+                                max(existing.b, drawn.b)));
                         }
                     }
                 }

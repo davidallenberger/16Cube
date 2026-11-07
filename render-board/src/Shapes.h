@@ -76,11 +76,12 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
             geomPhase += 0.2f * (float)deltaMs;
 
             clearAll();
-            float rx = rotate ? geomPhase * (0.5f * tumbleSpeed) : (tumbleSpeed == 0.0f ? customX : geomPhase * customX);
-            float ry = rotate ? geomPhase * (0.8f * tumbleSpeed) : (tumbleSpeed == 0.0f ? customY : geomPhase * customY);
-            float rz = rotate ? geomPhase * (0.3f * tumbleSpeed) : (tumbleSpeed == 0.0f ? customZ : geomPhase * customZ);
-            
-            drawFunc(RNDR_CX, RNDR_CY, RNDR_CZ, fixedRadius, rMode, tex, rx, ry, rz, true, aspectZ);
+            const auto angles = rotate ? GeometryEngine::tumbleAngles(geomPhase, tumbleSpeed) :
+                GeometryEngine::Point3{tumbleSpeed == 0.0f ? customX : geomPhase * customX,
+                                       tumbleSpeed == 0.0f ? customY : geomPhase * customY,
+                                       tumbleSpeed == 0.0f ? customZ : geomPhase * customZ};
+            drawFunc(RNDR_CX, RNDR_CY, RNDR_CZ, fixedRadius, rMode, tex,
+                     angles.x, angles.y, angles.z, true, aspectZ);
             showCube();
             
             tex.advance(deltaMs);

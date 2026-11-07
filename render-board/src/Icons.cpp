@@ -104,12 +104,9 @@ static std::vector<IconDrawCommand> parseInstructions(const std::string& icon_in
 }
 
 // --- Coordinate Mappers ---
-static void rotate16x16(uint32_t phase, int& x, int& y) {
+static void rotate16x16(float cosA, float sinA, int& x, int& y) {
   const float cx = 7.5, cy = 7.5;
   float dx = x - cx, dy = y - cy;
-  float angle = (phase % 16) * (PI / 8.0);
-  float cosA = cos(angle);
-  float sinA = sin(angle);
   int rx = round(dx * cosA - dy * sinA);
   int ry = round(dx * sinA + dy * cosA);
   x = constrain((int)(cx + rx), 0, 15);
@@ -197,6 +194,10 @@ void scrollIcons(const char* iconString, uint32_t durationMs, uint8_t scrollDela
         }
     }
     
+    // Every rotated icon shares the same angle in this frame.
+    const float angle = (rotationPhase % 16) * (PI / 8.0);
+    const float cosA = cos(angle), sinA = sin(angle);
+
     // 3. RENDER THE SLIDING WINDOW
     for (int p = 0; p < RNDR_PERIMETER; p++) {
       
@@ -209,7 +210,7 @@ void scrollIcons(const char* iconString, uint32_t durationMs, uint8_t scrollDela
         int iconIndex = (msg_col - tapeStartCol) / 16;
         int localX = (msg_col - tapeStartCol) % 16; 
         
-        IconDrawCommand cmd = infiniteTape[iconIndex];
+        const IconDrawCommand &cmd = infiniteTape[iconIndex];
         
         // LIVE EVALUATION: Get the specific frame for this exact millisecond
         int currentIconId = cmd.frames[currentFrame % cmd.frames.size()];
@@ -230,7 +231,7 @@ void scrollIcons(const char* iconString, uint32_t durationMs, uint8_t scrollDela
               }
           } 
           
-          if (cmd.rotate) rotate16x16(rotationPhase, x, y);
+          if (cmd.rotate) rotate16x16(cosA, sinA, x, y);
           if (currentIconId >= NUMBER_OF_ICONS) continue;
           
           uint8_t iconByte = pgm_read_byte(&icons[currentIconId][y * 16 + x]);

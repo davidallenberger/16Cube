@@ -602,6 +602,50 @@ class Streamers {
             delay(15); 
         }
     }
+    // A collision sheet breaks into one spark per 2x2 patch, using the
+    // same drag, gravity, fade and tails as the Atom Smasher burst.
+    static void animatePlaneBurst(uint8_t axis, uint32_t stepMs) {
+        const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        const uint8_t uAxis = (axis + 1) % 3;
+        const uint8_t vAxis = (axis + 2) % 3;
+        constexpr int capacity = SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
+        auto *sparks = reinterpret_cast<KineticParticle*>(SharedAppMemory);
+        int count = 0;
+        for (int v = 0; v < dims[vAxis] && count < capacity; v += 2) {
+            for (int u = 0; u < dims[uAxis] && count < capacity; u += 2) {
+                float position[3], velocity[3];
+                position[axis] = (dims[axis] - 1) * 0.5f;
+                position[uAxis] = u + random8(min(2, dims[uAxis] - u));
+                position[vAxis] = v + random8(min(2, dims[vAxis] - v));
+                const float sign = ((u / 2 + v / 2) % 2) ? 1.0f : -1.0f;
+                velocity[axis] = sign * random8(18, 30) * dims[axis] / 16.0f;
+                velocity[uAxis] = (int(random8(161)) - 80) * 0.1f;
+                velocity[vAxis] = (int(random8(161)) - 80) * 0.1f;
+                sparks[count++] = {
+                    true, 0, position[0], position[1], position[2],
+                    velocity[0], velocity[1], velocity[2], 0.94f, 8.0f,
+                    1.0f, random8(85, 141) * 0.01f,
+                    ColorFromPalette(PartyColors_p, random8(), 255, NOBLEND), true
+                };
+            }
+        }
+
+        uint32_t lastFrame = millis();
+        delay(stepMs);
+        while (true) {
+            const uint32_t now = millis();
+            const float dt = (now - lastFrame) * 0.001f;
+            lastFrame = now;
+            clearAll();
+            processKineticPhysics(sparks, count, dt);
+            bool anyAlive = false;
+            for (int i = 0; i < count; ++i) anyAlive |= sparks[i].active;
+            showCube();
+            delay(stepMs);
+            if (!anyAlive) break;
+        }
+    }
+
     static void animateVerticalPipes(uint32_t durationMs, uint32_t speedMs) {
         uint32_t startTime = millis(), lastFrame = millis(); float masterHue = 0.0f;
         uint8_t px[50], py[50], pz[50], pDir[50]; int activeCount = 0;
@@ -1705,6 +1749,51 @@ class Streamers {
         }
     }
 
+    static void animateAtomicOrbits(uint32_t durationMs, uint32_t stepMs = 20) {
+        using GeometryEngine::Point3;
+        constexpr uint32_t ringTraceMs = 680, holdMs = 600;
+        constexpr unsigned rings = 4;
+        const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
+        const float radius = min(RNDR_CX, min(RNDR_CY, RNDR_CZ)) * 0.9f;
+        // Normals along tetrahedral directions avoid a common line of intersection.
+        const Point3 normals[rings] = {{1,1,1}, {1,-1,-1}, {-1,1,-1}, {-1,-1,1}};
+        const CRGBPalette16 rainbow = RainbowColors_p;
+        TextureState nucleus(MODE_SOLID);
+        const uint32_t started = millis();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t elapsed = uint32_t(millis() - started);
+            const uint32_t tumbleStart = rings * ringTraceMs + holdMs;
+            const uint32_t movingMs = elapsed > tumbleStart ? elapsed - tumbleStart : 0;
+            const auto angle = GeometryEngine::tumbleAngles(movingMs * 0.2f, 0.4f);
+            const float x = fmodf(angle.x, 360.0f) * (PI / 180.0f);
+            const float y = fmodf(angle.y, 360.0f) * (PI / 180.0f);
+            const float z = fmodf(angle.z, 360.0f) * (PI / 180.0f);
+            const float cx = cosf(x), sx = sinf(x), cy = cosf(y), sy = sinf(y);
+            const float cz = cosf(z), sz = sinf(z);
+            const auto rotate = [&](Point3 p) -> Point3 {
+                const float yy = cx*p.y - sx*p.z, zz = sx*p.y + cx*p.z;
+                const float xx = cy*p.x + sy*zz;
+                return {cz*xx - sz*yy, sz*xx + cz*yy, -sy*p.x + cy*zz};
+            };
+
+            clearAll();
+            for (unsigned i = 0; i < rings; ++i) {
+                const auto &n = normals[i];
+                const float reveal = (float(elapsed) - i * ringTraceMs) / ringTraceMs;
+                const float a = radius * 0.70710678f, b = radius * 0.40824829f;
+                const Point3 u{a*n.y, -a*n.x, 0};
+                const Point3 v{b*n.z*n.x, b*n.z*n.y, -2.0f*b};
+                GeometryEngine::drawEllipse3D(center, rotate(u), rotate(v), reveal,
+                                               rainbow, uint8_t(i * 64 + movingMs / 40));
+            }
+            nucleus.palette[0] = CHSV(uint8_t(elapsed / 48), 255, 255);
+            GeometryEngine::drawSphere(center.x, center.y, center.z, radius * 0.29f,
+                                       RENDER_SOLID, nucleus, 0, 0, 0, false);
+            showCube();
+            delay(stepMs);
+        }
+    }
+
     static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
@@ -2280,6 +2369,70 @@ class Streamers {
         }
     }
 
+    // Inspired by WLED 16.0.1's 2D Plasma Ball (Stepko, modified by Andrew
+    // Tuline). Warp filaments through the volume and cycle one shared hue.
+    static void animateWledPlasmaBall(uint32_t durationMs, uint8_t effectSpeed = 128) {
+        constexpr float referenceHalfSpan = 7.5f;
+        constexpr uint16_t noiseSpan = 480;
+        const CRGBPalette16 palette = RainbowColors_p;
+        uint8_t warpX[RNDR_Z][RNDR_Y];
+        uint8_t warpY[RNDR_Z][RNDR_X];
+        uint8_t warpZ[RNDR_Y][RNDR_X];
+        const uint32_t started = millis();
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t elapsed = millis() - started;
+            const uint16_t time = uint16_t(elapsed * (32u + effectSpeed) / 512u);
+            const uint8_t hue = beat8(5);
+            fadeAll(48);
+
+            // Each coordinate bends with the other two and with time.
+            // Cache the noise samples shared by voxels along each axis.
+            for (int z = 0; z < RNDR_Z; ++z) {
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    warpX[z][y] = inoise8(y * noiseSpan / RNDR_Y, z * noiseSpan / RNDR_Z, time);
+                }
+                for (int x = 0; x < RNDR_X; ++x) {
+                    warpY[z][x] = inoise8(z * noiseSpan / RNDR_Z, x * noiseSpan / RNDR_X, time + 1709);
+                }
+            }
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    warpZ[y][x] = inoise8(x * noiseSpan / RNDR_X, y * noiseSpan / RNDR_Y, time + 3907);
+                }
+            }
+
+            for (int z = 0; z < RNDR_Z; ++z) {
+                const float zBase = (z - RNDR_CZ) * (referenceHalfSpan / RNDR_CZ);
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    const float yBase = (y - RNDR_CY) * (referenceHalfSpan / RNDR_CY);
+                    const float xOffset = (int(warpX[z][y]) - 128) * 0.05f;
+                    for (int x = 0; x < RNDR_X; ++x) {
+                        const float xBase = (x - RNDR_CX) * (referenceHalfSpan / RNDR_CX);
+                        const float ax = fabsf(xBase + xOffset);
+                        const float ay = fabsf(yBase + (int(warpY[z][x]) - 128) * 0.05f);
+                        const float az = fabsf(zBase + (int(warpZ[y][x]) - 128) * 0.05f);
+
+                        // Equal coordinate magnitudes trace the body diagonals.
+                        // Two near-zero coordinates trace the principal axes.
+                        const float low = min(ax, min(ay, az));
+                        const float high = max(ax, max(ay, az));
+                        const float diagonal = high - low;
+                        const float axial = max(min(ax, ay), min(max(ax, ay), az));
+                        const float coverage = min(1.0f, 1.45f - min(diagonal, axial));
+                        if (coverage <= 0.0f) continue;
+
+                        const uint8_t brightness = uint8_t(coverage * warpX[z][y]);
+                        const CRGB light = ColorFromPalette(palette, hue, brightness, LINEARBLEND);
+                        setVoxel(x, y, z, getVoxel(x, y, z) + light);
+                    }
+                }
+            }
+            showCube();
+            delay(16);
+        }
+    }
+
     /*
  // The literal ratios from the left axis of your chart
     enum LissajousRatio {
@@ -2427,44 +2580,6 @@ class Streamers {
             showCube();
         }
     }
-    static void animateWavingCell3D(uint32_t durationMs, CRGBPalette16 pal = PartyColors_p, uint8_t effectSpeed = 128) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        uint32_t t = 0;
-
-        uint8_t aX = 12, aY = 15, aZ = 18; 
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
-            if (deltaMs == 0) { yield(); continue; } lastFrame = now;
-
-            t += (deltaMs * (effectSpeed + 1)) >> 6;
-            uint8_t t8 = t & 0xFF;
-
-            for (int z = 0; z < RNDR_Z; z++) {
-                // HOISTED: Z math only runs up to 16 times per frame
-                uint8_t waveZ = sin8((z * aZ) + t8);
-                uint8_t cosZ = cos8(z * aZ); 
-                
-                for (int y = 0; y < RNDR_Y; y++) {
-                    // HOISTED: Y math only runs up to 256 times per frame
-                    uint8_t waveY = sin8((y * aY) + waveZ);
-                    uint8_t cosYZ = cosZ + cos8(y * aY); 
-                    
-                    for (int x = 0; x < RNDR_X; x++) {
-                        // INNER LOOP: Only the X math runs 4096 times
-                        uint8_t wave = sin8((x * aX) + waveY) + cosYZ + cos8(x * aX);
-                        uint8_t colorIndex = wave + (t >> 2);
-                        uint8_t brightness = qadd8(wave, 64);
-                        
-                        setVoxel(x, y, z, ColorFromPalette(pal, colorIndex, brightness, LINEARBLEND));
-                    }
-                }
-            }
-            showCube();
-        }
-    }
-
 static void animateSoapFilm3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis(), lastFrame = millis(), noiseTime = 0;
         uint16_t scale = 1200; 

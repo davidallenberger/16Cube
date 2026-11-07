@@ -51,7 +51,7 @@ namespace SpacerCheck {
 
 #if CUBINA_CHECK_SPACERS
     void beginScene(const SceneInfo &info);
-    void endScene();
+    void endScene(bool interrupted = false);
 
     // PRIVATE CubeCore integration: the animation task calls these before
     // FastLED.show(). They never print, allocate, lock, or correct a pixel.
