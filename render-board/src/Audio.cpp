@@ -22,8 +22,9 @@ namespace {
         return std::isfinite(gain) ? min(1.0f, max(0.0f, gain)) : Audio::Controls{}.midrangeBoostGain;
     }
 
-    // The renderer takes a plain callback. Reset its state on each entry.
+    // Each renderer takes a plain callback. Reset its detector on entry.
     MidrangeBoost juliaBoost;
+    MidrangeBoost driftRoseBoost;
 
     float juliaAudioClosure() {
         const auto audio = RemoteInputs::audio();
@@ -42,6 +43,25 @@ namespace {
         Audio::debug(audio, detail);
         return closure;
     }
+
+    float driftRoseReach() {
+        constexpr float quietReach = 0.40f;
+        constexpr float midrangeMultiplier = 2.0f;
+        const auto audio = RemoteInputs::audio();
+        const auto &settings = Audio::controls();
+        const int fullVolume = max(1, int(settings.driftRoseVolumeForFullReach));
+        driftRoseBoost.update(audio, millis(), settings.midrangeBoostEnabled);
+        const float lift = driftRoseBoost.lift * midrangeBoostGain() * midrangeMultiplier;
+        const float drive = min(1.0f, float(audio.volumeSm) / fullVolume + lift);
+        // VolumeSm already has attack and release smoothing. Apply it to
+        // the geometry on every draw so the rose can follow individual swells.
+        const float reach = quietReach + (1.0f - quietReach) * drive;
+        char detail[64];
+        snprintf(detail, sizeof(detail), "Drift Rose reach=%.0f%% fullVol=%d fft=%.3f",
+                 double(reach * 100.0f), fullVolume, double(lift));
+        Audio::debug(audio, detail);
+        return reach;
+    }
 }
 
 void Audio::animateJulia() {
@@ -51,6 +71,15 @@ void Audio::animateJulia() {
     JuliaRenderer::animateJulia(0, controls().juliaStepMs, true, true,
         juliaAudioClosure, TestDemo::audioRoutineRunning,
         controls().juliaAttackMs, controls().juliaReleaseMs);
+}
+
+void Audio::animateDriftRose() {
+    constexpr int volume = RNDR_X * RNDR_Y * RNDR_Z;
+    // 80 spokes on the 16-cube. Keep enough to read as a rose on a smaller cube.
+    constexpr int spokeCount = (80 * volume + 2048) / 4096;
+    driftRoseBoost = MidrangeBoost{};
+    Streamers::animateDriftRose3D(0, RainbowColors_p, 200,
+        driftRoseReach, TestDemo::audioRoutineRunning, max(8, spokeCount));
 }
 
 void Audio::renderIcon(TextureState &) {

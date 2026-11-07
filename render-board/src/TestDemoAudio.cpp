@@ -103,6 +103,7 @@ namespace {
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
         {true, "Surround GEQ", &Audio::animateSurroundGEQ},
         {true, "Corner Burst", &drawRandomCornerBurst},
+        {true, "Drift Rose Volume", &Audio::animateDriftRose},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

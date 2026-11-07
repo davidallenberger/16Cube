@@ -22,7 +22,8 @@ class Audio {
         float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
         float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
-        bool midrangeBoostEnabled = true; // Shared by audio Julia and Waverly.
+        uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
+        bool midrangeBoostEnabled = true; // Shared by audio Julia, Waverly and Drift Rose.
         float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
         float juliaVolumeGamma = 1.0f;     // <1 boosts quiet levels; >1 favors louder levels.
@@ -76,6 +77,7 @@ class Audio {
                         bool cyclingGradient = false, uint32_t durationMs = 0);
 
     static void animateJulia();
+    static void animateDriftRose();
     static void animateSurroundGEQ();
     static void animateCornerBurst();
     static void animateCornerBurstSphere();

@@ -1265,6 +1265,149 @@ class Streamers {
     static void animateCyclone(uint32_t durationMs, int numStreamers, float volumePercent, CRGB::HTMLColorCode colorCode, float rps = 1.0f) { animateCyclone(durationMs, numStreamers, volumePercent, CRGBPalette16(CRGB(colorCode)), MODE_SOLID, rps); }
     static void animateCyclone(uint32_t durationMs, int numStreamers, float volumePercent, ShaderMode sMode, float rps = 1.0f) { animateCyclone(durationMs, numStreamers, volumePercent, RainbowColors_p, sMode, rps); }
 
+    static void animateMeteor(uint32_t durationMs, uint32_t stepMs = 20) {
+        constexpr uint8_t spans[] = {RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 1};
+        constexpr uint16_t crossingMs = 1250;
+        constexpr uint16_t launchIntervalMs = 1400;
+        constexpr uint8_t maxSegments = 2 * CUBE_SIZE;
+        const CRGBPalette16 palette = RainbowColors_p;
+
+        struct Crossing {
+            float entry[3];
+            float delta[3];
+            uint32_t launchedAt;
+            uint16_t headExitMs;
+            uint8_t segments;
+            uint16_t wakeLifeMs[maxSegments + 1];
+        };
+        // The current crossing and the fading wake from the previous one.
+        Crossing paths[2] = {};
+        uint8_t current = 0;
+        uint8_t faceAxis = random8(3);
+        const auto launch = [&paths, &current, &faceAxis, &spans](uint32_t now) {
+            Crossing &path = paths[current];
+            path.launchedAt = now;
+            // Let the head travel one voxel beyond the exit face so the
+            // anti-aliasing dims it as it leaves.
+            path.headExitMs = crossingMs + (crossingMs + spans[faceAxis] - 1) / spans[faceAxis];
+            float lengthSquared = 0.0f;
+            for (uint8_t axis = 0; axis < 3; ++axis) {
+                // On both transverse axes, use opposite sides of the center.
+                // Vary the endpoints within those regions for different angles.
+                float entry = axis == faceAxis ? 0.0f : random8(8, 36) / 100.0f;
+                float exit = axis == faceAxis ? 1.0f : random8(65, 93) / 100.0f;
+                if (random8(2)) {
+                    entry = 1.0f - entry;
+                    exit = 1.0f - exit;
+                }
+                path.entry[axis] = entry * spans[axis];
+                path.delta[axis] = (exit - entry) * spans[axis];
+                lengthSquared += path.delta[axis] * path.delta[axis];
+            }
+            path.segments = min(int(maxSegments), int(ceilf(sqrtf(lengthSquared))));
+            for (uint8_t i = 0; i <= path.segments; ++i) {
+                path.wakeLifeMs[i] = random16(600, 1001);
+            }
+        };
+        const auto drawPoint = [](const Crossing &path, float progress, CRGB color) {
+            GeometryEngine::drawWuVoxel(
+                lroundf((path.entry[0] + progress * path.delta[0]) * 256.0f),
+                lroundf((path.entry[1] + progress * path.delta[1]) * 256.0f),
+                lroundf((path.entry[2] + progress * path.delta[2]) * 256.0f), color);
+        };
+
+        const uint32_t started = millis();
+        launch(started);
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t now = millis();
+            if (now - paths[current].launchedAt >= launchIntervalMs) {
+                current ^= 1;
+                faceAxis = (faceAxis + random8(1, 3)) % 3;
+                launch(now);
+            }
+            clearAll();
+            for (const Crossing &path : paths) {
+                if (path.segments == 0) continue;
+                const uint32_t elapsed = now - path.launchedAt;
+                for (uint8_t i = 0; i <= path.segments; ++i) {
+                    const uint32_t arrivalMs = uint32_t(i) * crossingMs / path.segments;
+                    if (elapsed < arrivalMs) break;
+                    const uint32_t ageMs = elapsed - arrivalMs;
+                    if (ageMs >= path.wakeLifeMs[i]) continue;
+                    // A wake sample stays where it was lit and keeps its hue.
+                    // Each sample dims at its own rate without frame-to-frame flicker.
+                    const float remaining = 1.0f - float(ageMs) / path.wakeLifeMs[i];
+                    const uint8_t brightness = uint8_t(155.0f * remaining * remaining);
+                    const CRGB color = ColorFromPalette(palette, i * 240 / path.segments, brightness, LINEARBLEND);
+                    drawPoint(path, float(i) / path.segments, color);
+                }
+            }
+            const Crossing &path = paths[current];
+            const uint32_t elapsed = now - path.launchedAt;
+            if (elapsed < path.headExitMs) {
+                const float progress = float(elapsed) / crossingMs;
+                const uint8_t hue = min(elapsed, uint32_t(crossingMs)) * 240 / crossingMs;
+                const CRGB color = ColorFromPalette(palette, hue, 255, LINEARBLEND);
+                drawPoint(path, progress, blend(color, CRGB(CRGB::White), 75));
+            }
+            showCube();
+            delay(stepMs);
+        }
+    }
+
+    // Digital rain across the whole XY footprint. A column's dark interval
+    // sets the density, and its trail length scales with the render height.
+    static void animateMatrixRain(uint32_t durationMs, uint32_t stepMs = 25) {
+        struct Column {
+            float headZ;
+            uint8_t fallTimeTenths;
+            uint8_t trailLength;
+        };
+        Column columns[RNDR_Y][RNDR_X];
+        const auto startDrop = [](Column &column, bool stagger) {
+            column.fallTimeTenths = random8(9, 21);
+            column.trailLength = max(1, (RNDR_Z * random8(4, 8) + 8) / 16);
+            column.headZ = stagger
+                ? random16(7 * RNDR_Z * 16) / 16.0f - column.trailLength
+                : RNDR_Z - 1 + random8(3, 8) * RNDR_Z;
+        };
+        for (auto &row : columns) {
+            for (auto &column : row) startDrop(column, true);
+        }
+
+        const uint32_t started = millis();
+        uint32_t lastFrame = started;
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t now = millis();
+            const float travel = (now - lastFrame) * (RNDR_Z / 100.0f);
+            lastFrame = now;
+            clearAll();
+
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    Column &column = columns[y][x];
+                    column.headZ -= travel / column.fallTimeTenths;
+                    if (column.headZ < -column.trailLength) startDrop(column, false);
+                    if (column.headZ >= RNDR_Z) continue;
+
+                    const int first = max(0, int(floorf(column.headZ)));
+                    const int last = min(RNDR_Z - 1, int(floorf(column.headZ + column.trailLength)));
+                    for (int z = first; z <= last; ++z) {
+                        const float distance = z - column.headZ;
+                        // Feather the bright tip between rows as it falls.
+                        const float tip = max(0.0f, 1.0f - fabsf(distance));
+                        const float green = distance < 0.0f
+                            ? 255.0f * tip
+                            : 210.0f * (1.0f - distance / column.trailLength) + 45.0f * tip;
+                        setVoxel(x, y, z, CRGB(uint8_t(155.0f * tip), uint8_t(green), uint8_t(95.0f * tip)));
+                    }
+                }
+            }
+            showCube();
+            delay(stepMs);
+        }
+    }
+
     static void animateRain(uint32_t durationMs, int dropsPerFrame, float fallSpeed, CRGBPalette16 pal, ShaderMode sMode) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
@@ -1970,6 +2113,89 @@ class Streamers {
             delay(15);
         }
     }
+    // Based on WLED Frizzles by Stepko and Andrew Tuline.
+    // Fill rate counts moving heads per voxel. Trails add light behind them.
+    static void animateFrizzles(uint32_t durationMs, uint32_t stepMs = 20,
+                                float headFillRate = 1.0f / 512.0f) {
+        constexpr uint32_t voxelCount = uint32_t(RNDR_X) * RNDR_Y * RNDR_Z;
+        const float fill = headFillRate > 0.0f ? min(headFillRate, 1.0f) : 0.0f;
+        const uint32_t headCount = max(1u, uint32_t(lroundf(voxelCount * fill)));
+        constexpr uint16_t bpmUnit = 256; // FastLED beatsin88 uses fractional BPM.
+        constexpr uint16_t baseBpm = 16 * bpmUnit;
+        constexpr uint8_t trailFade = 16;
+        const CRGBPalette16 palette = RainbowColors_p;
+        const uint32_t started = millis();
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            fadeAll(trailFade);
+            const CRGB color = ColorFromPalette(palette, beatsin8(12, 0, 255, started));
+            for (uint32_t head = 0; head < headCount; ++head) {
+                // Keep the original speed range as density changes.
+                const uint16_t rateOffset = headCount > 1
+                    ? bpmUnit + (7u * bpmUnit * head) / (headCount - 1)
+                    : 9 * bpmUnit / 2;
+                const uint16_t depthPhase = (65536u * head) / headCount;
+                const uint16_t x = beatsin88(baseBpm + rateOffset, 0, (RNDR_X - 1) * 256, started);
+                const uint16_t y = beatsin88(baseBpm - rateOffset, 0, (RNDR_Y - 1) * 256, started);
+                const uint16_t z = beatsin88(9 * bpmUnit + 2 * rateOffset, 0, (RNDR_Z - 1) * 256,
+                                            started, depthPhase);
+                GeometryEngine::drawWuVoxel(x, y, z, color);
+            }
+            showCube();
+            delay(stepMs);
+        }
+    }
+
+    static void animateFrizzlesMatrix(uint32_t durationMs, uint32_t stepMs = 20) {
+        constexpr uint8_t dimensions[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        constexpr uint8_t trailFade = 24;
+        const uint8_t sweepAxis = random8(3);
+        const uint8_t firstLaneAxis = (sweepAxis + 1) % 3;
+        const uint8_t secondLaneAxis = (sweepAxis + 2) % 3;
+        const uint16_t width = dimensions[firstLaneAxis];
+        const uint16_t footprint = width * dimensions[secondLaneAxis];
+        const uint16_t laneCount = (footprint + 1) / 3;
+        const uint16_t travelLimit = (dimensions[sweepAxis] - 1) * 256;
+
+        struct Lane {
+            uint16_t phase;
+            uint8_t first;
+            uint8_t second;
+            uint8_t bpm;
+        };
+        Lane lanes[(CUBE_SIZE * CUBE_SIZE + 1) / 3];
+        uint16_t selected = 0;
+        for (uint16_t cell = 0; cell < footprint && selected < laneCount; ++cell) {
+            // Sample without replacement so exactly one third of the lanes
+            // are selected, rounded to the nearest whole lane.
+            if (random16(footprint - cell) >= laneCount - selected) continue;
+            // Start near the same wall, then let the different rates spread
+            // the matrix through the cube.
+            lanes[selected++] = {
+                uint16_t(40960u + random16(16384)),
+                uint8_t(cell % width), uint8_t(cell / width), random8(8, 33)
+            };
+        }
+
+        const CRGBPalette16 palette = RainbowColors_p;
+        const uint32_t started = millis();
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            fadeAll(trailFade);
+            const CRGB color = ColorFromPalette(palette, beatsin8(12, 0, 255, started));
+            for (uint16_t i = 0; i < laneCount; ++i) {
+                const Lane &lane = lanes[i];
+                uint16_t position[3];
+                position[sweepAxis] = beatsin16(lane.bpm, 0, travelLimit, started, lane.phase);
+                position[firstLaneAxis] = lane.first * 256;
+                position[secondLaneAxis] = lane.second * 256;
+                GeometryEngine::drawWuVoxel(position[0], position[1], position[2], color);
+            }
+            showCube();
+            delay(stepMs);
+        }
+    }
+
     // ==========================================
     // COLOR TWINKLES (Volumetric Sparkle)
     // ==========================================
@@ -2300,18 +2526,23 @@ class Streamers {
     // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
-    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
+    static void animateDriftRose3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p,
+                                   uint8_t effectSpeed = 128,
+                                   float (*readReach)() = nullptr,
+                                   bool (*keepRunning)() = nullptr,
+                                   uint8_t requestedSpokes = 0) {
         uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
+        uint32_t lastFrame = startTime;
 
-        const int NUM_SPOKES = (RNDR_X > 8) ? 80 : 36;
-        
-        // 1. THE PRE-COMPUTATION ENGINE
-        // Safely map 1,080 bytes of integer arrays to AppMemory.
-        // Because AppMemory is volatile, we recompute this once per scene load.
-        int32_t* spokeX_fp = (int32_t*)SharedAppMemory;
-        int32_t* spokeY_fp = (int32_t*)(SharedAppMemory + 360);  // 90 * sizeof(int32_t)
-        int32_t* spokeZ_fp = (int32_t*)(SharedAppMemory + 720);  // 180 * sizeof(int32_t)
+        constexpr int fullSpokeCount = RNDR_X > 8 ? 80 : 36;
+        const int spokeCount = requestedSpokes ? min(int(requestedSpokes), fullSpokeCount) : fullSpokeCount;
+
+        // Rebuild the evenly spaced directions for the chosen spoke count.
+        static_assert(3 * fullSpokeCount * sizeof(int32_t) <= SHARED_APP_MEMORY_BYTES,
+                      "Drift Rose spokes must fit the shared animation arena");
+        auto *spokeX_fp = reinterpret_cast<int32_t *>(SharedAppMemory);
+        auto *spokeY_fp = spokeX_fp + spokeCount;
+        auto *spokeZ_fp = spokeY_fp + spokeCount;
         
         float goldenRatio = (1.0f + sqrtf(5.0f)) / 2.0f;
         float angleInc = TWO_PI * goldenRatio;
@@ -2322,8 +2553,8 @@ class Streamers {
         if (maxR_XY < 1.0f) maxR_XY = 1.0f;
         if (maxR_Z < 1.0f) maxR_Z = 1.0f;
 
-        for (int i = 0; i < NUM_SPOKES; i++) {
-            float t = (float)i / (float)NUM_SPOKES;
+        for (int i = 0; i < spokeCount; i++) {
+            float t = float(i) / spokeCount;
             float phi = acosf(1.0f - 2.0f * t);
             float theta = angleInc * i;
             
@@ -2341,31 +2572,75 @@ class Streamers {
         int32_t cz_fp = (int32_t)(RNDR_CZ * 256.0f);
 
         // 2. THE RENDER ENGINE
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
+        while (keepRunning ? keepRunning() :
+               TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
-            if (now - lastFrame < 15) { yield(); continue; }
+            const uint32_t frameMs = now - lastFrame;
+            if (frameMs < 15) { yield(); continue; }
             lastFrame = now;
+
+            // FastLED beat16 uses 280/256 phase units per millisecond at
+            // one cycle per minute. Every spoke samples the same clock.
+            const uint32_t scaledClock = now * 280u;
+            const int32_t reach = readReach ? lroundf(readReach() * 32768.0f) : 32768;
 
             // Lightning-fast hardware fade completely replaces the 4096-iteration x/y/z loop
             fadeAll(fadeAmt);
 
-            for (int i = 0; i < NUM_SPOKES; i++) {
-                uint8_t spokeBpm = min(i + 1, 255); 
-                
-                // ZERO-FLOAT KINEMATICS
-                int32_t r_scalar = (int32_t)beatsin16(spokeBpm, 0, 65535) - 32768;
+            for (int i = 0; i < spokeCount; i++) {
+                // Sample the original range of rates even with fewer spokes.
+                const int spokeRate = 1 + i * (fullSpokeCount - 1) / max(1, spokeCount - 1);
+                const uint16_t phase = uint16_t((scaledClock * spokeRate) >> 8);
+                const int32_t oscillation = int32_t(scale16(uint16_t(sin16(phase) + 32768), 65535)) - 32768;
+                const int32_t r_scalar = (oscillation * reach) >> 15;
 
                 int32_t px_fp = cx_fp + ((spokeX_fp[i] * r_scalar) >> 15);
                 int32_t py_fp = cy_fp + ((spokeY_fp[i] * r_scalar) >> 15);
                 int32_t pz_fp = cz_fp + ((spokeZ_fp[i] * r_scalar) >> 15);
 
-                uint8_t colorIndex = i * (256 / NUM_SPOKES);
+                uint8_t colorIndex = i * (256 / spokeCount);
                 CRGB col = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
                 
                 GeometryEngine::drawWuVoxel(px_fp, py_fp, pz_fp, col);
             }
             showCube();
             delay(15); // Explicit DMA frame limiter
+        }
+    }
+
+    // A drifting 3D Perlin field. Low samples leave holes, and the visible
+    // range drives both brightness and color within one fixed rainbow.
+    static void animateNoiseClouds(uint32_t durationMs, uint32_t stepMs = 24) {
+        constexpr uint16_t noiseSpan = 640; // 2.5 noise cells per render axis.
+        constexpr int darkThreshold = 132;
+        constexpr int fullBrightness = 192;
+        constexpr int visibleRange = fullBrightness - darkThreshold;
+        const CRGBPalette16 palette = RainbowColors_p;
+        CRGB colorByNoise[256];
+        for (int sample = 0; sample < 256; ++sample) {
+            const int level = constrain(sample - darkThreshold, 0, visibleRange);
+            colorByNoise[sample] = ColorFromPalette(palette, level * 240 / visibleRange,
+                                                    level * 255 / visibleRange, LINEARBLEND);
+        }
+
+        const uint32_t started = millis();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t elapsed = millis() - started;
+            const uint16_t offsetX = 12345 + elapsed / 26;
+            const uint16_t offsetY = 23456 + elapsed / 41;
+            const uint16_t offsetZ = 34567 + elapsed / 17;
+            for (int z = 0; z < RNDR_Z; ++z) {
+                const uint16_t nz = offsetZ + z * noiseSpan / RNDR_Z;
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    const uint16_t ny = offsetY + y * noiseSpan / RNDR_Y;
+                    for (int x = 0; x < RNDR_X; ++x) {
+                        const uint16_t nx = offsetX + x * noiseSpan / RNDR_X;
+                        setVoxel(x, y, z, colorByNoise[inoise8(nx, ny, nz)]);
+                    }
+                }
+            }
+            showCube();
+            delay(stepMs);
         }
     }
 

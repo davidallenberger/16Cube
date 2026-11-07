@@ -52,9 +52,17 @@ stage "$command_src" "$command_include" "$work/command" \
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
     TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h MidrangeBoost.h Audio.cpp Audio.h Depth.cpp Depth.h
-# Compile the production BPM section co-resident in Streamers.h. Full
-# Streamers effects require the ESP32/FastLED build, verified separately.
+# Compile the shared BPM and Julia renderers from Streamers.h. Stub the
+# Drift Rose renderer for the host audio checks. The firmware build
+# compiles the actual Streamers effects.
 sed '/^#include "GeometryEngine.h"/,$d' "$render_src/Streamers.h" > "$work/render/Streamers.h"
+cat >> "$work/render/Streamers.h" <<'EOF'
+class Streamers {
+public:
+    static void animateDriftRose3D(uint32_t, CRGBPalette16, uint8_t,
+                                   float (*)(), bool (*)(), uint8_t) {}
+};
+EOF
 common=(-DCUBINA_ENABLE_UART_RECEIVER=1 -std=c++11 -I "$root/tests/stubs" -I "$root/shared")
 "$CXX" "${common[@]}" -Wall -Wextra -pedantic -fsanitize=address,undefined -g \
     tests/protocol_test.cpp -o "$work/protocol_test"

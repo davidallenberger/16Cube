@@ -131,9 +131,9 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
-    assert(std::strcmp(currentAudioRoutineName(), "Corner Burst") == 0);
-    play(3);
-    assert(launches == std::vector<unsigned>({7, 6, 4}));
+    assert(std::strcmp(currentAudioRoutineName(), "Drift Rose Volume") == 0);
+    play(4);
+    assert(launches == std::vector<unsigned>({8, 7, 6, 4}));
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
     const unsigned rememberedLook = waverlyLook;
@@ -307,3 +307,4 @@ void Audio::animateJulia() { draw(0); }
 void Audio::animateCornerBurst() { draw(7); }
 void Audio::animateCornerBurstSphere() { draw(7); }
 void Audio::animateCornerBurstBox() { draw(7); }
+void Audio::animateDriftRose() { draw(8); }
