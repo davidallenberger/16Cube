@@ -11,6 +11,7 @@
 #include "Shapes.h"
 #include "Surfaces.h"
 #include "Streamers.h"
+#include "ParticleEffects.h"
 
 // =========================================================================================
 // ⚙️ INTERNAL ENGINE STATE & DICTIONARIES (Completely Hidden from main.cpp)
@@ -92,32 +93,34 @@ namespace {
         // Scenes
         CONCEPT_SCENE_HINGE_DANCE = 10, CONCEPT_SCENE_SPLAT = 11, CONCEPT_SCENE_BOUNCE = 12, CONCEPT_SCENE_SADDLE = 13,
         CONCEPT_SCENE_SINE_WAVE = 14, CONCEPT_SCENE_RAIN = 15, CONCEPT_SCENE_CYCLONE = 16, CONCEPT_SCENE_VERT_STREAMER = 17,
-        CONCEPT_SCENE_TORNADO = 18, CONCEPT_SCENE_HULA = 19, CONCEPT_SCENE_RANDOM_FALL = 20, CONCEPT_SCENE_FIREWORKS = 21,
-        CONCEPT_SCENE_PIPES = 22, CONCEPT_SCENE_WILD_MOUSE = 23, CONCEPT_SCENE_ATOM_SMASHER = 24, CONCEPT_SCENE_WOBBLING_DISH = 25,
-        CONCEPT_SCENE_HELIX = 26, CONCEPT_SCENE_FLYING_BOX = 27, CONCEPT_SCENE_MOVING_BOXES = 28, CONCEPT_SCENE_ROLLING_BALL = 29,
-        CONCEPT_SCENE_BOUNCING_BALL = 30, CONCEPT_SCENE_LAVA_LAMP = 31,
-        CONCEPT_SCENE_DNA_SPIRAL = 32, CONCEPT_SCENE_DRIFT_ROSE = 33, CONCEPT_SCENE_COLOR_TWINKLES = 34,
-        CONCEPT_SCENE_COLORED_BURSTS = 35, CONCEPT_SCENE_CHUNCHUN_SERP = 36, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS = 37,
-        CONCEPT_SCENE_BPM_CHECKERBOARD = 38, CONCEPT_SCENE_BOUNCING_BALLS = 39,
-        CONCEPT_SCENE_DRIFT3D = 40, CONCEPT_SCENE_BLACKHOLE = 41,
-        // Text & Icons (Shifted down)
-        CONCEPT_SCENE_TEXT_FYB = 42, CONCEPT_SCENE_ICONS_CCW = 43, CONCEPT_SCENE_ICONS_CW = 44, CONCEPT_SCENE_TEXT_PIZZA = 45,
-        CONCEPT_SCENE_TEXT_CUBINA = 46, CONCEPT_SCENE_TEXT_YES = 47, CONCEPT_SCENE_TEXT_YEAH = 48, CONCEPT_SCENE_TEXT_ISRAEL = 49,
-        // Games (Shifted down)
-        CONCEPT_SCENE_RUBIKS = 50, CONCEPT_SCENE_TETRIS = 51, CONCEPT_SCENE_JULIA = 52, CONCEPT_SCENE_ATOMIC_ORBITS = 53,
-        CONCEPT_SCENE_OCTOPUS = 54,
-        CONCEPT_SCENE_PASSING_PLANES = 55, CONCEPT_SCENE_PLANE_SPLIT = 56,
-        CONCEPT_SCENE_PLASMA_BALL = 57, CONCEPT_SCENE_TARTAN = 58,
-        CONCEPT_SCENE_SOAP_TEXTURE = 59, CONCEPT_SCENE_WAVING_CELL = 60,
-        CONCEPT_SCENE_POLAR_LIGHTS = 61, CONCEPT_SCENE_FRIZZLES = 62,
-        CONCEPT_SCENE_FRIZZLES_MATRIX = 63, CONCEPT_SCENE_MATRIX_RAIN = 64,
-        CONCEPT_SCENE_NOISE_CLOUDS = 65, CONCEPT_SCENE_METEOR = 66,
-        CONCEPT_SCENE_PS_IMPACT = 67
+        CONCEPT_SCENE_TORNADO = 18, CONCEPT_SCENE_HULA = 19, CONCEPT_SCENE_RANDOM_FALL = 20,
+        CONCEPT_SCENE_PIPES, CONCEPT_SCENE_WILD_MOUSE, CONCEPT_SCENE_WOBBLING_DISH,
+        CONCEPT_SCENE_HELIX, CONCEPT_SCENE_FLYING_BOX, CONCEPT_SCENE_MOVING_BOXES, CONCEPT_SCENE_ROLLING_BALL,
+        CONCEPT_SCENE_BOUNCING_BALL, CONCEPT_SCENE_LAVA_LAMP,
+        CONCEPT_SCENE_DNA_SPIRAL, CONCEPT_SCENE_DRIFT_ROSE, CONCEPT_SCENE_COLOR_TWINKLES,
+        CONCEPT_SCENE_COLORED_BURSTS, CONCEPT_SCENE_CHUNCHUN_SERP, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS,
+        CONCEPT_SCENE_BPM_CHECKERBOARD, CONCEPT_SCENE_BOUNCING_BALLS,
+        CONCEPT_SCENE_DRIFT3D, CONCEPT_SCENE_BLACKHOLE,
+        // Text & Icons
+        CONCEPT_SCENE_TEXT_FYB, CONCEPT_SCENE_ICONS_CCW, CONCEPT_SCENE_ICONS_CW, CONCEPT_SCENE_TEXT_PIZZA,
+        CONCEPT_SCENE_TEXT_CUBINA, CONCEPT_SCENE_TEXT_YES, CONCEPT_SCENE_TEXT_YEAH, CONCEPT_SCENE_TEXT_ISRAEL,
+        CONCEPT_SCENE_RUBIKS, CONCEPT_SCENE_TETRIS, CONCEPT_SCENE_JULIA, CONCEPT_SCENE_ATOMIC_ORBITS,
+        CONCEPT_SCENE_OCTOPUS, CONCEPT_SCENE_PASSING_PLANES,
+        CONCEPT_SCENE_PLASMA_BALL, CONCEPT_SCENE_TARTAN,
+        CONCEPT_SCENE_SOAP_TEXTURE, CONCEPT_SCENE_WAVING_CELL,
+        CONCEPT_SCENE_POLAR_LIGHTS, CONCEPT_SCENE_FRIZZLES,
+        CONCEPT_SCENE_FRIZZLES_MATRIX, CONCEPT_SCENE_MATRIX_RAIN,
+        CONCEPT_SCENE_NOISE_CLOUDS, CONCEPT_SCENE_METEOR,
+        // Shared particle engine. Descending playback auditions these together.
+        CONCEPT_SCENE_PLANE_SPLIT, CONCEPT_SCENE_ATOM_SMASHER, CONCEPT_SCENE_FIREWORKS,
+        CONCEPT_SCENE_PS_IMPACT, CONCEPT_SCENE_PS_VOLCANO,
+        CONCEPT_SCENE_PS_GHOST_RIDER, CONCEPT_SCENE_PS_WATERFALL,
+        CONCEPT_SCENE_PS_BOX,
+        CONCEPT_COUNT
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 58;
-    static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
+    static const int TOTAL_CONCEPTS = CONCEPT_COUNT;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
     struct SceneRule { bool enabled; uint8_t demoBoost; };
@@ -139,8 +142,8 @@ namespace {
         /* Hinge Dance  */ { true,  2 }, /* Plane Splat  */ { true,  2 }, /* Plane Bounce */ { true,  2 },
         /* Saddle       */ { true,  1 }, /* Sine Wave    */ { true,  3 }, /* Rain         */ { true,  1 },
         /* Cyclone      */ { true,  2 }, /* Vert Stream  */ { true,  1 }, /* Tornado      */ { true,  1 },
-        /* Hula         */ { true,  1 }, /* Random Fall  */ { true,  1 }, /* Fireworks    */ { true,  1 },
-        /* Vert Pipes   */ { true,  1 }, /* Wild Mouse   */ { true,  1 }, /* Atom Smasher */ { true,  1 },
+        /* Hula         */ { true,  1 }, /* Random Fall  */ { true,  1 },
+        /* Vert Pipes   */ { true,  1 }, /* Wild Mouse   */ { true,  1 },
         /* Wobbling Dish*/ { true,  1 }, /* Helix        */ { true,  1 }, /* Flying Box   */ { true,  2 },
         /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 }, /* Bouncing Ball*/ { true,  1 }, /* Lava Lamp    */ { true,  2 },
         /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Twinkles */     { true,  1 }, /* Col Bursts   */ { true,  1 },
@@ -151,28 +154,38 @@ namespace {
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
         /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }, /* Atomic Orbits */ { true, 1 },
         /* Octopus (paused) */ { false, 1 },
-        /* Passing Planes */ { true, 1 }, /* Plane Split */ { true, 1 },
+        /* Passing Planes */ { true, 1 },
         /* Plasma Ball */ { true, 1 }, /* Tartan */ { true, 1 },
         /* Soap Texture */ { true, 1 }, /* Waving Cell 3D */ { true, 1 },
         /* Polar Lights */ { false, 1 }, /* Frizzles */ { true, 1 },
         /* Frizzles Matrix */ { true, 1 }, /* Matrix Rain 3D */ { true, 1 },
         /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
-        /* PS Impact */ { true, 1 }
+        /* Plane Split */ { true, 1 }, /* Atom Smasher */ { true, 1 },
+        /* Fireworks */ { true, 1 }, /* PS Impact */ { true, 1 },
+        /* PS Volcano */ { true, 1 }, /* PS Ghost Rider */ { true, 1 },
+        /* PS Waterfall */ { true, 1 }, /* PS Box */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
         "Box", "Sphere", "Ovoid", "Tetrahedron", "Octahedron", "Merkaba", "Torus", "Cylinder", "Hemispheres", "Hourglass",
         "Hinge Dance", "Splat", "Bounce", "Saddle", "Sine Wave", "Rain", "Cyclone", "Vert Streamer", "Tornado", "Hula", 
-        "Random Fall", "Fireworks", "Pipes", "Wild Mouse", "Atom Smasher", "Wobbling Dish", "What The Helix",
+        "Random Fall", "Pipes", "Wild Mouse", "Wobbling Dish", "What The Helix",
         "Flying Box", "Moving Boxes", "Rolling Ball", "Bouncing Ball", "Lava Lamp", "DNA Spiral", "Drift Rose 3D", 
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
         "Drift 3D", "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
-        "Passing Planes", "Plane Split", "Plasma Ball", "Tartan",
+        "Passing Planes", "Plasma Ball", "Tartan",
         "Soap Texture", "Waving Cell 3D", "Polar Lights", "Frizzles", "Frizzles Matrix",
-        "Matrix Rain 3D", "Noise Clouds", "Meteor 3D", "PS Impact"
+        "Matrix Rain 3D", "Noise Clouds", "Meteor 3D",
+        "Plane Split", "Atom Smasher", "Fireworks", "PS Impact",
+        "PS Volcano", "PS Ghost Rider", "PS Waterfall", "PS Box"
     };
+
+    static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
+                  "Scene rules must match the concept deck");
+    static_assert(sizeof(sceneNames) / sizeof(sceneNames[0]) == TOTAL_CONCEPTS,
+                  "Scene names must match the concept deck");
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
     static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves"};
@@ -240,7 +253,7 @@ namespace {
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                             (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                             (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_PS_IMPACT);
+                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept < TOTAL_CONCEPTS);
         }
 
         const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
@@ -248,6 +261,10 @@ namespace {
         if (concept == CONCEPT_SCENE_MATRIX_RAIN) displayColor = "Matrix Green";
         if (concept == CONCEPT_SCENE_NOISE_CLOUDS || concept == CONCEPT_SCENE_METEOR) displayColor = "Rainbow";
         if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
+        if (concept == CONCEPT_SCENE_PS_VOLCANO) displayColor = "Fire by age";
+        if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
+        if (concept == CONCEPT_SCENE_PS_WATERFALL) displayColor = "Ocean";
+        if (concept == CONCEPT_SCENE_PS_GHOST_RIDER) displayColor = "Cycling Rainbow";
         char speedBuf[32] = "N/A";
 
         if (concept < NUM_SHAPES) {
@@ -383,6 +400,10 @@ namespace {
                 case CONCEPT_SCENE_NOISE_CLOUDS:    Streamers::animateNoiseClouds(durationMs); break;
                 case CONCEPT_SCENE_METEOR:         Streamers::animateMeteor(durationMs); break;
                 case CONCEPT_SCENE_PS_IMPACT:      Streamers::animatePSImpact(durationMs); break;
+                case CONCEPT_SCENE_PS_VOLCANO:     ParticleEffects::animateVolcano(durationMs); break;
+                case CONCEPT_SCENE_PS_BOX:         ParticleEffects::animateBox(durationMs); break;
+                case CONCEPT_SCENE_PS_WATERFALL:   ParticleEffects::animateWaterfall(durationMs); break;
+                case CONCEPT_SCENE_PS_GHOST_RIDER: ParticleEffects::animateGhostRider(durationMs); break;
                 case CONCEPT_SCENE_ATOMIC_ORBITS:    Streamers::animateAtomicOrbits(durationMs); break;
                 case CONCEPT_SCENE_JULIA:          Surfaces::animateJulia(durationMs, 40 * SCALE_MS); break;
                 case CONCEPT_SCENE_RAIN:           Streamers::animateRain(durationMs, random8(1, 4), SPEED_SCENE_RAIN, pal, sModeTracker); break;
@@ -753,7 +774,7 @@ namespace TestDemo {
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                                  (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                                  (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_PS_IMPACT);
+                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept < TOTAL_CONCEPTS);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 
             else {

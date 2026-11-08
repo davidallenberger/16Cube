@@ -319,7 +319,7 @@ class Streamers {
                 setVoxel(ix, iy, iz, existing + drawColor);
 
                 // 6. Optional Kinetic Tails
-                if (particle.hasTail) {
+                if (particle.flags & ParticleEngine::KineticTail) {
                     if (currentSpeed > 5.0f) {
                         int tailX = (int)lroundf(p.x - (v.x * dt * 2.0f));
                         int tailY = (int)lroundf(p.y - (v.y * dt * 2.0f));
@@ -915,11 +915,11 @@ class Streamers {
                 float angleTop = rotPhase + (normZ_top * twistPhase);
                 float angleBot = rotPhase + (normZ_bot * twistPhase);
                 
-                float cx_top = RNDR_CX + (cos(angleTop) * radius);
-                float cy_top = RNDR_CY + (sin(angleTop) * radius);
-                
-                float cx_bot = RNDR_CX + (cos(angleBot) * radius);
-                float cy_bot = RNDR_CY + (sin(angleBot) * radius);
+                const GeometryEngine::Point3 center{RNDR_CX, RNDR_CY, float(z)};
+                const auto top = GeometryEngine::helixPoint(center, radius, angleTop, -0.5f);
+                const auto bottom = GeometryEngine::helixPoint(center, radius, angleBot, 0.5f);
+                const float cx_top = top.x, cy_top = top.y;
+                const float cx_bot = bottom.x, cy_bot = bottom.y;
                 
                 // Calculate the 2D trajectory segment through this layer
                 float dx_seg = cx_bot - cx_top;

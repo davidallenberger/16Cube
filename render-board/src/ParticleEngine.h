@@ -13,6 +13,8 @@ namespace ParticleEngine {
         Point3 velocity;
     };
 
+    enum ParticleFlag : uint8_t { KineticTail = 1, HitFloor = 2 };
+
     struct Particle {
         bool active;
         uint8_t type; // Optional scene-specific particle tag.
@@ -22,29 +24,35 @@ namespace ParticleEngine {
         float life;  // Normalized fade, from 1 (full color) to 0.
         float decay; // Fade per second.
         CRGB color;
-        bool hasTail;
+        uint8_t flags;
     };
 
-    constexpr int maxParticles = SHARED_APP_MEMORY_BYTES / sizeof(Particle);
-    static_assert(maxParticles > 0, "No particle fits in the scratch arena");
-
     // A scene owns this view of the scratch arena until it returns.
-    class Pool {
+    template <typename Item>
+    class ParticlePool {
     public:
-        explicit Pool(int requested)
-            : particles_(reinterpret_cast<Particle*>(SharedAppMemory)),
-              size_(min(requested, maxParticles)) {
-            for (int i = 0; i < size_; ++i) new (&particles_[i]) Particle{};
+        static constexpr int capacity = SHARED_APP_MEMORY_BYTES / sizeof(Item);
+        static_assert(capacity > 0, "No particle fits in the scratch arena");
+
+        explicit ParticlePool(int requested)
+            : particles_(reinterpret_cast<Item*>(SharedAppMemory)),
+              size_(min(requested, capacity)) {
+            for (int i = 0; i < size_; ++i) new (&particles_[i]) Item{};
         }
 
         int size() const { return size_; }
-        Particle& operator[](int index) { return particles_[index]; }
+        Item& operator[](int index) { return particles_[index]; }
 
         int firstFree(int start = 0) const {
             for (int i = start; i < size_; ++i) {
                 if (!particles_[i].active) return i;
             }
             return size_;
+        }
+
+        void spawn(const Item& particle) {
+            const int slot = firstFree();
+            if (slot < size_) particles_[slot] = particle;
         }
 
         bool anyAlive() const {
@@ -55,9 +63,12 @@ namespace ParticleEngine {
         }
 
     private:
-        Particle* particles_;
+        Item* particles_;
         int size_;
     };
+
+    using Pool = ParticlePool<Particle>;
+    constexpr int maxParticles = Pool::capacity;
 
     // Drag is the fraction of velocity kept per simulation step. Callers
     // that tune drag for a specific step use that same step on every update.
@@ -85,8 +96,10 @@ namespace ParticleEngine {
         const float last = extent - 1.0f;
         if (side == Side::Bounce) {
             if (position < 0.0f || position > last) {
+                // Contact separation can put a particle outside a wall
+                // even when its velocity already points back into the box.
+                if (position < 0.0f ? speed < 0.0f : speed > 0.0f) speed = -speed * restitution;
                 position = constrain(position, 0.0f, last);
-                speed = -speed * restitution;
             }
             return true;
         }
@@ -118,6 +131,79 @@ namespace ParticleEngine {
         v.z *= 1.0f - roughness;
     }
 
+    // Broad phase for small spheres. Four-voxel cells cover the maximum
+    // supported contact diameter. Contacts use equal mass and one impulse.
+    template <typename Item, typename Radius>
+    inline void collide(ParticlePool<Item>& pool, float restitution, bool wrapX, Radius radius) {
+        constexpr int cellSize = 4;
+        constexpr int nx = (RNDR_X + cellSize - 1) / cellSize;
+        constexpr int ny = (RNDR_Y + cellSize - 1) / cellSize;
+        constexpr int nz = (RNDR_Z + cellSize - 1) / cellSize;
+        int16_t heads[nx * ny * nz];
+        int16_t next[ParticlePool<Item>::capacity];
+        auto cellIndex = [](int x, int y, int z) { return (z * ny + y) * nx + x; };
+        for (auto& head : heads) head = -1;
+        for (int i = 0; i < pool.size(); ++i) {
+            next[i] = -2; // Not in the grid.
+            const auto& p = pool[i].motion.position;
+            if (!pool[i].active || p.x < 0 || p.x >= RNDR_X ||
+                p.y < 0 || p.y >= RNDR_Y || p.z < 0 || p.z >= RNDR_Z) continue;
+            auto& head = heads[cellIndex(int(p.x) / cellSize, int(p.y) / cellSize,
+                                         int(p.z) / cellSize)];
+            next[i] = head;
+            head = i;
+        }
+        for (int i = 0; i < pool.size(); ++i) {
+            if (next[i] == -2) continue;
+            auto& a = pool[i].motion;
+            const int cx = constrain(int(a.position.x) / cellSize, 0, nx - 1);
+            const int cy = constrain(int(a.position.y) / cellSize, 0, ny - 1);
+            const int cz = constrain(int(a.position.z) / cellSize, 0, nz - 1);
+            const int firstX = wrapX && nx > 2 ? cx - 1 : max(0, cx - 1);
+            const int lastX = wrapX && nx > 2 ? cx + 1 : min(nx - 1, cx + 1);
+            for (int z = max(0, cz - 1); z <= min(nz - 1, cz + 1); ++z) {
+                for (int y = max(0, cy - 1); y <= min(ny - 1, cy + 1); ++y) {
+                    for (int x = firstX; x <= lastX; ++x) {
+                        for (int j = heads[cellIndex((x + nx) % nx, y, z)]; j >= 0; j = next[j]) {
+                            if (j <= i) continue;
+                            auto& b = pool[j].motion;
+                            Point3 d{b.position.x - a.position.x, b.position.y - a.position.y,
+                                     b.position.z - a.position.z};
+                            if (wrapX && fabsf(d.x) > RNDR_X * 0.5f) {
+                                d.x += d.x > 0 ? -RNDR_X : RNDR_X;
+                            }
+                            const float distanceSq = d.x*d.x + d.y*d.y + d.z*d.z;
+                            const float contact = radius(pool[i]) + radius(pool[j]);
+                            if (distanceSq >= contact * contact) continue;
+                            const float distance = sqrtf(distanceSq);
+                            const Point3 n = distance > 0.0001f ?
+                                Point3{d.x / distance, d.y / distance, d.z / distance} :
+                                Point3{1.0f, 0.0f, 0.0f};
+                            const float correction = 0.4f * (contact - distance);
+                            a.position.x -= n.x * correction;
+                            a.position.y -= n.y * correction;
+                            a.position.z -= n.z * correction;
+                            b.position.x += n.x * correction;
+                            b.position.y += n.y * correction;
+                            b.position.z += n.z * correction;
+                            const float closing = (a.velocity.x - b.velocity.x) * n.x +
+                                                  (a.velocity.y - b.velocity.y) * n.y +
+                                                  (a.velocity.z - b.velocity.z) * n.z;
+                            if (closing <= 0.0f) continue;
+                            const float impulse = 0.5f * (1.0f + restitution) * closing;
+                            a.velocity.x -= impulse * n.x;
+                            a.velocity.y -= impulse * n.y;
+                            a.velocity.z -= impulse * n.z;
+                            b.velocity.x += impulse * n.x;
+                            b.velocity.y += impulse * n.y;
+                            b.velocity.z += impulse * n.z;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     inline void drawSmooth(Point3 position, CRGB color, bool wrapX) {
         const auto x = lroundf(position.x * 256.0f);
         const auto y = lroundf(position.y * 256.0f);
@@ -132,11 +218,20 @@ namespace ParticleEngine {
 
     // Sample a soft sphere in its local bounds so larger heads stay bright
     // even when their centers fall between voxels.
-    inline void drawBall(Point3 center, float radius, CRGB color, bool wrapX) {
-        const float outer = radius + 0.5f;
+    inline void drawBall(Point3 center, float radius, CRGB color, bool wrapX,
+                         bool fullBrightnessCore = false) {
+        const float outer = fullBrightnessCore ? max(1.0f, radius + 0.5f) : radius + 0.5f;
         const float inner = max(0.0f, radius - 0.5f);
         const float outerSq = outer * outer;
-        const float fadeScale = 255.0f / (outerSq - inner * inner);
+        float innerSq = inner * inner;
+        if (fullBrightnessCore) {
+            // Expand the core just enough to reach the closest voxel center.
+            const float dx = center.x - roundf(center.x);
+            const float dy = center.y - roundf(center.y);
+            const float dz = center.z - roundf(center.z);
+            innerSq = max(innerSq, dx * dx + dy * dy + dz * dz);
+        }
+        const float fadeScale = 255.0f / (outerSq - innerSq);
         const int firstX = int(ceilf(center.x - outer));
         const int lastX = int(floorf(center.x + outer));
         const int firstY = max(0, int(ceilf(center.y - outer)));
@@ -155,7 +250,9 @@ namespace ParticleEngine {
                     const float coverage = (outerSq - xySq - dz * dz) * fadeScale;
                     if (coverage <= 0.0f) continue;
                     CRGB lit = color;
-                    lit.nscale8(uint8_t(min(255.0f, coverage)));
+                    if (!fullBrightnessCore || xySq + dz * dz > innerSq) {
+                        lit.nscale8(uint8_t(min(255.0f, coverage)));
+                    }
                     setVoxel(voxelX, y, z, getVoxel(voxelX, y, z) + lit);
                 }
             }

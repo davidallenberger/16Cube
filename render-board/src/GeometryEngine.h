@@ -126,6 +126,12 @@ namespace GeometryEngine {
 
     struct Point3 { float x, y, z; };
 
+    // A cross section of a helix at the caller's phase and axial offset.
+    inline Point3 helixPoint(Point3 center, float radius, float phase, float axialOffset) {
+        return {center.x + cosf(phase) * radius, center.y + sinf(phase) * radius,
+                center.z + axialOffset};
+    }
+
     // Shared shape tumble in degrees. The caller supplies its own phase and speed.
     inline Point3 tumbleAngles(float phase, float speed) {
         return {phase * (0.5f * speed), phase * (0.8f * speed), phase * (0.3f * speed)};
