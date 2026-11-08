@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <cmath>
 struct CHSV{uint8_t v;CHSV(uint8_t,uint8_t,uint8_t value):v(value){}};
 struct CRGB{uint8_t r=0,g=0,b=0;CRGB(){} CRGB(uint32_t rgb):r(rgb>>16),g(rgb>>8),b(rgb){} CRGB(int red,int green,int blue):r(red),g(green),b(blue){} CRGB(CHSV hsv):r(hsv.v),g(hsv.v),b(hsv.v){} void nscale8(uint8_t v){r=uint16_t(r)*v/255;g=uint16_t(g)*v/255;b=uint16_t(b)*v/255;} CRGB &operator+=(const CRGB &c){r=std::min(255,int(r)+c.r);g=std::min(255,int(g)+c.g);b=std::min(255,int(b)+c.b);return *this;} static CRGB Black,Green,Yellow,Red,White,Blue,Purple;};
 using CRGBPalette16 = int;
@@ -15,6 +16,13 @@ extern FastLEDStub FastLED;
 inline void fill_solid(CRGB* pixels,int count,CRGB color){for(int i=0;i<count;++i)pixels[i]=color;} inline void fadeToBlackBy(CRGB*,int,uint8_t){}
 inline void random16_set_seed(uint32_t){}inline void random16_add_entropy(uint32_t){}
 inline uint8_t beatsin8(int,int,int){return 100;}
+inline uint8_t sin8(uint8_t phase) {
+    return uint8_t(128.0 + 127.0 * std::sin(phase * (6.283185307179586 / 256.0)));
+}
+inline uint8_t cubicwave8(uint8_t phase) {
+    const double triangle = (phase < 128 ? phase : 255 - phase) / 127.0;
+    return uint8_t(255.0 * triangle * triangle * (3.0 - 2.0 * triangle));
+}
 static int RainbowColors_p=0;
 
 static int OceanColors_p=1, LavaColors_p=2, ForestColors_p=3, PartyColors_p=4;

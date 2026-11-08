@@ -336,6 +336,10 @@ RemoteInputs::AudioFrame RemoteInputs::audio(float sensitivity) {
     return Detail::AudioFrameClock::withEvents(frameAudio, frameKick, frameStrength, sensitivity);
 }
 
+RemoteInputs::AudioAttackDiagnostics RemoteInputs::audioAttackDiagnostics() {
+    return {frameKick, frameStrength[0], frameStrength[1], frameStrength[2]};
+}
+
 RemoteInputs::Control RemoteInputs::beginFrame() {
     if (!mutex) {
         return {};
@@ -477,6 +481,10 @@ namespace RemoteInputs {
 
     AudioFrame audio(float) {
         return {}; // Zero levels/events; no simulated audio or moving clock.
+    }
+
+    AudioAttackDiagnostics audioAttackDiagnostics() {
+        return {};
     }
 
     Stats stats() {

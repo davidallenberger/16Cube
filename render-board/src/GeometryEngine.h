@@ -730,7 +730,7 @@ namespace GeometryEngine {
    // ==========================================
     // CYLINDER (Dynamically Centered - Solid Color Hack)
     // ==========================================
-    inline void drawCylinder(float cx, float cy, float cz, float radius, RenderMode mode, const TextureState &tex, float rotX, float rotY, float rotZ, bool eraseBackground = true) {
+    inline void drawCylinder(float cx, float cy, float cz, float radius, RenderMode mode, const TextureState &tex, float rotX, float rotY, float rotZ, bool eraseBackground = true, float = 1.0f) {
         if (radius <= 0) return;
         uint16_t angX = (uint32_t)(rotX * 182.0444f), angY = (uint32_t)(rotY * 182.0444f), angZ = (uint32_t)(rotZ * 182.0444f);
         int16_t cxf = cos16(angX), sxf = sin16(angX), cyf = cos16(angY), syf = sin16(angY), czf = cos16(angZ), szf = sin16(angZ);
@@ -773,7 +773,10 @@ namespace GeometryEngine {
 
                     if (coverage > 0) {
                         CRGB color;
-                        if (tex.mode == MODE_SOLID && tex.palette[0] == CRGB(CRGB::Gray)) {
+                        if (tex.cylinderCaps) {
+                            const TextureState &material = d_cap > d_body ? *tex.cylinderCaps : tex;
+                            color = material.getColor(x, y, z);
+                        } else if (tex.mode == MODE_SOLID && tex.palette[0] == CRGB(CRGB::Gray)) {
                             bool isEndCap = (d_cap > d_body);
                             bool isMatrixBoundary = (x == 0 || x == RNDR_X - 1 || y == 0 || y == RNDR_Y - 1 || z == 0 || z == RNDR_Z - 1);
                             color = (isEndCap || isMatrixBoundary) ? tex.palette[1] : tex.palette[2];

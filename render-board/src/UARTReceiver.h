@@ -38,6 +38,13 @@ namespace RemoteInputs {
     // Optional sensitivity admits weaker events; it does not rescale volume.
     AudioFrame audio(float sensitivity = 1.0f);
 
+    // Diagnostic view of the same frozen frame, before sensitivity filtering.
+    struct AudioAttackDiagnostics {
+        bool dedicatedKick;
+        uint8_t bassStrength, midStrength, highStrength;
+    };
+    AudioAttackDiagnostics audioAttackDiagnostics();
+
     struct Stats {
         uint32_t accepted = 0;
         uint32_t rejected = 0;

@@ -82,6 +82,105 @@ void Audio::animateDriftRose() {
         driftRoseReach, TestDemo::audioRoutineRunning, max(8, spokeCount));
 }
 
+namespace {
+// Plasmoid by Andrew Tuline, adapted from WLED v16.0.1. Two independently
+// drifting strip waves set the fill and brightness. Their phases also color
+// the strip, independently of the volume cutoff.
+void drawPlasmoid(bool mirrorDepth) {
+    constexpr uint32_t stepMs = 23; // WLED's default 42 Hz effect clock.
+    constexpr unsigned sliceSize = unsigned(RNDR_X) * RNDR_Z;
+    constexpr unsigned sliceShift = RNDR_X + 1;
+    constexpr unsigned voxelCount = sliceSize * RNDR_Y;
+    constexpr uint8_t idleNoise = 2;
+    const CRGBPalette16 palette = RainbowColors_p;
+    uint8_t cubicPhase = 0;
+    uint8_t cosinePhase = 0;
+    const uint32_t started = millis();
+    uint32_t lastStep = started - stepMs;
+    clearAll();
+
+    while (TestDemo::audioRoutineRunning()) {
+        const uint32_t now = millis();
+        const uint32_t sinceStep = now - lastStep;
+        if (sinceStep < stepMs) {
+            showCube();
+            continue;
+        }
+        lastStep = sinceStep >= 2 * stepMs ? now : lastStep + stepMs;
+        const auto audio = RemoteInputs::audio();
+        const unsigned cutoff = audio.volumeSm <= idleNoise ? 0 :
+            min(254u, unsigned(audio.volumeSm) * Audio::controls().plasmoidIntensity / 64);
+        const auto phaseStep = [now, started](unsigned cyclesPerMinute) {
+            const uint32_t elapsed = (now - started) % 60000u;
+            const uint8_t angle = uint8_t(elapsed * cyclesPerMinute * 256u / 60000u);
+            return int(unsigned(sin8(angle)) * 9 / 256) - 4;
+        };
+        cubicPhase = uint8_t(int(cubicPhase) + phaseStep(6));
+        cosinePhase = uint8_t(int(cosinePhase) + phaseStep(7));
+        fadeAll(32);
+
+        unsigned refreshed = 0;
+        if (cutoff > 0) {
+            // Both waves wrap at 256, so evaluate one period for the whole cube.
+            CRGB light[256];
+            const unsigned brightnessFloor = min(48u, cutoff);
+            for (unsigned i = 0; i < 256; ++i) {
+                // Spatial frequencies at WLED's default speed setting of 128.
+                const uint8_t cubicAngle = uint8_t(13 * i + cubicPhase);
+                const uint8_t cosineAngle = uint8_t(117 * i + cosinePhase);
+                const uint8_t score = cubicwave8(cubicAngle) / 2 +
+                                      sin8(uint8_t(cosineAngle + 64)) / 2;
+                if (score == 0 || score > cutoff) {
+                    light[i] = CRGB::Black;
+                    continue;
+                }
+                // The phase mix advances by an odd stride, visiting all 256
+                // palette positions per strip period before the mask is applied.
+                const uint8_t paletteIndex = uint8_t(cubicAngle + 2u * cosineAngle);
+                light[i] = ColorFromPalette(palette, paletteIndex, 255, LINEARBLEND);
+                light[i].nscale8(uint8_t(score + (255u - score) * brightnessFloor / 255u));
+            }
+
+            for (uint8_t y = 0; y < RNDR_Y; ++y) {
+                const unsigned depth = mirrorDepth ? min(unsigned(y), unsigned(RNDR_Y - 1 - y)) : y;
+                // Read each upright slice as a matrix, with width first. Rotate
+                // its strip starting point so a 16x16 slice doesn't repeat at
+                // every depth just because it is exactly one period long.
+                unsigned position = depth * sliceShift % sliceSize;
+                for (uint8_t z = 0; z < RNDR_Z; ++z) {
+                    for (uint8_t x = 0; x < RNDR_X; ++x) {
+                        const CRGB &incoming = light[uint8_t(depth * sliceSize + position)];
+                        if (++position == sliceSize) {
+                            position = 0;
+                        }
+                        if (incoming.r || incoming.g || incoming.b) {
+                            // Fresh color stays saturated. Only pixels that
+                            // leave the mask keep fading their previous color.
+                            setVoxel(x, y, z, incoming);
+                            ++refreshed;
+                        }
+                    }
+                }
+            }
+        }
+
+        char detail[104];
+        snprintf(detail, sizeof(detail), "Plasmoid map=%s cutoff=%u fresh=%u/%u",
+                 mirrorDepth ? "depth-mirror" : "single-strip", cutoff, refreshed, voxelCount);
+        Audio::debug(audio, detail);
+        showCube();
+    }
+}
+}
+
+void Audio::animatePlasmoid() {
+    drawPlasmoid(false);
+}
+
+void Audio::animatePlasmoidMirrored() {
+    drawPlasmoid(true);
+}
+
 void Audio::renderIcon(TextureState &) {
     for (uint8_t y = 0; y < RNDR_Y; ++y) {
         for (uint8_t x = 0; x < RNDR_X; ++x) {
@@ -97,7 +196,7 @@ void Audio::debug() {
     debug(RemoteInputs::audio());
 }
 
-void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail) {
+void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail, uint32_t attackNumber) {
 #if AUDIO_SERIAL_DEBUG
     // Render task only. No printing in UARTReceiver and no lock held during TX.
     // Static storage survives a nonlocal app exit; no resource-owning locals.
@@ -107,10 +206,12 @@ void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail) {
     static uint32_t lastReport = 0;
     const uint32_t now = millis();
 
-    if (sent >= queued && uint32_t(now - lastReport) >= 500) {
-        lastReport = now;
+    if (sent == queued) {
         sent = 0;
         queued = 0;
+    }
+    if (queued == 0 && uint32_t(now - lastReport) >= 500) {
+        lastReport = now;
         const RemoteInputs::Control control = RemoteInputs::control();
         const RemoteInputs::Stats stats = RemoteInputs::stats();
         const char *source = "Unknown";
@@ -162,6 +263,30 @@ void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail) {
         }
     }
 
+    if (attackNumber != 0) {
+        const auto event = RemoteInputs::audioAttackDiagnostics();
+        char line[144];
+        const int length = snprintf(line, sizeof(line),
+            "Attack: ms=%lu hit=%lu VSm=%u kick=%u accepted=%u/%u/%u strength=%u/%u/%u\r\n",
+            (unsigned long)now, (unsigned long)attackNumber, unsigned(audio.volumeSm),
+            unsigned(event.dedicatedKick), unsigned(audio.bassKick), unsigned(audio.midAttack),
+            unsigned(audio.highAttack), unsigned(event.bassStrength), unsigned(event.midStrength),
+            unsigned(event.highStrength));
+        if (length > 0 && size_t(length) < sizeof(line)) {
+            // Keep pending bytes in order even when a hit arrives mid-report.
+            // If the monitor cannot keep up, gaps in hit numbers show it.
+            if (queued + size_t(length) > sizeof(text) && sent > 0) {
+                memmove(text, text + sent, queued - sent);
+                queued -= sent;
+                sent = 0;
+            }
+            if (queued + size_t(length) <= sizeof(text)) {
+                memcpy(text + queued, line, length);
+                queued += size_t(length);
+            }
+        }
+    }
+
     if (sent < queued) {
         const int space = Serial.availableForWrite();
         if (space > 0) {
@@ -179,7 +304,7 @@ void Audio::animatePuddles() {
 }
 
 void Audio::animatePuddlePeak() {
-    puddles(true, PuddleShape(random(3)), controls().puddlePeakSensitivity,
+    puddles(true, PuddleShape(random(3)), controls().peakAttackSensitivity,
             controls().maxCubeEdge, controls().puddlePeakDensity);
 }
 
@@ -229,7 +354,7 @@ void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8
         snprintf(detail, sizeof(detail), "Puddles shape=%s color=solid-per-spawn", shapeName);
         Audio::debug(audio, detail);
 
-        const bool hit = audio.bassKick || audio.midAttack || audio.highAttack;
+        const bool hit = audio.hasAttack();
         const bool volumeReady = audio.volumeSm * sensitivity >= 2.0f;
         const bool intervalReady = uint32_t(now - lastSpawn) >= PUDDLE_SPAWN_INTERVAL_MS;
         const bool spawn = peakDetect ? hit && peakDensity > 0.0f : volumeReady && intervalReady;
@@ -329,7 +454,7 @@ void Audio::animateAttackMonitor() {
     while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio(controls().attackSensitivity);
         const uint32_t now = millis();
-        if (audio.bassKick || audio.midAttack || audio.highAttack) {
+        if (audio.hasAttack()) {
             flashStarted = now;
             flashing = true;
         }

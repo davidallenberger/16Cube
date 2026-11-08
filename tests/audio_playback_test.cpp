@@ -8,6 +8,9 @@
 #include <string>
 #include <limits>
 
+// The host playback fixture isolates audio effects from the shape renderer.
+void Audio::animateCylinder() {}
+
 SerialStub Serial;
 SerialStub Serial2;
 FastLEDStub FastLED;
@@ -239,19 +242,19 @@ static void testanimatePuddlesCubes() {
 
 static void testanimatePuddlePeak() {
     Audio::puddles(true, Audio::PuddleShape::Horizontal,
-        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().peakAttackSensitivity,
         Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
 }
 
 static void testanimatePuddlePeakVertical() {
     Audio::puddles(true, Audio::PuddleShape::Vertical,
-        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().peakAttackSensitivity,
         Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
 }
 
 static void testanimatePuddlePeakCubes() {
     Audio::puddles(true, Audio::PuddleShape::Cube,
-        Audio::controls().puddlePeakSensitivity,
+        Audio::controls().peakAttackSensitivity,
         Audio::controls().maxCubeEdge, Audio::controls().puddlePeakDensity);
 }
 
@@ -279,7 +282,7 @@ int main() {
     TestDemo::audioPlayback().order = TestDemo::PlaybackOrder::Sequential;
     // Artist-tuned defaults in Audio.h must not change this test fixture.
     Audio::controls().puddlesSensitivity = 1.0f;
-    Audio::controls().puddlePeakSensitivity = 1.0f;
+    Audio::controls().peakAttackSensitivity = 1.0f;
     Audio::controls().puddlePeakDensity = 1.0f;
     Audio::controls().bpmSensitivity = 1.0f;
     Audio::controls().attackSensitivity = 1.0f;
@@ -288,6 +291,35 @@ int main() {
     // Explicit expectations for the two supported canvases. Same fractional
     // footprint needs fewer lines on 10x10x16 than on the full 16^3 cube.
     const unsigned defaultLines = RNDR_X == 16 ? 6 : 4;
+
+    // Compare the same wave phase at three volumes, then verify that only
+    // the mirrored mapping matches corresponding front and back pixels.
+    makeStream(1);
+    input[0].values.volumeSm = 1;
+    render(&Audio::animatePlasmoid);
+    assert(writeCounts[0] == 0);
+    input[0].values.volumeSm = 25;
+    render(&Audio::animatePlasmoid);
+    const unsigned quietPlasmoid = writeCounts[0];
+    assert(quietPlasmoid > 0);
+    input[0].values.volumeSm = 128;
+    render(&Audio::animatePlasmoid);
+    assert(writeCounts[0] > quietPlasmoid);
+    bool depthVaries = false;
+    for (uint8_t z = 0; z < RNDR_Z; ++z) {
+        for (uint8_t x = 0; x < RNDR_X; ++x) {
+            depthVaries |= getVoxel(x, 0, z).r != getVoxel(x, RNDR_Y - 1, z).r;
+        }
+    }
+    assert(depthVaries);
+    render(&Audio::animatePlasmoidMirrored);
+    for (uint8_t z = 0; z < RNDR_Z; ++z) {
+        for (uint8_t y = 0; y < RNDR_Y / 2; ++y) {
+            for (uint8_t x = 0; x < RNDR_X; ++x) {
+                assert(getVoxel(x, y, z).r == getVoxel(x, RNDR_Y - 1 - y, z).r);
+            }
+        }
+    }
 
     // Every frequency group uses the same public event interface. The visual
     // must not contain another detector that examines compressed display bins.

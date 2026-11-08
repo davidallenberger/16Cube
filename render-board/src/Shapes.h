@@ -14,6 +14,15 @@ enum ShapeType {
 };
 
 class Shapes {
+public:
+    struct FrameControl {
+        // May update the texture. Return a multiplier for this frame's
+        // rotation advance, with 1.0 preserving the normal rate.
+        float (*update)(TextureState &, uint32_t deltaMs, void *state);
+        bool (*keepRunning)();
+        void *state;
+    };
+
 private:
 static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
         // If it's not a wireframe, let it pass untouched
@@ -59,7 +68,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
     // ==========================================
     // MASTER DIRECTORS (Transform Path)
     // ==========================================
-    static void animateStaticShape(DrawShapeFunc drawFunc, float fixedRadius, uint32_t durationMs, RenderMode rMode, ShaderMode sMode, CRGBPalette16 pal, bool rotate = false, float tumbleSpeed = 1.0f, float customX = 0, float customY = 0, float customZ = 0, bool stretch = false) {
+    static void animateStaticShape(DrawShapeFunc drawFunc, float fixedRadius, uint32_t durationMs, RenderMode rMode, ShaderMode sMode, CRGBPalette16 pal, bool rotate = false, float tumbleSpeed = 1.0f, float customX = 0, float customY = 0, float customZ = 0, bool stretch = false, const FrameControl *frameControl = nullptr) {
         uint32_t startTime = millis();
         uint32_t lastFrameTime = millis();
         
@@ -68,12 +77,14 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
         
         TextureState tex(sMode, pal, 1.0f);
 
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
+        while (frameControl ? frameControl->keepRunning() :
+               TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
             uint32_t now = millis();
             uint32_t deltaMs = now - lastFrameTime;
             lastFrameTime = now;
             
-            geomPhase += 0.2f * (float)deltaMs;
+            const float rate = frameControl ? frameControl->update(tex, deltaMs, frameControl->state) : 1.0f;
+            geomPhase += 0.2f * deltaMs * rate;
 
             clearAll();
             const auto angles = rotate ? GeometryEngine::tumbleAngles(geomPhase, tumbleSpeed) :
@@ -360,7 +371,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
             case SHAPE_OCTAHEDRON:  return {(DrawShapeFunc)GeometryEngine::drawOctahedron, 4.5f, 4.5f, 4.0f};
             case SHAPE_MERKABA:     return {(DrawShapeFunc)GeometryEngine::drawMerkaba, 3.5f, 3.5f, 3.5f};
             case SHAPE_TORUS:       return {(DrawShapeFunc)GeometryEngine::drawTorus, 3.0f, 3.0f, 3.0f};
-            case SHAPE_CYLINDER:    return {(DrawShapeFunc)GeometryEngine::drawCylinder, 3.5f, 3.5f, 3.5f};
+            case SHAPE_CYLINDER:    return {GeometryEngine::drawCylinder, 3.5f, 3.5f, 3.5f};
             case SHAPE_HEMISPHERES: return {(DrawShapeFunc)GeometryEngine::drawHemisphereHourglass, 3.5f, 3.5f, 3.5f};
             case SHAPE_BOX:         return {(DrawShapeFunc)GeometryEngine::drawBox, 3.5f, 4.0f, 3.5f};
             case SHAPE_HOURGLASS: return {(DrawShapeFunc)GeometryEngine::drawHourglass, 3.5f, 3.5f, 3.5f};
@@ -374,7 +385,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
             case SHAPE_OCTAHEDRON:  return {(DrawShapeFunc)GeometryEngine::drawOctahedron, 10.5f, 10.5f, 8.5f};
             case SHAPE_MERKABA:     return {(DrawShapeFunc)GeometryEngine::drawMerkaba, 6.5f, 6.5f, 6.5f};
             case SHAPE_TORUS:       return {(DrawShapeFunc)GeometryEngine::drawTorus, 5.5f, 5.5f, 5.5f};
-            case SHAPE_CYLINDER:    return {(DrawShapeFunc)GeometryEngine::drawCylinder, 7.0f, 7.0f, 7.0f};
+            case SHAPE_CYLINDER:    return {GeometryEngine::drawCylinder, 7.0f, 7.0f, 7.0f};
             case SHAPE_HEMISPHERES: return {(DrawShapeFunc)GeometryEngine::drawHemisphereHourglass, 7.5f, 7.5f, 7.5f};
             case SHAPE_BOX:         return {(DrawShapeFunc)GeometryEngine::drawBox, 7.5f, 7.5f, 7.5f};
             case SHAPE_HOURGLASS: return {(DrawShapeFunc)GeometryEngine::drawHourglass, 7.5f, 7.5f, 7.5f};
@@ -636,11 +647,11 @@ static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
     }
 
     // --- animateTumbling ---
-    static void animateTumbling(ShapeType shape, uint32_t durationMs, RenderMode rMode, CRGBPalette16 pal, ShaderMode sMode, float tumbleSpeed = 1.0f, bool stretch = true) {
+    static void animateTumbling(ShapeType shape, uint32_t durationMs, RenderMode rMode, CRGBPalette16 pal, ShaderMode sMode, float tumbleSpeed = 1.0f, bool stretch = true, const FrameControl *frameControl = nullptr) {
         pal = applyShapeColorHacks(shape, pal, sMode);
         rMode = applyShapeRenderHacks(shape, rMode);
         ShapeConfig cfg = getShapeConfig(shape);
-        animateStaticShape(cfg.drawFunc, cfg.tumbleRadius, durationMs, rMode, sMode, pal, true, tumbleSpeed, 0.0f, 0.0f, 0.0f, stretch);
+        animateStaticShape(cfg.drawFunc, cfg.tumbleRadius, durationMs, rMode, sMode, pal, true, tumbleSpeed, 0.0f, 0.0f, 0.0f, stretch, frameControl);
     }
     //If you just pass an HTMLColorCode, it implies SOLID
     static void animateTumbling(ShapeType shape, uint32_t durationMs, RenderMode rMode, CRGB::HTMLColorCode colorCode, float tumbleSpeed = 1.0f, bool stretch = true) {

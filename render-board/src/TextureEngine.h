@@ -53,6 +53,14 @@ public:
         else             { strcpy(getPaletteNameBuffer(), "Party (Neon Mix)"); return PartyColors_p; }
     }
 
+    static CRGBPalette16 getRandomPalette() {
+        if (random8(5) == 0) {
+            strcpy(getPaletteNameBuffer(), "Rainbow");
+            return RainbowColors_p;
+        }
+        return getRandomOrganicPalette();
+    }
+
     static CRGB getRandomVibrantColor() {
         // Force max saturation and value to guarantee a bright, pretty neon color
         uint8_t hue = random8();
@@ -121,12 +129,7 @@ public:
             MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
         TexturePlan plan;
         plan.sMode = modes[random8(5)];
-        if (random8(5) == 0) {
-            plan.palette = RainbowColors_p;
-            strcpy(getPaletteNameBuffer(), "Rainbow");
-        } else {
-            plan.palette = getRandomOrganicPalette();
-        }
+        plan.palette = getRandomPalette();
         if (plan.sMode == MODE_HIPHOTIC) {
             strcpy(getPaletteNameBuffer(), "Hiphotic Native");
         }
@@ -200,6 +203,7 @@ struct TextureState {
     uint8_t scale; 
     CRGBPalette16 palette; 
     bool drawBalls; 
+    const TextureState *cylinderCaps = nullptr;
     
     uint8_t hX[16], hY[16], hZ[16];
     float mbX[3], mbY[3], mbZ[3];

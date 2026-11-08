@@ -5,8 +5,8 @@
 #include "UARTReceiver.h"
 #include "Streamers.h"
 
-// Static animation collection, like Streamers and Surfaces. Implementations
-// are grouped in Audio.cpp; callers do not need to construct an Audio object.
+// Static animation collection, like Streamers and Surfaces. Callers do not
+// need to construct an Audio object.
 // Future volume/frequency/kick routines can be added as independent methods.
 class Audio {
   public:
@@ -16,12 +16,13 @@ class Audio {
     // tune these for artistic response without changing that calibration.
     struct Controls {
         float puddlesSensitivity = 1.0f;    // Volume-to-size response.
-        float puddlePeakSensitivity = 2.5f; // Shared-event admission.
+        float peakAttackSensitivity = 2.5f; // Event admission for Puddle Peak and audio shapes.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
         float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
         float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
+        uint8_t plasmoidIntensity = 128;    // WLED's # of pixels setting. 128 gives a cutoff of 2 * VolumeSm.
         uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
         bool midrangeBoostEnabled = true; // Shared by audio Julia, Waverly and Drift Rose.
         float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
@@ -78,6 +79,9 @@ class Audio {
 
     static void animateJulia();
     static void animateDriftRose();
+    static void animateCylinder();
+    static void animatePlasmoid();
+    static void animatePlasmoidMirrored();
     static void animateSurroundGEQ();
     static void animateCornerBurst();
     static void animateCornerBurstSphere();
@@ -98,6 +102,8 @@ class Audio {
     static void debug();
     // Reuse the routine's existing snapshot so the report describes the
     // same audio values that produced this frame.
-    static void debug(const RemoteInputs::AudioFrame &audio, const char *detail = "");
+    // A nonzero attack number adds a timestamped record to the serial stream.
+    static void debug(const RemoteInputs::AudioFrame &audio, const char *detail = "",
+                      uint32_t attackNumber = 0);
 
 };

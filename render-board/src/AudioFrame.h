@@ -31,6 +31,10 @@ namespace RemoteInputs {
         bool midAttack = false;
         bool highAttack = false;
 
+        bool hasAttack() const {
+            return bassKick || midAttack || highAttack;
+        }
+
         // One revolution every N beats. Example: beatAngle(10) at 120 BPM
         // takes five seconds to travel from 0 to TWO_PI and start again.
         // An invalid zero period returns zero. The internal beat count keeps
