@@ -231,6 +231,29 @@ class JuliaRenderer {
 };
 
 #include "GeometryEngine.h"
+#include "ParticleEngine.h"
+
+// Particle counts and radius use the 16³ cube as their reference. The
+// tail length follows display height, and drift follows horizontal size.
+struct PSImpactSettings {
+    uint16_t minLaunchMs = 400;
+    uint16_t maxLaunchMs = 700;
+    float meteorRadiusAtReferenceVolume = .25f; // Used by every spark in the meteor.
+    float tailHeightFraction = 0.90f;
+    // At 1.0 sparks fade from full brightness over their entire life.
+    // Values below 1.0 add a bright hold. Above 1.0 they also dim at birth.
+    float tailFade = 2.0f;
+    float tailSidewaysDrift = 1.5f; // Random speed in either direction per axis on the 16³ cube.
+    uint8_t minSplashAtReferenceVolume = 24; // Reference is a 16³ cube.
+    uint8_t maxSplashAtReferenceVolume = 36;
+    float splashForce = 1.0f;
+    float splashSpread = 1.5f; // Horizontal speed multiplier.
+    float maxSplashRiseSpeed = 31.0f; // Voxels per second on the reference cube.
+    float hardness = 0.55f;
+    uint8_t blurRetention = 0; // The moving sparks make the trail.
+    bool cylinder = false;
+    bool walls = false;
+};
 
 enum BlackHoleOrbit {
     ORBIT_SYNC = 0,    // One majestic Saturn ring (All stars share the exact same 3D plane)
@@ -260,72 +283,47 @@ class Streamers {
     // THE BRUSH-ENABLED ANIMATORS
     // ==========================================
 
-    // ==========================================
-    // THE KINETIC PARTICLE ENGINE
-    // ==========================================
-    struct KineticParticle {
-        bool active;
-        uint8_t type;     // 0 = standard spark, 1 = firework climbing shell
-        float px, py, pz;
-        float vx, vy, vz;
-        float drag;
-        float gravity;
-        float life;       // 1.0f (full brightness) down to 0.0f (dead)
-        float decay;      // How much life is lost per second
-        CRGB color;
-        bool hasTail;
-    };
+    // Keep the established sparkle, brightness and tails for the original bursts.
+    static void drawKineticParticles(ParticleEngine::Pool& pool, float dt) {
+        for (int i = 0; i < pool.size(); ++i) {
+            auto& particle = pool[i];
+            if (!particle.active) continue;
 
-    static void processKineticPhysics(KineticParticle* pool, int count, float dt) {
-        for (int i = 0; i < count; i++) {
-            if (!pool[i].active) continue;
-
-            // 1. Apply Velocity
-            pool[i].px += pool[i].vx * dt;
-            pool[i].py += pool[i].vy * dt;
-            pool[i].pz += pool[i].vz * dt;
-
-            // 2. Apply Newtonian Drag & Gravity
-            pool[i].vx *= pool[i].drag;
-            pool[i].vy *= pool[i].drag;
-            pool[i].vz *= pool[i].drag;
-            pool[i].vz -= pool[i].gravity * dt;
-
-            // 3. Apply Aging
-            pool[i].life -= pool[i].decay * dt;
-
-            int ix = (int)lroundf(pool[i].px);
-            int iy = (int)lroundf(pool[i].py);
-            int iz = (int)lroundf(pool[i].pz);
+            ParticleEngine::advance(particle, dt);
+            const auto& p = particle.motion.position;
+            const auto& v = particle.motion.velocity;
+            int ix = (int)lroundf(p.x);
+            int iy = (int)lroundf(p.y);
+            int iz = (int)lroundf(p.z);
 
             // 4. Kill Logic (Faded out, fell through floor, or hit the glass)
-            if (pool[i].life <= 0.0f || iz < 0 || ix < 0 || ix >= RNDR_X || iy < 0 || iy >= RNDR_Y) {
-                pool[i].active = false;
+            if (!particle.active || iz < 0 || ix < 0 || ix >= RNDR_X || iy < 0 || iy >= RNDR_Y) {
+                particle.active = false;
                 continue;
             }
 
            // 5. Draw the Particle
             if (iz < RNDR_Z) {
-                CRGB drawColor = pool[i].color;
+                CRGB drawColor = particle.color;
                 
                 // RESTORED: High-velocity particles burn white-hot
-                float currentSpeed = abs(pool[i].vx) + abs(pool[i].vy) + abs(pool[i].vz);
+                float currentSpeed = abs(v.x) + abs(v.y) + abs(v.z);
                 if (currentSpeed > 15.0f) {
                     drawColor |= CRGB(180, 180, 180); // Inject pure white light into the base color
                 }
 
-                drawColor.nscale8((uint8_t)(pool[i].life * 255.0f)); 
+                drawColor.nscale8((uint8_t)(particle.life * 255.0f));
                 
                 // Additive blending for glowing cores
                 CRGB existing = getVoxel(ix, iy, iz);
                 setVoxel(ix, iy, iz, existing + drawColor);
 
                 // 6. Optional Kinetic Tails
-                if (pool[i].hasTail) {
+                if (particle.hasTail) {
                     if (currentSpeed > 5.0f) {
-                        int tailX = (int)lroundf(pool[i].px - (pool[i].vx * dt * 2.0f));
-                        int tailY = (int)lroundf(pool[i].py - (pool[i].vy * dt * 2.0f));
-                        int tailZ = (int)lroundf(pool[i].pz - (pool[i].vz * dt * 2.0f));
+                        int tailX = (int)lroundf(p.x - (v.x * dt * 2.0f));
+                        int tailY = (int)lroundf(p.y - (v.y * dt * 2.0f));
+                        int tailZ = (int)lroundf(p.z - (v.z * dt * 2.0f));
                         
                         if (tailX >= 0 && tailX < RNDR_X && tailY >= 0 && tailY < RNDR_Y && tailZ >= 0 && tailZ < RNDR_Z) {
                             CRGB tailColor = drawColor;
@@ -374,6 +372,191 @@ class Streamers {
         }
     }
 
+    // WLED PS Impact, adapted to a volumetric floor splash. The sources
+    // are invisible, and their newest sparks form the meteor heads.
+    static void animatePSImpact(uint32_t durationMs, const PSImpactSettings& settings = {}) {
+        using namespace ParticleEngine;
+        constexpr uint32_t stepUs = 8333;
+        constexpr float dt = stepUs * 0.000001f;
+        constexpr float floorRoughness = 0.18f;
+        const Side xSide = settings.walls ? Side::Bounce : (settings.cylinder ? Side::Wrap : Side::Open);
+        const Side ySide = settings.walls ? Side::Bounce : Side::Open;
+        const bool wrapX = xSide == Side::Wrap;
+        const float horizontalScale = min(RNDR_X, RNDR_Y) / 16.0f;
+        constexpr float verticalScale = RNDR_Z / 16.0f;
+        constexpr float gravity = 30.0f * verticalScale;
+        constexpr int volume = RNDR_X * RNDR_Y * RNDR_Z;
+        constexpr float volumeScale = volume / 4096.0f;
+        const float meteorRadius = settings.meteorRadiusAtReferenceVolume * cbrtf(volumeScale);
+        const float tailHeight = settings.tailHeightFraction * RNDR_Z;
+        const float launchHeight = RNDR_Z - 0.5f + meteorRadius;
+        constexpr float trailGravity = gravity * 0.25f;
+        constexpr int splashOverlap = 4; // Budget for overlapping floor bursts.
+        const int maxSplash = constrain(int(lroundf(settings.maxSplashAtReferenceVolume * volumeScale)),
+                                        1, maxParticles / splashOverlap);
+        const int minSplash = constrain(int(lroundf(settings.minSplashAtReferenceVolume * volumeScale)),
+                                        1, maxSplash);
+
+        struct Meteor {
+            Motion motion;
+            CRGB color;
+            bool active;
+        };
+        enum SparkType : uint8_t { Splash, Trail };
+        Meteor meteors[2]{};
+        Pool sparks(splashOverlap * maxSplash + 4 * RNDR_Z);
+        uint16_t launchTicks = 0;
+        uint8_t lastHue = random8();
+        bool emitTrail = false;
+
+        auto sample = [](float low, float high) {
+            return low + (high - low) * (random16() / 65536.0f);
+        };
+        auto emit = [&](const Particle& spark) {
+            int slot = sparks.firstFree();
+            if (slot == sparks.size()) {
+                // A crowded pool can give up its faintest trail spark.
+                float leastLife = 2.0f;
+                for (int i = 0; i < sparks.size(); ++i) {
+                    if (sparks[i].type == Trail && sparks[i].life < leastLife) {
+                        leastLife = sparks[i].life;
+                        slot = i;
+                    }
+                }
+            }
+            if (slot < sparks.size()) sparks[slot] = spark;
+        };
+        auto splash = [&](Point3 origin, CRGB color) {
+            const int count = random16(minSplash, maxSplash + 1);
+            const uint16_t phase = random16();
+            const float maxRise = max(0.0f, settings.maxSplashRiseSpeed);
+            const float baseRise = min(21.0f, maxRise);
+            for (int i = 0; i < count; ++i) {
+                // Spread directions around the floor, with different speeds
+                // and heights so the splash breaks up as it expands.
+                const uint16_t angle = phase + (uint32_t(i) * 65536u / count);
+                const bool tall = i % 6 == 0;
+                const float rise = tall ? sample(0.93f * maxRise, maxRise)
+                                        : sample(min(8.0f, baseRise), baseRise);
+                // Steeper sparks have more time to reach the apex before
+                // drifting out of an open side of the cube.
+                const float spread = tall ? 0.3f : 1.0f;
+                const float radial = sample(6.0f, 15.0f) * settings.splashForce
+                                     * settings.splashSpread * horizontalScale * spread;
+                const Point3 velocity{radial * cos16(angle) / 32768.0f,
+                                      radial * sin16(angle) / 32768.0f,
+                                      rise * settings.splashForce * verticalScale};
+                CRGB sparkColor = color;
+                sparkColor.nscale8(random8(170, 255));
+                const float lifetime = tall ? sample(1.16f, 1.25f) : sample(0.72f, 1.25f);
+                emit({true, Splash, {origin, velocity}, 0.997f, gravity,
+                      1.0f, 1.0f / lifetime, sparkColor, false});
+            }
+        };
+
+        const uint32_t started = millis();
+        uint32_t lastFrame = micros();
+        uint32_t accumulated = stepUs;
+        clearAll();
+        while (true) {
+            const bool launching = TestDemo::routineTimeRemaining(millis() - started, durationMs);
+            if (!launching && !meteors[0].active && !meteors[1].active && !sparks.anyAlive()) break;
+
+            const uint32_t now = micros();
+            // Limit catch-up after a stalled frame so a splash remains visible.
+            accumulated += min(uint32_t(now - lastFrame), 6 * stepUs);
+            lastFrame = now;
+            while (accumulated >= stepUs) {
+                accumulated -= stepUs;
+                emitTrail = !emitTrail; // One emission opportunity per 60 Hz update.
+                for (int i = 0; i < sparks.size(); ++i) {
+                    auto& spark = sparks[i];
+                    if (!spark.active) continue;
+                    advance(spark, dt);
+                    if (!spark.active) continue;
+                    auto& p = spark.motion.position;
+                    auto& v = spark.motion.velocity;
+                    if (!resolveSide(p.x, v.x, RNDR_X, xSide, settings.hardness) ||
+                        !resolveSide(p.y, v.y, RNDR_Y, ySide, settings.hardness)) {
+                        spark.active = false;
+                    } else if (spark.type == Splash) {
+                        bounceFloor(spark.motion, settings.hardness, floorRoughness);
+                    } else if (p.z < -meteorRadius - 0.5f) {
+                        spark.active = false;
+                    }
+                }
+
+                for (auto& meteor : meteors) {
+                    if (!meteor.active) continue;
+                    auto& p = meteor.motion.position;
+                    const Point3 previous = p;
+                    advance(meteor.motion, dt, {0.0f, 0.0f, -gravity}, 1.0f);
+                    if (p.z <= 0.0f) {
+                        // Burst at the floor crossing between simulation steps.
+                        const float fraction = previous.z / (previous.z - p.z);
+                        splash({previous.x + (p.x - previous.x) * fraction,
+                                previous.y + (p.y - previous.y) * fraction, 0.0f}, meteor.color);
+                        meteor.active = false;
+                    } else if (emitTrail) {
+                        const auto& v = meteor.motion.velocity;
+                        const float spread = settings.tailSidewaysDrift;
+                        const Point3 drift{0.15f * v.x + sample(-spread, spread) * horizontalScale,
+                                           0.15f * v.y + sample(-spread, spread) * horizontalScale,
+                                           0.15f * v.z};
+                        // Set lifetime from the distance the falling source
+                        // will gain on the spark. Fade still follows spark age.
+                        const float relativeSpeed = drift.z - v.z;
+                        const float relativeGravity = gravity - trailGravity;
+                        const float lifetime = 2.0f * tailHeight /
+                            (relativeSpeed + sqrtf(relativeSpeed * relativeSpeed +
+                                                   2.0f * relativeGravity * tailHeight));
+                        if (lifetime > 0.0f) {
+                            emit({true, Trail, {p, drift}, 1.0f, trailGravity,
+                                  1.0f, 1.0f / (lifetime * sample(0.90f, 1.0f)), meteor.color, false});
+                        }
+                    }
+                }
+
+                if (launchTicks > 0) --launchTicks;
+                if (launching && launchTicks == 0) {
+                    for (auto& meteor : meteors) {
+                        if (meteor.active) continue;
+                        const float edgeX = RNDR_X - 1.0f;
+                        const float edgeY = RNDR_Y - 1.0f;
+                        const float targetX = sample(0.08f, 0.92f) * edgeX;
+                        const float targetY = sample(0.08f, 0.92f) * edgeY;
+                        const float x = constrain(targetX + sample(-0.5f, 0.5f) * edgeX, 0.0f, edgeX);
+                        const float y = constrain(targetY + sample(-0.5f, 0.5f) * edgeY, 0.0f, edgeY);
+                        const float fallTime = sample(0.63f, 0.85f);
+                        meteor.motion = {{x, y, launchHeight},
+                                         {(targetX - x) / fallTime, (targetY - y) / fallTime,
+                                          -launchHeight / fallTime + gravity * fallTime * 0.5f}};
+                        lastHue += random8(96, 161);
+                        meteor.color = CHSV(lastHue, 255, 255);
+                        meteor.active = true;
+                        launchTicks = random16(settings.minLaunchMs, settings.maxLaunchMs + 1) * 1000UL / stepUs;
+                        break;
+                    }
+                }
+            }
+
+            if (settings.blurRetention) fadeAll(255 - settings.blurRetention);
+            else clearAll();
+            for (int i = 0; i < sparks.size(); ++i) {
+                const auto& spark = sparks[i];
+                if (!spark.active) continue;
+                CRGB color = spark.color;
+                const bool trail = spark.type == Trail;
+                const float fadePart = trail ? max(0.01f, settings.tailFade) : 0.5f;
+                color.nscale8(uint8_t(255.0f * min(1.0f, spark.life / fadePart)));
+                if (trail) drawBall(spark.motion.position, meteorRadius, color, wrapX);
+                else drawSmooth(spark.motion.position, color, wrapX);
+            }
+            showCube();
+        }
+        clearAll();
+    }
+
    // ==========================================
     // THE FIREWORKS (Powered by Kinetic Engine)
     // ==========================================
@@ -384,20 +567,7 @@ class Streamers {
         float minX = RNDR_X * 0.25f, maxX = RNDR_X * 0.75f;
         float minY = RNDR_Y * 0.25f, maxY = RNDR_Y * 0.75f;
 
-        // Keep the existing visual target, but never let the particle pool
-        // exceed the shared 8 KB arena. sizeof includes structure padding.
-        // With the current 48-byte particles, the capacity is 170 particles.
-        constexpr int PARTICLE_CAPACITY =
-            SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
-        static_assert(PARTICLE_CAPACITY > 0, "No kinetic particle fits the arena");
-
-        const int requestedParticles = min(((RNDR_X * RNDR_Y * RNDR_Z) / 7), 170);
-        const int MAX_PARTICLES = min(requestedParticles, PARTICLE_CAPACITY);
-        KineticParticle* pool = reinterpret_cast<KineticParticle*>(SharedAppMemory);
-
-        for (int i = 0; i < MAX_PARTICLES; i++) {
-            pool[i].active = false;
-        }
+        ParticleEngine::Pool pool(min((RNDR_X * RNDR_Y * RNDR_Z) / 7, 170));
 
         bool keepRunning = true;
 
@@ -413,32 +583,25 @@ class Streamers {
 
             // 1. RANDOM LAUNCHER (Only allow launches if time is NOT up)
             if (!timeIsUp && random8(100) < 2) { 
-                for (int i = 0; i < MAX_PARTICLES; i++) {
-                    if (!pool[i].active) {
-                        
-                        // MATHEMATICALLY TARGETED APEX
-                        // Height = v^2 / (2 * Gravity). 
-                        // With 15.0f gravity, a speed of 18.0 hits Z=10.8, and 22.0 hits Z=16.1.
-                        float launchSpeed = random16(180, 220) / 10.0f;
-                        
-                        pool[i] = {
-                            true, 1, // Type 1 = Shell
-                            (float)random16((int)minX * 10, (int)maxX * 10) / 10.0f, 
-                            (float)random16((int)minY * 10, (int)maxY * 10) / 10.0f, 
-                            0.0f,
-                            0.0f, 0.0f, launchSpeed,
-                            1.0f, 15.0f,  // 1.0f = NO DRAG. Ascent is dictated purely by gravity!
-                            1.0f, 0.0f,   // Doesn't decay while climbing
-                            CRGB::White, true
-                        };
-                        break;
-                    }
+                const int index = pool.firstFree();
+                if (index < pool.size()) {
+                    // With gravity 15, this speed reaches Z=10.8–16.1.
+                    const float launchSpeed = random16(180, 220) / 10.0f;
+                    pool[index] = {
+                        true, 1,
+                        {{random16(int(minX * 10), int(maxX * 10)) / 10.0f,
+                          random16(int(minY * 10), int(maxY * 10)) / 10.0f, 0.0f},
+                         {0.0f, 0.0f, launchSpeed}},
+                        1.0f, 15.0f,
+                        1.0f, 0.0f, // Shells keep their brightness until the apex.
+                        CRGB::White, true
+                    };
                 }
             }
 
             // 2. DETONATION CHECK
-            for (int i = 0; i < MAX_PARTICLES; i++) {
-                if (pool[i].active && pool[i].type == 1 && pool[i].vz <= 0.0f) {
+            for (int i = 0; i < pool.size(); i++) {
+                if (pool[i].active && pool[i].type == 1 && pool[i].motion.velocity.z <= 0.0f) {
                     pool[i].active = false; // Kill the shell
                     
                     CRGBPalette16 explosionPal = PaletteUtils::getRandomOrganicPalette();
@@ -447,42 +610,33 @@ class Streamers {
                     
                     int sparksToSpawn = (RNDR_X * RNDR_Y * RNDR_Z) / 29;
                     
-                    for (int j = 0; j < MAX_PARTICLES && sparksToSpawn > 0; j++) {
-                        if (!pool[j].active) {
-                            float theta = (random16(0, 6283) / 1000.0f); 
-                            float v = (random16(0, 2000) / 1000.0f) - 1.0f; 
-                            float phi = acos(v);
-                            
-                            // High initial burst
-                            float burstSpeed = random16(300, 500) / 10.0f; 
-                            CRGB sparkColor = isConfetti ? ColorFromPalette(explosionPal, random8(), 255, NOBLEND) : solidColor;
+                    const auto origin = pool[i].motion.position;
+                    for (int j = pool.firstFree(); j < pool.size() && sparksToSpawn > 0;
+                         j = pool.firstFree(j + 1)) {
+                        float theta = (random16(0, 6283) / 1000.0f);
+                        float v = (random16(0, 2000) / 1000.0f) - 1.0f;
+                        float phi = acos(v);
 
-                            pool[j] = {
-                                true, 0, // Type 0 = Spark
-                                pool[i].px, pool[i].py, pool[i].pz,
-                                burstSpeed * sin(phi) * cos(theta), burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi),
-                                0.75f, 12.0f, // MASSIVE drag (stops midair), low gravity (weeping willow fall)
-                                1.0f, (float)random16(8, 15) / 10.0f, // 0.8 to 1.5 decay rate (dies in < 1 second)
-                                sparkColor, false // No tails to keep the sphere crisp
-                            };
-                            sparksToSpawn--;
-                        }
+                        // High initial burst
+                        float burstSpeed = random16(300, 500) / 10.0f;
+                        CRGB sparkColor = isConfetti ? ColorFromPalette(explosionPal, random8(), 255, NOBLEND) : solidColor;
+
+                        pool[j] = {
+                            true, 0, // Type 0 = Spark
+                            {origin, {burstSpeed * sin(phi) * cos(theta),
+                                      burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi)}},
+                            0.75f, 12.0f, // MASSIVE drag (stops midair), low gravity (weeping willow fall)
+                            1.0f, (float)random16(8, 15) / 10.0f, // 0.8 to 1.5 decay rate (dies in < 1 second)
+                            sparkColor, false // No tails to keep the sphere crisp
+                        };
+                        sparksToSpawn--;
                     }
                 }
             }
 
-            // 3. RUN THE PHYSICS ENGINE
-            processKineticPhysics(pool, MAX_PARTICLES, dt);
-            
-            // 4. GRACEFUL EXIT CHECK
-            bool anyAlive = false;
-            for(int i = 0; i < MAX_PARTICLES; i++) {
-                if (pool[i].active) { anyAlive = true; break; }
-            }
+            drawKineticParticles(pool, dt);
+            if (timeIsUp && !pool.anyAlive()) keepRunning = false;
 
-            // If time is up AND the sky is completely clear of sparks, we exit
-            if (timeIsUp && !anyAlive) keepRunning = false;
-            
             showCube(); yield();
         }
     }
@@ -513,21 +667,7 @@ class Streamers {
         State state = SPIRAL_IN;
         uint32_t stateTimer = millis();
 
-        // The old dimension-only count requested 341 particles on a 16-cube
-        // (16,368 bytes), although this arena contains only 8,192 bytes.
-        // Bound the count by the REAL byte budget before even clearing active.
-        // Every spawn, physics and liveness loop below uses this same count.
-        constexpr int EMBER_CAPACITY =
-            SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
-        static_assert(EMBER_CAPACITY > 0, "No kinetic particle fits the arena");
-
-        const int requestedEmbers = (RNDR_X * RNDR_Y * RNDR_Z) / 12;
-        const int MAX_EMBERS = min(requestedEmbers, EMBER_CAPACITY);
-        KineticParticle* embers = reinterpret_cast<KineticParticle*>(SharedAppMemory);
-
-        for (int i = 0; i < MAX_EMBERS; i++) {
-            embers[i].active = false;
-        }
+        ParticleEngine::Pool embers((RNDR_X * RNDR_Y * RNDR_Z) / 12);
 
         float masterPhase = 0.0f;
         int currentCycle = 0;
@@ -557,7 +697,7 @@ class Streamers {
             else if (state == IMPLOSION_PAUSE) {
                 if (now - stateTimer > 120) {
                     state = KINETIC_BLAST; stateTimer = now;
-                    for(int i = 0; i < MAX_EMBERS; i++) {
+                    for(int i = 0; i < embers.size(); i++) {
                         float theta = (random16(0, 6283) / 1000.0f); 
                         float v = (random16(0, 2000) / 1000.0f) - 1.0f; 
                         float phi = acos(v);
@@ -569,8 +709,9 @@ class Streamers {
 
                         embers[i] = {
                             true, 0,
-                            RNDR_CX, RNDR_CY, targetZ, // Detonate at the elevated Z
-                            burstSpeed * sin(phi) * cos(theta), burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi),
+                            {{RNDR_CX, RNDR_CY, targetZ},
+                             {burstSpeed * sin(phi) * cos(theta),
+                              burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi)}},
                             0.82f, 25.0f, // Restored: Hard atmospheric braking and heavy gravity
                             1.0f, 0.2f,   // Restored: Authentic slow decay    
                             sparkColor, 
@@ -580,12 +721,8 @@ class Streamers {
                 }
             }
             else if (state == KINETIC_BLAST) {
-                processKineticPhysics(embers, MAX_EMBERS, dt);
-
-                bool anyAlive = false;
-                for(int i = 0; i < MAX_EMBERS; i++) if (embers[i].active) anyAlive = true;
-
-                if (!anyAlive || now - stateTimer > 4000) {
+                drawKineticParticles(embers, dt);
+                if (!embers.anyAlive() || now - stateTimer > 4000) {
                     currentCycle++;
                     if ((!TestDemo::playbackHeld() && targetCycles > 0 && currentCycle >= targetCycles) || (targetCycles <= 0 && (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)))) keepRunning = false;
                     if (keepRunning) {
@@ -608,11 +745,10 @@ class Streamers {
         const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
         const uint8_t uAxis = (axis + 1) % 3;
         const uint8_t vAxis = (axis + 2) % 3;
-        constexpr int capacity = SHARED_APP_MEMORY_BYTES / sizeof(KineticParticle);
-        auto *sparks = reinterpret_cast<KineticParticle*>(SharedAppMemory);
+        ParticleEngine::Pool sparks(((dims[uAxis] + 1) / 2) * ((dims[vAxis] + 1) / 2));
         int count = 0;
-        for (int v = 0; v < dims[vAxis] && count < capacity; v += 2) {
-            for (int u = 0; u < dims[uAxis] && count < capacity; u += 2) {
+        for (int v = 0; v < dims[vAxis] && count < sparks.size(); v += 2) {
+            for (int u = 0; u < dims[uAxis] && count < sparks.size(); u += 2) {
                 float position[3], velocity[3];
                 position[axis] = (dims[axis] - 1) * 0.5f;
                 position[uAxis] = u + random8(min(2, dims[uAxis] - u));
@@ -622,8 +758,9 @@ class Streamers {
                 velocity[uAxis] = (int(random8(161)) - 80) * 0.1f;
                 velocity[vAxis] = (int(random8(161)) - 80) * 0.1f;
                 sparks[count++] = {
-                    true, 0, position[0], position[1], position[2],
-                    velocity[0], velocity[1], velocity[2], 0.94f, 8.0f,
+                    true, 0,
+                    {{position[0], position[1], position[2]}, {velocity[0], velocity[1], velocity[2]}},
+                    0.94f, 8.0f,
                     1.0f, random8(85, 141) * 0.01f,
                     ColorFromPalette(PartyColors_p, random8(), 255, NOBLEND), true
                 };
@@ -637,12 +774,10 @@ class Streamers {
             const float dt = (now - lastFrame) * 0.001f;
             lastFrame = now;
             clearAll();
-            processKineticPhysics(sparks, count, dt);
-            bool anyAlive = false;
-            for (int i = 0; i < count; ++i) anyAlive |= sparks[i].active;
+            drawKineticParticles(sparks, dt);
             showCube();
             delay(stepMs);
-            if (!anyAlive) break;
+            if (!sparks.anyAlive()) break;
         }
     }
 

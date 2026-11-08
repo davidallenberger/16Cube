@@ -111,11 +111,12 @@ namespace {
         CONCEPT_SCENE_SOAP_TEXTURE = 59, CONCEPT_SCENE_WAVING_CELL = 60,
         CONCEPT_SCENE_POLAR_LIGHTS = 61, CONCEPT_SCENE_FRIZZLES = 62,
         CONCEPT_SCENE_FRIZZLES_MATRIX = 63, CONCEPT_SCENE_MATRIX_RAIN = 64,
-        CONCEPT_SCENE_NOISE_CLOUDS = 65, CONCEPT_SCENE_METEOR = 66
+        CONCEPT_SCENE_NOISE_CLOUDS = 65, CONCEPT_SCENE_METEOR = 66,
+        CONCEPT_SCENE_PS_IMPACT = 67
     };
 
     static const int NUM_SHAPES = 10;
-    static const int NUM_SCENES = 57;
+    static const int NUM_SCENES = 58;
     static const int TOTAL_CONCEPTS = NUM_SHAPES + NUM_SCENES;
 
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
@@ -155,7 +156,8 @@ namespace {
         /* Soap Texture */ { true, 1 }, /* Waving Cell 3D */ { true, 1 },
         /* Polar Lights */ { false, 1 }, /* Frizzles */ { true, 1 },
         /* Frizzles Matrix */ { true, 1 }, /* Matrix Rain 3D */ { true, 1 },
-        /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 }
+        /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
+        /* PS Impact */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -169,7 +171,7 @@ namespace {
         "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
         "Passing Planes", "Plane Split", "Plasma Ball", "Tartan",
         "Soap Texture", "Waving Cell 3D", "Polar Lights", "Frizzles", "Frizzles Matrix",
-        "Matrix Rain 3D", "Noise Clouds", "Meteor 3D"
+        "Matrix Rain 3D", "Noise Clouds", "Meteor 3D", "PS Impact"
     };
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
@@ -238,13 +240,14 @@ namespace {
                             (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                             (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                             (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_METEOR);
+                            (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_PS_IMPACT);
         }
 
         const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
         const char* displayColor = isSelfManaged ? "Self-Managed" : (sModeTracker == MODE_HIPHOTIC ? "N/A" : PaletteUtils::getPaletteNameBuffer());
         if (concept == CONCEPT_SCENE_MATRIX_RAIN) displayColor = "Matrix Green";
         if (concept == CONCEPT_SCENE_NOISE_CLOUDS || concept == CONCEPT_SCENE_METEOR) displayColor = "Rainbow";
+        if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
         char speedBuf[32] = "N/A";
 
         if (concept < NUM_SHAPES) {
@@ -379,6 +382,7 @@ namespace {
                 case CONCEPT_SCENE_MATRIX_RAIN:     Streamers::animateMatrixRain(durationMs); break;
                 case CONCEPT_SCENE_NOISE_CLOUDS:    Streamers::animateNoiseClouds(durationMs); break;
                 case CONCEPT_SCENE_METEOR:         Streamers::animateMeteor(durationMs); break;
+                case CONCEPT_SCENE_PS_IMPACT:      Streamers::animatePSImpact(durationMs); break;
                 case CONCEPT_SCENE_ATOMIC_ORBITS:    Streamers::animateAtomicOrbits(durationMs); break;
                 case CONCEPT_SCENE_JULIA:          Surfaces::animateJulia(durationMs, 40 * SCALE_MS); break;
                 case CONCEPT_SCENE_RAIN:           Streamers::animateRain(durationMs, random8(1, 4), SPEED_SCENE_RAIN, pal, sModeTracker); break;
@@ -749,7 +753,7 @@ namespace TestDemo {
                                  (concept == CONCEPT_SCENE_FLYING_BOX) || (concept == CONCEPT_SCENE_MOVING_BOXES) ||
                                  (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
                                  (concept == CONCEPT_SCENE_DRIFT3D) || (concept == CONCEPT_SCENE_BLACKHOLE) ||
-                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_METEOR);
+                                 (concept >= CONCEPT_SCENE_TEXT_FYB && concept <= CONCEPT_SCENE_PS_IMPACT);
 
             if (isSelfManaged) { sModeTracker = MODE_SOLID; pal = PartyColors_p; } 
             else {
