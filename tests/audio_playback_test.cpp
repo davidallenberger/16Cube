@@ -8,8 +8,10 @@
 #include <string>
 #include <limits>
 
-// The host playback fixture isolates audio effects from the shape renderer.
+// The host playback fixture isolates the effects it exercises from the shape and particle renderers.
 void Audio::animateCylinder() {}
+void Audio::animateParticleGeq() {}
+void Audio::animateParticleGeqNova() {}
 
 SerialStub Serial;
 SerialStub Serial2;

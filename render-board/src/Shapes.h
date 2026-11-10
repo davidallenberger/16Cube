@@ -3,6 +3,9 @@
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "GeometryEngine.h"
+#include "ParticleEngine.h"
+
+#include <type_traits>
 
 typedef void (*DrawShapeFunc)(float cx, float cy, float cz, float radius, RenderMode mode, const TextureState &tex, float rotX, float rotY, float rotZ, bool eraseBackground, float aspectZ);
 
@@ -440,127 +443,147 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
     }
     
 public:
-    struct BouncingBall {
-        float px, py, pz;
-        float vx, vy, vz;
-        float rotX, rotY, rotZ;
-    };
+    static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
+        using namespace ParticleEngine;
+        constexpr float systemEnergy = 1.35f;
+        constexpr float maxRadius = 2.5f;
+        constexpr float minRadius = maxRadius * 0.5f;
+        constexpr float maxBallVolume = maxRadius * maxRadius * maxRadius;
+        constexpr float minBallVolume = minRadius * minRadius * minRadius;
+        constexpr int originalCount = RNDR_X > 8 ? 3 : 1;
+        constexpr int maxBalls = originalCount + 2;
+        const int count = random8(max(2, originalCount), maxBalls + 1);
+        // The common 4π/3 factor cancels, so budget and mass use radius cubed.
+        float remainingVolume = originalCount * maxBallVolume * (random16(820, 1001) / 1000.0f);
+        struct Ball {
+            Motion motion;
+            float radius;
+            float inverseMass;
+            float rotX, rotY;
+            TextureState texture;
+            RenderMode mode;
+        };
+        static_assert(ParticlePool<Ball>::capacity >= maxBalls, "Bouncing balls must fit the shared arena");
+        static_assert(std::is_trivially_destructible<Ball>::value, "Arena ball state must not require teardown");
+        // Each texture contains voxel caches. Keep them out of the loop stack so
+        // showCube() has room to handle a button press and unwind the scene.
+        ParticlePool<Ball> balls(count);
+        const int solidCount = random8(1, count);
+        const uint8_t solidHue = random8();
+        const auto sample = [](float low, float high) {
+            return low + (high - low) * (random16() / 65536.0f);
+        };
 
-static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
-        uint32_t startTime = millis();
-        uint32_t lastFrameTime = millis();
-        
-        const float SYSTEM_ENERGY = 1.35f; 
-        
-        // 1. THE LINEAR ADAPTATION
-        // Calculate the ratio based on your 15-second baseline
-        float durationRatio = (float)durationMs / 15000.0f;
-        
-        // If 15s (Ratio 1.0), multiplier is exactly 1.0f (Current behavior)
-        // If 30s (Ratio 2.0), multiplier is 1.015f (Adds 1.5% energy per bounce)
-        // Calculated exactly once at setup. Zero CPU cost.
-        float bounceMultiplier = 1.0f + (0.015f * (durationRatio - 1.0f));
-        
-        // Hardcode a 5-voxel diameter (2.5 radius) for both architectures
-        float radius = 2.5f; 
-        
-        const int MAX_BALLS = 3;
-        // 3 Balls for the 16x16x16 Desktop, 1 Ball for the 8x8x16 Burn Cube
-        int numBalls = (RNDR_X > 8) ? 3 : 1;
+        for (int i = 0; i < count; ++i) {
+            const int remainingBalls = count - i - 1;
+            const float minVolume = max(minBallVolume, remainingVolume - remainingBalls * maxBallVolume);
+            const float maxVolume = min(maxBallVolume, remainingVolume - remainingBalls * minBallVolume);
+            const float volume = sample(minVolume, maxVolume);
+            remainingVolume -= volume;
 
-        BouncingBall balls[MAX_BALLS];
-        TextureState tex[MAX_BALLS]; 
-        RenderMode rMode[MAX_BALLS];
-
-        // Safe bounds calculation (On an 8x8 matrix with a 5-wide ball, this leaves exactly 2 voxels of scatter room)
-        float safeX = (RNDR_X - 1.0f) - (radius * 2.0f);
-        float safeY = (RNDR_Y - 1.0f) - (radius * 2.0f);
-
-        for (int i = 0; i < numBalls; i++) {
-            // Spawn Physics: Safely scattered X/Y
-            balls[i].px = radius + ((random8() / 255.0f) * safeX);
-            balls[i].py = radius + ((random8() / 255.0f) * safeY);
-            
-            // All drop simultaneously from the ceiling
-            balls[i].pz = (RNDR_Z - 1.0f) - radius; 
-            
-            balls[i].vx = (random16(20, 50) / 10.0f) * ((random8(2) == 0) ? 1.0f : -1.0f) * SYSTEM_ENERGY;
-            balls[i].vy = (random16(20, 50) / 10.0f) * ((random8(2) == 0) ? 1.0f : -1.0f) * SYSTEM_ENERGY;
-            balls[i].vz = 0.0f;
-            balls[i].rotX = 0.0f; balls[i].rotY = 0.0f; balls[i].rotZ = 0.0f;
-
-            // Autonomous Texture Assignment
-            TexturePlan plan = PaletteUtils::getRandomTexturePlan();
-            tex[i] = TextureState(plan.sMode, plan.palette, 1.66f);
-            
-            if (plan.sMode != MODE_SOLID) {
-                tex[i].internalPhase = i * 128.0f;
-                tex[i].phase = (uint32_t)tex[i].internalPhase;
+            auto& ball = balls[i];
+            const float r = ball.radius = constrain(cbrtf(volume), minRadius, maxRadius);
+            ball.inverseMass = 1.0f / (r * r * r);
+            // Start near the ceiling. If the top is crowded, try lower positions.
+            for (int attempt = 0; attempt < 32; ++attempt) {
+                ball.motion.position = {sample(r, RNDR_X - 1.0f - r), sample(r, RNDR_Y - 1.0f - r),
+                    attempt < 12 ? RNDR_Z - 1.0f - r : sample(r, RNDR_Z - 1.0f - r)};
+                const auto& p = ball.motion.position;
+                bool overlaps = false;
+                for (int j = 0; j < i; ++j) {
+                    const auto& other = balls[j].motion.position;
+                    const float dx = p.x - other.x, dy = p.y - other.y, dz = p.z - other.z;
+                    const float contact = r + balls[j].radius;
+                    if (dx*dx + dy*dy + dz*dz < contact * contact) {
+                        overlaps = true;
+                        break;
+                    }
+                }
+                if (!overlaps) break;
             }
+            ball.motion.velocity = {
+                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * systemEnergy,
+                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * systemEnergy,
+                0.0f
+            };
 
-            // 70% Solid, 30% Shell for visual variety
-            rMode[i] = (random8(100) < 30) ? RENDER_SHELL : RENDER_SOLID;
+            if (i < solidCount) {
+                const uint8_t hue = solidHue + (256 * i / solidCount);
+                ball.texture = TextureState(MODE_SOLID, CRGBPalette16(CHSV(hue, 255, 255)), 1.66f);
+            } else {
+                const TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan();
+                ball.texture = TextureState(plan.sMode, plan.palette, 1.66f);
+                ball.texture.internalPhase = i * 128.0f;
+                ball.texture.phase = uint32_t(ball.texture.internalPhase);
+            }
+            ball.mode = random8(100) < 30 ? RENDER_SHELL : RENDER_SOLID;
         }
-        
-        const float gravity = 38.0f * SYSTEM_ENERGY;     
-        const float maxLateralSpeed = 8.0f * SYSTEM_ENERGY;
 
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            uint32_t deltaMs = now - lastFrameTime;
-            if (deltaMs == 0) { yield(); continue; } 
-            lastFrameTime = now;
-            
-            float dt = deltaMs / 1000.0f;
-            if (dt > 0.05f) dt = 0.05f; // Cap dt to prevent tunneling
+        const float bounceMultiplier = 1.0f + 0.015f * (durationMs / 15000.0f - 1.0f);
+        constexpr float gravity = 38.0f * systemEnergy;
+        constexpr float maxLateralSpeed = 8.0f * systemEnergy;
+        // Keep a low-energy ball bouncing after repeated caroms.
+        const float minimumRebound = sqrtf(2.0f * gravity * (RNDR_Z - 1) * 0.20f);
+        const uint32_t start = millis();
+        uint32_t lastFrame = start;
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
+            const uint32_t now = millis();
+            const uint32_t deltaMs = now - lastFrame;
+            if (deltaMs == 0) { yield(); continue; }
+            lastFrame = now;
+
+            const float dt = min(0.05f, deltaMs / 1000.0f);
+            const int substeps = int(ceilf(dt / 0.0125f));
+            const float step = dt / substeps;
+            for (int tick = 0; tick < substeps; ++tick) {
+                for (int i = 0; i < count; ++i) {
+                    auto& motion = balls[i].motion;
+                    motion.velocity.z -= gravity * step;
+                    advance(motion, step, {}, 1.0f);
+                }
+                for (int i = 0; i < count; ++i) {
+                    for (int j = i + 1; j < count; ++j) {
+                        auto& a = balls[i];
+                        auto& b = balls[j];
+                        resolveSphereContact(a.motion, b.motion, a.radius + b.radius, 0.97f,
+                                             false, a.inverseMass, b.inverseMass);
+                    }
+                }
+                for (int i = 0; i < count; ++i) {
+                    auto& ball = balls[i];
+                    auto& p = ball.motion.position;
+                    auto& v = ball.motion.velocity;
+                    const float r = ball.radius;
+                    resolveSide(p.x, v.x, RNDR_X, Side::Bounce, 1.0f, r);
+                    resolveSide(p.y, v.y, RNDR_Y, Side::Bounce, 1.0f, r);
+                    if (p.z < r) {
+                        p.z = r;
+                        if (v.z < 0.0f) {
+                            v.z = max(minimumRebound, -v.z * bounceMultiplier);
+                            v.x = constrain(v.x + ((random8(15) / 10.0f) - 0.7f) * systemEnergy,
+                                            -maxLateralSpeed, maxLateralSpeed);
+                            v.y = constrain(v.y + ((random8(15) / 10.0f) - 0.7f) * systemEnergy,
+                                            -maxLateralSpeed, maxLateralSpeed);
+                        }
+                    } else if (p.z > RNDR_Z - 1.0f - r) {
+                        p.z = RNDR_Z - 1.0f - r;
+                        if (v.z > 0.0f) v.z *= -bounceMultiplier;
+                    }
+                }
+            }
 
             clearAll();
-
-            for (int i = 0; i < numBalls; i++) {
-                // Kinematics
-                balls[i].vz -= gravity * dt; 
-                balls[i].px += balls[i].vx * dt;
-                balls[i].py += balls[i].vy * dt;
-                balls[i].pz += balls[i].vz * dt;
-
-                // Wall & Floor Collisions
-                float maxZ = (RNDR_Z - 1) - radius;
-                if (balls[i].px < radius) { balls[i].px = radius; balls[i].vx = -balls[i].vx; }
-                else if (balls[i].px > RNDR_X - 1 - radius) { balls[i].px = RNDR_X - 1 - radius; balls[i].vx = -balls[i].vx; }
-
-                if (balls[i].py < radius) { balls[i].py = radius; balls[i].vy = -balls[i].vy; }
-                else if (balls[i].py > RNDR_Y - 1 - radius) { balls[i].py = RNDR_Y - 1 - radius; balls[i].vy = -balls[i].vy; }
-
-                if (balls[i].pz < radius) {
-                    balls[i].pz = radius; 
-                    
-                    // 2. APPLY THE LINEAR MULTIPLIER
-                    balls[i].vz = -balls[i].vz * bounceMultiplier; 
-                    
-                    balls[i].vx += ((random8(15) / 10.0f) - 0.7f) * SYSTEM_ENERGY; 
-                    balls[i].vy += ((random8(15) / 10.0f) - 0.7f) * SYSTEM_ENERGY;
-                    
-                    if (balls[i].vx > maxLateralSpeed) balls[i].vx = maxLateralSpeed;
-                    if (balls[i].vx < -maxLateralSpeed) balls[i].vx = -maxLateralSpeed;
-                    if (balls[i].vy > maxLateralSpeed) balls[i].vy = maxLateralSpeed;
-                    if (balls[i].vy < -maxLateralSpeed) balls[i].vy = -maxLateralSpeed;
-                } else if (balls[i].pz > maxZ) {
-                    balls[i].pz = maxZ; 
-                    
-                    // Ceiling collisions also benefit from the adaptation to prevent trapping
-                    balls[i].vz = -balls[i].vz * bounceMultiplier; 
-                }
-
-                // Visual Rotation
-                balls[i].rotX += balls[i].vy * 45.0f * dt;
-                balls[i].rotY += balls[i].vx * 45.0f * dt;
-
-                // Render: EraseBackground = false, AspectZ = 1.0f
-                GeometryEngine::drawSphere(balls[i].px, balls[i].py, balls[i].pz, radius, rMode[i], tex[i], balls[i].rotX, balls[i].rotY, balls[i].rotZ, false);
+            for (int i = 0; i < count; ++i) {
+                auto& ball = balls[i];
+                const auto& p = ball.motion.position;
+                const auto& v = ball.motion.velocity;
+                ball.rotX += v.y * 45.0f * dt;
+                ball.rotY += v.x * 45.0f * dt;
+                GeometryEngine::drawSphere(p.x, p.y, p.z, ball.radius, ball.mode, ball.texture,
+                                           ball.rotX, ball.rotY, 0.0f, false);
             }
-            
             showCube();
-            for (int i = 0; i < numBalls; i++) tex[i].advance(deltaMs);
+            for (int i = 0; i < count; ++i) balls[i].texture.advance(deltaMs);
             if (speedMs > 0) delay(speedMs); else yield();
         }
     }

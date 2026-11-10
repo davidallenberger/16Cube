@@ -13,7 +13,7 @@ namespace ParticleEngine {
         Point3 velocity;
     };
 
-    enum ParticleFlag : uint8_t { KineticTail = 1, HitFloor = 2 };
+    enum ParticleFlag : uint8_t { KineticTail = 1, HitFloor = 2, WaterfallBackRow = 4 };
 
     struct Particle {
         bool active;
@@ -92,14 +92,16 @@ namespace ParticleEngine {
     enum class Side { Open, Bounce, Wrap };
 
     inline bool resolveSide(float& position, float& speed, int extent,
-                            Side side, float restitution) {
+                            Side side, float restitution, float inset = 0.0f) {
         const float last = extent - 1.0f;
         if (side == Side::Bounce) {
-            if (position < 0.0f || position > last) {
+            const float low = min(inset, last * 0.5f);
+            const float high = last - low;
+            if (position < low || position > high) {
                 // Contact separation can put a particle outside a wall
                 // even when its velocity already points back into the box.
-                if (position < 0.0f ? speed < 0.0f : speed > 0.0f) speed = -speed * restitution;
-                position = constrain(position, 0.0f, last);
+                if (position < low ? speed < 0.0f : speed > 0.0f) speed = -speed * restitution;
+                position = constrain(position, low, high);
             }
             return true;
         }
@@ -112,11 +114,11 @@ namespace ParticleEngine {
         return position > -1.0f && position < extent;
     }
 
-    inline void bounceFloor(Motion& motion, float restitution, float roughness) {
+    inline void bounceFloor(Motion& motion, float restitution, float roughness, float height = 0.0f) {
         auto& p = motion.position;
         auto& v = motion.velocity;
-        if (p.z > 0.0f) return;
-        p.z = 0.0f;
+        if (p.z > height) return;
+        p.z = height;
         if (v.z >= 0.0f) return;
         v.z *= -restitution;
         if (v.z < 1.0f) {
@@ -131,11 +133,45 @@ namespace ParticleEngine {
         v.z *= 1.0f - roughness;
     }
 
-    // Broad phase for small spheres. Four-voxel cells cover the maximum
-    // supported contact diameter. Contacts use equal mass and one impulse.
-    template <typename Item, typename Radius>
+    inline void resolveSphereContact(Motion& a, Motion& b, float contact, float restitution,
+                                     bool wrapX = false, float inverseMassA = 1.0f, float inverseMassB = 1.0f) {
+        Point3 d{b.position.x - a.position.x, b.position.y - a.position.y, b.position.z - a.position.z};
+        if (wrapX && fabsf(d.x) > RNDR_X * 0.5f) d.x += d.x > 0 ? -RNDR_X : RNDR_X;
+        const float distanceSq = d.x*d.x + d.y*d.y + d.z*d.z;
+        if (distanceSq >= contact * contact) return;
+
+        const float distance = sqrtf(distanceSq);
+        const Point3 n = distance > 0.0001f ? Point3{d.x / distance, d.y / distance, d.z / distance}
+                                            : Point3{1.0f, 0.0f, 0.0f};
+        const float shareA = inverseMassA / (inverseMassA + inverseMassB);
+        const float shareB = 1.0f - shareA;
+        const float correction = 0.8f * (contact - distance);
+        const float moveA = correction * shareA, moveB = correction * shareB;
+        a.position.x -= n.x * moveA;
+        a.position.y -= n.y * moveA;
+        a.position.z -= n.z * moveA;
+        b.position.x += n.x * moveB;
+        b.position.y += n.y * moveB;
+        b.position.z += n.z * moveB;
+
+        const float closing = (a.velocity.x - b.velocity.x) * n.x +
+                              (a.velocity.y - b.velocity.y) * n.y +
+                              (a.velocity.z - b.velocity.z) * n.z;
+        if (closing <= 0.0f) return;
+        const float impulse = (1.0f + restitution) * closing;
+        const float kickA = impulse * shareA, kickB = impulse * shareB;
+        a.velocity.x -= kickA * n.x;
+        a.velocity.y -= kickA * n.y;
+        a.velocity.z -= kickA * n.z;
+        b.velocity.x += kickB * n.x;
+        b.velocity.y += kickB * n.y;
+        b.velocity.z += kickB * n.z;
+    }
+
+    // Choose cells at least as wide as the largest contact diameter.
+    // Grid callers use equal mass and one impulse per contact.
+    template <int cellSize = 4, typename Item, typename Radius>
     inline void collide(ParticlePool<Item>& pool, float restitution, bool wrapX, Radius radius) {
-        constexpr int cellSize = 4;
         constexpr int nx = (RNDR_X + cellSize - 1) / cellSize;
         constexpr int ny = (RNDR_Y + cellSize - 1) / cellSize;
         constexpr int nz = (RNDR_Z + cellSize - 1) / cellSize;
@@ -166,37 +202,8 @@ namespace ParticleEngine {
                     for (int x = firstX; x <= lastX; ++x) {
                         for (int j = heads[cellIndex((x + nx) % nx, y, z)]; j >= 0; j = next[j]) {
                             if (j <= i) continue;
-                            auto& b = pool[j].motion;
-                            Point3 d{b.position.x - a.position.x, b.position.y - a.position.y,
-                                     b.position.z - a.position.z};
-                            if (wrapX && fabsf(d.x) > RNDR_X * 0.5f) {
-                                d.x += d.x > 0 ? -RNDR_X : RNDR_X;
-                            }
-                            const float distanceSq = d.x*d.x + d.y*d.y + d.z*d.z;
-                            const float contact = radius(pool[i]) + radius(pool[j]);
-                            if (distanceSq >= contact * contact) continue;
-                            const float distance = sqrtf(distanceSq);
-                            const Point3 n = distance > 0.0001f ?
-                                Point3{d.x / distance, d.y / distance, d.z / distance} :
-                                Point3{1.0f, 0.0f, 0.0f};
-                            const float correction = 0.4f * (contact - distance);
-                            a.position.x -= n.x * correction;
-                            a.position.y -= n.y * correction;
-                            a.position.z -= n.z * correction;
-                            b.position.x += n.x * correction;
-                            b.position.y += n.y * correction;
-                            b.position.z += n.z * correction;
-                            const float closing = (a.velocity.x - b.velocity.x) * n.x +
-                                                  (a.velocity.y - b.velocity.y) * n.y +
-                                                  (a.velocity.z - b.velocity.z) * n.z;
-                            if (closing <= 0.0f) continue;
-                            const float impulse = 0.5f * (1.0f + restitution) * closing;
-                            a.velocity.x -= impulse * n.x;
-                            a.velocity.y -= impulse * n.y;
-                            a.velocity.z -= impulse * n.z;
-                            b.velocity.x += impulse * n.x;
-                            b.velocity.y += impulse * n.y;
-                            b.velocity.z += impulse * n.z;
+                            resolveSphereContact(a, pool[j].motion, radius(pool[i]) + radius(pool[j]),
+                                                 restitution, wrapX);
                         }
                     }
                 }

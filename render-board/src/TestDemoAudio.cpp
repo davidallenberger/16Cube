@@ -107,6 +107,8 @@ namespace {
         {false, "Cylinder Attacks", &Audio::animateCylinder},
         {true, "Plasmoid Depth Mirror", &Audio::animatePlasmoidMirrored},
         {true, "Plasmoid Single Strip", &Audio::animatePlasmoid},
+        {true, "PS GEQ Nova", &Audio::animateParticleGeqNova},
+        {true, "PS GEQ 2D", &Audio::animateParticleGeq},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

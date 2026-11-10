@@ -562,12 +562,17 @@ class Streamers {
     // ==========================================
     static void animateFireworks(uint32_t durationMs) {
         uint32_t startTime = millis(), lastFrame = millis();
+        enum ParticleType : uint8_t { Spark, ClassicShell, LooseShell, LayeredShell };
+        constexpr int volume = RNDR_X * RNDR_Y * RNDR_Z;
+        constexpr float volumeScale = volume / 4096.0f;
+        const float burstScale = (42.0f / 64.0f) * cbrtf(volumeScale);
+        constexpr float launchScale = RNDR_Z / 16.0f;
         
         // Define the Safe Launch Zone (prevents clipping glass walls)
         float minX = RNDR_X * 0.25f, maxX = RNDR_X * 0.75f;
         float minY = RNDR_Y * 0.25f, maxY = RNDR_Y * 0.75f;
 
-        ParticleEngine::Pool pool(min((RNDR_X * RNDR_Y * RNDR_Z) / 7, 170));
+        ParticleEngine::Pool pool(min(volume / 7, 170));
 
         bool keepRunning = true;
 
@@ -585,14 +590,16 @@ class Streamers {
             if (!timeIsUp && random8(100) < 2) { 
                 const int index = pool.firstFree();
                 if (index < pool.size()) {
-                    // With gravity 15, this speed reaches Z=10.8–16.1.
-                    const float launchSpeed = random16(180, 220) / 10.0f;
+                    const uint8_t shell = random8(ClassicShell, LayeredShell + 1);
+                    // The slower shells burst nearer the middle, leaving room for tilted layers.
+                    const float launchSpeed = (shell == ClassicShell ? random16(180, 220) : random16(140, 174))
+                                              * (launchScale / 10.0f);
                     pool[index] = {
-                        true, 1,
+                        true, shell,
                         {{random16(int(minX * 10), int(maxX * 10)) / 10.0f,
                           random16(int(minY * 10), int(maxY * 10)) / 10.0f, 0.0f},
                          {0.0f, 0.0f, launchSpeed}},
-                        1.0f, 15.0f,
+                        1.0f, 15.0f * launchScale,
                         1.0f, 0.0f, // Shells keep their brightness until the apex.
                         CRGB::White, true
                     };
@@ -601,32 +608,62 @@ class Streamers {
 
             // 2. DETONATION CHECK
             for (int i = 0; i < pool.size(); i++) {
-                if (pool[i].active && pool[i].type == 1 && pool[i].motion.velocity.z <= 0.0f) {
-                    pool[i].active = false; // Kill the shell
-                    
-                    CRGBPalette16 explosionPal = PaletteUtils::getRandomOrganicPalette();
-                    bool isConfetti = random8(2) == 0;
-                    CRGB solidColor = PaletteUtils::getRandomVibrantColor();
-                    
-                    int sparksToSpawn = (RNDR_X * RNDR_Y * RNDR_Z) / 29;
-                    
+                if (pool[i].active && pool[i].type != Spark && pool[i].motion.velocity.z <= 0.0f) {
+                    const uint8_t shell = pool[i].type;
                     const auto origin = pool[i].motion.position;
+                    pool[i].active = false; // Kill the shell
+
+                    if (shell == LayeredShell) {
+                        const int rings = random8(2, 4);
+                        int freeSlots = 0;
+                        for (int j = 0; j < pool.size(); ++j) freeSlots += !pool[j].active;
+                        const int perRing = min(max(4, int(lroundf(26 * volumeScale))), freeSlots / rings);
+                        const float yaw = random16() * (TWO_PI / 65536.0f);
+                        const float tilt = random16(350, 1200) / 1000.0f;
+                        const float cy = cosf(yaw), sy = sinf(yaw), ct = cosf(tilt), st = sinf(tilt);
+                        const float phase = random16() * (TWO_PI / 65536.0f);
+                        const int lobes = random8(2, 7);
+                        const uint8_t hue = random8(), hueStep = random8(24, 128);
+                        int slot = 0;
+                        for (int ring = 0; ring < rings; ++ring) {
+                            const auto color = ColorFromPalette(RainbowColors_p, uint8_t(hue + ring * hueStep));
+                            for (int spark = 0; spark < perRing; ++spark) {
+                                const float angle = phase + spark * (TWO_PI / perRing);
+                                const float speed = (5.4f + 3.0f * ring) * burstScale *
+                                                    (1.0f + 0.16f * sinf(angle * lobes));
+                                const float u = cosf(angle) * speed, v = sinf(angle) * speed;
+                                slot = pool.firstFree(slot);
+                                pool[slot++] = {true, Spark, {origin, {cy * u - sy * ct * v, sy * u + cy * ct * v, st * v}},
+                                                1.0f, 4.0f * launchScale, 1.0f, 0.68f, color, 0};
+                            }
+                        }
+                        continue;
+                    }
+
+                    const bool classic = shell == ClassicShell;
+                    const CRGBPalette16 explosionPal = classic ? PaletteUtils::getRandomOrganicPalette() : CRGBPalette16(RainbowColors_p);
+                    const bool isConfetti = classic && random8(2) == 0;
+                    const CRGB solidColor = classic ? PaletteUtils::getRandomVibrantColor() : CRGB::Black;
+                    const uint8_t hue = classic ? 0 : random8();
+                    int sparksToSpawn = classic ? volume / 29 : max(1, int(lroundf(random8(17, 29) * volumeScale)));
                     for (int j = pool.firstFree(); j < pool.size() && sparksToSpawn > 0;
                          j = pool.firstFree(j + 1)) {
                         float theta = (random16(0, 6283) / 1000.0f);
                         float v = (random16(0, 2000) / 1000.0f) - 1.0f;
                         float phi = acos(v);
 
-                        // High initial burst
-                        float burstSpeed = random16(300, 500) / 10.0f;
-                        CRGB sparkColor = isConfetti ? ColorFromPalette(explosionPal, random8(), 255, NOBLEND) : solidColor;
+                        const float burstSpeed = classic ? random16(300, 500) / 10.0f
+                                                         : random16(360, 1000) * (burstScale / 100.0f);
+                        const CRGB sparkColor = classic
+                            ? (isConfetti ? ColorFromPalette(explosionPal, random8(), 255, NOBLEND) : solidColor)
+                            : ColorFromPalette(explosionPal, uint8_t(hue + int(random8(65)) - 32));
 
                         pool[j] = {
-                            true, 0, // Type 0 = Spark
+                            true, Spark,
                             {origin, {burstSpeed * sin(phi) * cos(theta),
                                       burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi)}},
-                            0.75f, 12.0f, // MASSIVE drag (stops midair), low gravity (weeping willow fall)
-                            1.0f, (float)random16(8, 15) / 10.0f, // 0.8 to 1.5 decay rate (dies in < 1 second)
+                            classic ? 0.75f : 1.0f, (classic ? 12.0f : 4.0f) * launchScale,
+                            1.0f, classic ? random16(8, 15) / 10.0f : random16(55, 90) / 100.0f,
                             sparkColor, false // No tails to keep the sphere crisp
                         };
                         sparksToSpawn--;

@@ -83,6 +83,8 @@ class Audio {
     static void animatePlasmoid();
     static void animatePlasmoidMirrored();
     static void animateSurroundGEQ();
+    static void animateParticleGeq();
+    static void animateParticleGeqNova();
     static void animateCornerBurst();
     static void animateCornerBurstSphere();
     static void animateCornerBurstBox();
