@@ -113,14 +113,15 @@ namespace {
         // Descending playback auditions particle effects and their counterparts together.
         CONCEPT_SCENE_PLANE_SPLIT,
         CONCEPT_SCENE_PS_IMPACT, CONCEPT_SCENE_PS_VOLCANO,
-        CONCEPT_SCENE_PS_GHOST_RIDER, CONCEPT_SCENE_PS_WATERFALL,
+        CONCEPT_SCENE_PS_GHOST_RIDER,
         CONCEPT_SCENE_PS_BOX,
         CONCEPT_SCENE_BOUNCING_BALL,
         CONCEPT_SCENE_ATOM_SMASHER, CONCEPT_SCENE_FIREWORKS,
         CONCEPT_SCENE_LAVA_LAMP,
         CONCEPT_SCENE_PS_SPRAY,
         CONCEPT_SCENE_MATRIX_RAIN,
-        CONCEPT_SCENE_PS_GALAXY, CONCEPT_SCENE_PS_ATTRACTOR,
+        CONCEPT_SCENE_PS_ATTRACTOR, CONCEPT_SCENE_PS_WATERFALL_FACES,
+        CONCEPT_SCENE_PS_WATERFALL, CONCEPT_SCENE_PS_GALAXY,
         CONCEPT_COUNT
     };
 
@@ -167,13 +168,14 @@ namespace {
         /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
         /* Plane Split */ { true, 1 }, /* PS Impact */ { true, 1 },
         /* PS Volcano */ { true, 1 }, /* PS Ghost Rider */ { true, 1 },
-        /* PS Waterfall */ { true, 1 }, /* PS Box */ { true, 1 },
+        /* PS Box */ { true, 1 },
         /* Bouncing Ball */ { true, 1 },
         /* Atom Smasher */ { true, 1 }, /* Fireworks */ { true, 1 },
         /* Lava Lamp */ { true, 2 },
         /* PS Spray */ { true, 1 },
         /* Matrix Rain 3D */ { true, 1 },
-        /* PS Galaxy */ { true, 1 }, /* PS Attractor */ { true, 1 }
+        /* PS Attractor */ { true, 1 }, /* PS Waterfall Four Faces */ { true, 1 },
+        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 }, /* PS Galaxy */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -189,13 +191,13 @@ namespace {
         "Soap Texture", "Waving Cell 3D", "Polar Lights", "Frizzles", "Frizzles Matrix",
         "Noise Clouds", "Meteor 3D",
         "Plane Split", "PS Impact",
-        "PS Volcano", "PS Ghost Rider", "PS Waterfall", "PS Box",
+        "PS Volcano", "PS Ghost Rider", "PS Box",
         "Bouncing Ball",
         "Atom Smasher", "Fireworks",
         "Lava Lamp",
         "PS Spray",
         "Matrix Rain 3D",
-        "PS Galaxy", "PS Attractor"
+        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall", "PS Galaxy"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -281,9 +283,9 @@ namespace {
         if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
         if (concept == CONCEPT_SCENE_PS_VOLCANO) displayColor = "Fire by age";
         if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
-        if (concept == CONCEPT_SCENE_PS_WATERFALL) displayColor = "Ocean";
+        if (concept == CONCEPT_SCENE_PS_WATERFALL || concept == CONCEPT_SCENE_PS_WATERFALL_FACES) displayColor = "Ocean";
         if (concept == CONCEPT_SCENE_PS_GHOST_RIDER) displayColor = "Cycling Rainbow";
-        if (concept == CONCEPT_SCENE_PS_GALAXY) displayColor = "Fairy Reaf";
+        if (concept == CONCEPT_SCENE_PS_GALAXY) displayColor = "Cycling Rainbow";
         if (concept == CONCEPT_SCENE_PS_SPRAY) displayColor = "Party";
         if (concept == CONCEPT_SCENE_PS_ATTRACTOR) displayColor = "Sweeping rainbow";
         if (concept == CONCEPT_SCENE_BOUNCING_BALL) displayColor = "Random solids and textures";
@@ -425,8 +427,19 @@ namespace {
                 case CONCEPT_SCENE_PS_VOLCANO:     ParticleEffects::animateVolcano(durationMs); break;
                 case CONCEPT_SCENE_PS_BOX:         ParticleEffects::animateBox(durationMs); break;
                 case CONCEPT_SCENE_PS_WATERFALL:   ParticleEffects::animateWaterfall(durationMs); break;
+                case CONCEPT_SCENE_PS_WATERFALL_FACES: {
+                    ParticleEffects::WaterfallSettings settings;
+                    settings.fourFaces = true;
+                    ParticleEffects::animateWaterfall(durationMs, settings);
+                    break;
+                }
                 case CONCEPT_SCENE_PS_GHOST_RIDER: ParticleEffects::animateGhostRider(durationMs); break;
-                case CONCEPT_SCENE_PS_GALAXY:      ParticleEffects::animateGalaxy(durationMs); break;
+                case CONCEPT_SCENE_PS_GALAXY: {
+                    ParticleEffects::GalaxySettings settings;
+                    settings.arms = random8(2, 4); // Choose two or three once per card visit.
+                    ParticleEffects::animateGalaxy(durationMs, settings);
+                    break;
+                }
                 case CONCEPT_SCENE_PS_SPRAY: {
                     ParticleEffects::SpraySettings settings;
                     // Leave room at the walls and floor for the spray to develop.
@@ -438,8 +451,6 @@ namespace {
                 }
                 case CONCEPT_SCENE_PS_ATTRACTOR: {
                     ParticleEffects::AttractorSettings settings;
-                    settings.mass = 60;
-                    settings.particles = 120; // Longer lifetimes need room for more live sparks.
                     settings.ageColor = true;
                     ParticleEffects::animateAttractor(durationMs, settings, RainbowColors_p);
                     break;

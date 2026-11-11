@@ -40,6 +40,10 @@ namespace ParticleEffects {
         uint8_t position = 16; // Left to right, 0–31.
         float spanFraction = 1.0f / 3.0f; // Fraction of the ceiling diagonal.
         float bulgeVoxels = 1.5f; // Peak outward offset per row on the 16³ cube.
+        bool fourFaces = false; // Render one simulation around all four side faces.
+        float faceRecessFraction = 0.20f; // Three voxels behind a face on 16³.
+        float faceWidthScale = 0.85f;
+        float faceDepthScale = 0.65f;
         bool cylinder = false;
         bool walls = false;
         bool ground = true;
@@ -56,9 +60,10 @@ namespace ParticleEffects {
     };
 
     struct AttractorSettings {
-        uint8_t mass = 100, particles = 82, size = 2, collide = 0, friction = 16;
+        uint8_t mass = 100, particles = 195, size = 2, collide = 0, friction = 16;
         bool ageColor = false, move = false, swallow = false;
-        float orbitRadius = 0.94f; // Fraction of the shortest distance from center to a face.
+        float nozzleExclusionRadius = 7.0f; // Voxels from the cube center.
+        bool tangentAim = false; // Keep initial shots from entering the exclusion sphere.
     };
 
     struct SpraySettings {
@@ -78,7 +83,11 @@ namespace ParticleEffects {
 
     struct GalaxySettings {
         uint8_t speed = 80, intensity = 128, size = 1, color = 4;
+        uint8_t arms = 3; // Share the existing particle budget across evenly spaced arms.
         bool starfield = false, trace = false;
+        float rockSweepDegrees = 90.0f; // Total excursion about horizontal: +45 to -45 degrees.
+        float rockPeriodSeconds = 24.0f; // Full out-and-back cycle with eased reversals.
+        float discParticleFraction = 0.5f; // Leave dark gaps between the visible spiral arms.
     };
 
     namespace Detail {
@@ -324,6 +333,27 @@ namespace ParticleEffects {
         uint8_t hues[rows * RNDR_X];
         for (int i = 0; i < nozzles; ++i) hues[i] = 90 * i;
         Pool pool(population(maxParticles));
+        const auto drawWater = [&](Point3 position, CRGB color, bool falling) {
+            const auto draw = [&](Point3 p) {
+                if (falling) drawFallingDroplet(p, color, wrapX);
+                else drawSmooth(p, color, wrapX);
+            };
+            if (!settings.fourFaces) {
+                draw(position);
+                return;
+            }
+            // Unfold the existing diagonal curtain into along/across coordinates.
+            // Copy only its rendering: all four falls share the same particle pool,
+            // collisions, splash physics, nozzle variation, and ceiling profile.
+            const float dx = position.x - centerX, dy = position.y - RNDR_CY;
+            const float along = (dx - dy) * diagonalComponent * settings.faceWidthScale;
+            const float depth = (dx + dy) * diagonalComponent * settings.faceDepthScale;
+            const float recess = min(RNDR_X - 1, RNDR_Y - 1) * settings.faceRecessFraction;
+            draw({RNDR_CX + along, recess + depth, position.z});
+            draw({RNDR_X - 1 - recess - depth, RNDR_CY + along, position.z});
+            draw({RNDR_CX - along, RNDR_Y - 1 - recess - depth, position.z});
+            draw({recess + depth, RNDR_CY - along, position.z});
+        };
         run(durationMs, 190, [&](uint32_t) {
             for (int i = 0; i < nozzles; ++i) {
                 hues[i] += 1 + random8(settings.variation >> 1);
@@ -368,7 +398,7 @@ namespace ParticleEffects {
                 if (!p.active) continue;
                 if (p.flags & HitFloor) {
                     const uint8_t brightness = uint8_t(255.0f * min(1.0f, 2.0f * p.life));
-                    drawSmooth(p.motion.position, ColorFromPalette(palette, p.type, brightness), wrapX);
+                    drawWater(p.motion.position, ColorFromPalette(palette, p.type, brightness), false);
                 } else {
                     auto position = p.motion.position;
                     const float drop = constrain(1.0f - position.z / (RNDR_Z - 1), 0.0f, 1.0f);
@@ -382,7 +412,7 @@ namespace ParticleEffects {
                     float unused = 0.0f;
                     if (resolveSide(position.x, unused, RNDR_X, xSide, bounce) &&
                         resolveSide(position.y, unused, RNDR_Y, ySide, bounce)) {
-                        drawFallingDroplet(position, ColorFromPalette(palette, p.type), wrapX);
+                        drawWater(position, ColorFromPalette(palette, p.type), true);
                     }
                 }
             }
@@ -626,12 +656,10 @@ namespace ParticleEffects {
         using namespace Detail;
         const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
         const float faceDistance = min(RNDR_CX, min(RNDR_CY, RNDR_CZ));
-        const float orbitRadius = max(1.0f, faceDistance * constrain(settings.orbitRadius, 0.0f, 1.0f));
-        const float orbitSpeed = sqrtf(settings.mass * wledGravity);
-        constexpr float minLifeSeconds = 3.4f;
-        constexpr float maxLifeSeconds = 5.6f;
-        constexpr uint8_t nozzleCount = 3;
-        constexpr uint32_t nozzlePeriod = 336; // Eight seconds at 42 effect updates per second.
+        const float colorScale = 36.0f / max(1.0f, 0.94f * faceDistance);
+        const float exclusionRadius = constrain(settings.nozzleExclusionRadius, 0.0f, max(0.0f, faceDistance - 1.0f));
+        const float exclusionRadiusSq = exclusionRadius * exclusionRadius;
+        Motion nozzle{{1.0f, center.y, 1.0f}, {-7 * wledVelocity, 0, 0}};
         Motion attractor{center, {0, 0, -7 * wledVelocity}};
         Pool pool(population((25 + 165 * settings.particles / 255) * maxParticles / 256));
         const int frictionPeriod = 33 - min(31, int(settings.friction));
@@ -639,15 +667,28 @@ namespace ParticleEffects {
         const uint8_t size = settings.size >> 1;
         uint32_t frame = 0;
         uint8_t hue = random8();
-        uint8_t nozzle = 0;
         float emission = 0.0f;
-        // Each tilted plane lines up with a different axis at its outermost point.
-        const auto orientOrbit = [](float u, float v, float depth, uint8_t path) -> Point3 {
-            const float across = 0.819152f * v - 0.573576f * depth;
-            const float up = 0.573576f * v + 0.819152f * depth;
-            if (path == 0) return {u, across, up};
-            if (path == 1) return {up, u, across};
-            return {across, up, u};
+        const auto bounceAxis = [](float& position, float& normal, float& tangentA, float& tangentB, int extent) {
+            const float incoming = normal;
+            resolveSide(position, normal, extent, Side::Bounce, 1.0f, 1.0f);
+            if (normal == incoming) return;
+
+            // WLED transfers speed along the wall at a rough bounce. On a cube,
+            // split that transfer between the wall's two tangent directions.
+            const float total = fabsf(normal) + fabsf(tangentA) + fabsf(tangentB);
+            const float transfer = fabsf(normal) * (200.0f / 255.0f);
+            const float split = sample(0.0f, 1.0f);
+            tangentA += sample(-transfer, transfer) * split;
+            tangentB += sample(-transfer, transfer) * (1.0f - split);
+            normal = copysignf(max(0.0f, total - fabsf(tangentA) - fabsf(tangentB)), normal);
+        };
+        const auto moveEmitter = [&](Motion& emitter) {
+            advance(emitter, 1.0f / 42, {}, 1.0f);
+            auto& p = emitter.position;
+            auto& v = emitter.velocity;
+            bounceAxis(p.z, v.z, v.x, v.y, RNDR_Z);
+            bounceAxis(p.x, v.x, v.y, v.z, RNDR_X);
+            bounceAxis(p.y, v.y, v.x, v.z, RNDR_Y);
         };
         run(durationMs, 0, [&](uint32_t tick) {
             const bool emitFrame = wledFrameDue(tick);
@@ -655,28 +696,74 @@ namespace ParticleEffects {
             float mass = settings.mass;
             if (liveAudioSource()) mass *= RemoteInputs::audio().volumeSm / 255.0f;
             if (emitFrame) {
-                if (settings.move && frame % 3 == 0) bounceEmitter(attractor, 1.0f / 42, 7 * wledVelocity);
+                if (settings.move && frame % 3 == 0) moveEmitter(attractor);
                 if (frame % 5 == 0) ++hue;
                 applyFriction = frame % frictionPeriod == 0;
-                // At 16³ this emits about 14 particles per second across all three clouds.
-                emission += volumeScale / 3.0f;
+                // At 16³ try one launch per WLED update while a particle slot is free.
+                emission += volumeScale;
                 if (emission >= 1.0f) {
                     emission -= 1.0f;
-                    const float phase = (frame % nozzlePeriod) * (TWO_PI / nozzlePeriod) +
-                                        nozzle * (TWO_PI / nozzleCount);
-                    const float radius = orbitRadius * sample(0.97f, 1.03f);
-                    const float c = cosf(phase), s = sinf(phase);
-                    const float depth = orbitRadius * sample(-0.025f, 0.025f);
-                    const Point3 offset = orientOrbit(radius * c, radius * s, depth, nozzle);
-                    const auto& anchor = attractor.position;
-                    const Point3 origin{anchor.x + offset.x, anchor.y + offset.y, anchor.z + offset.z};
-                    // Start close together. Differences in speed and tilt separate the older sparks.
-                    const float speed = orbitSpeed * sample(0.89f, 1.01f);
-                    const float normalSpeed = orbitSpeed * sample(-0.12f, 0.12f);
-                    const Point3 v = orientOrbit(-speed * s, speed * c, normalSpeed, nozzle);
-                    pool.spawn({true, hue, {origin, v}, 1.0f, 0.0f, 1.0f,
-                                1.0f / sample(minLifeSeconds, maxLifeSeconds), CRGB::Black, 0});
-                    nozzle = (nozzle + 1) % nozzleCount;
+                    // Rotate the aim in XZ and alternate opposing shots from the same nozzle.
+                    // A smaller spread along Y gives the WLED spray some depth.
+                    const uint16_t angle = uint16_t((frame + 1) * 256u + ((frame & 1) ? 0x7FFFu : 0u));
+                    Point3 v{
+                        (int32_t(cos16(angle)) * 12 / 32600 + int(random8(8)) - 4) * wledVelocity,
+                        sample(-1.0f, 1.0f) * wledVelocity,
+                        (int32_t(sin16(angle)) * 12 / 32600 + int(random8(8)) - 4) * wledVelocity
+                    };
+                    if (settings.tangentAim && exclusionRadius > 0.0f) {
+                        // Restrict the final spread-adjusted launch ray, preserving speed.
+                        // Outside the sphere, an inward shot may still clear its edge.
+                        // Clamp only rays that would enter it to the nearest tangent ray.
+                        const Point3 offset{nozzle.position.x - center.x, nozzle.position.y - center.y,
+                                            nozzle.position.z - center.z};
+                        const float distanceSq = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
+                        const float speed = sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+                        if (distanceSq > 0.0f && speed > 0.0f) {
+                            const float distance = sqrtf(distanceSq);
+                            const Point3 normal{offset.x / distance, offset.y / distance, offset.z / distance};
+                            const float radial = v.x * normal.x + v.y * normal.y + v.z * normal.z;
+                            const float tangentRatio = min(1.0f, exclusionRadius / distance);
+                            const float minimumRadial = -speed * sqrtf(max(0.0f, 1.0f - tangentRatio * tangentRatio));
+                            if (radial < minimumRadial) {
+                                Point3 tangent{v.x - radial * normal.x, v.y - radial * normal.y,
+                                               v.z - radial * normal.z};
+                                float length = sqrtf(tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z);
+                                if (length < 0.0001f) {
+                                    // A directly inward shot has no preferred tangent direction.
+                                    tangent = fabsf(normal.x) < 0.9f ? Point3{0, normal.z, -normal.y}
+                                                                            : Point3{-normal.z, 0, normal.x};
+                                    length = sqrtf(tangent.x * tangent.x + tangent.y * tangent.y + tangent.z * tangent.z);
+                                }
+                                const float scale = speed * tangentRatio / length;
+                                v = {normal.x * minimumRadial + tangent.x * scale,
+                                     normal.y * minimumRadial + tangent.y * scale,
+                                     normal.z * minimumRadial + tangent.z * scale};
+                            }
+                        }
+                    }
+                    pool.spawn({true, hue, {nozzle.position, v}, 1.0f, 0.0f, 1.0f,
+                                42.0f / random16(50, 350), CRGB::Black, 0});
+                }
+                moveEmitter(nozzle);
+                // The invisible sphere is a wall for the nozzle only.
+                auto& p = nozzle.position;
+                auto& v = nozzle.velocity;
+                const Point3 offset{p.x - center.x, p.y - center.y, p.z - center.z};
+                const float distanceSq = offset.x * offset.x + offset.y * offset.y + offset.z * offset.z;
+                if (distanceSq < exclusionRadiusSq) {
+                    const float distance = sqrtf(distanceSq);
+                    const Point3 normal = distance > 0.0f
+                        ? Point3{offset.x / distance, offset.y / distance, offset.z / distance}
+                        : Point3{1.0f, 0.0f, 0.0f};
+                    p = {center.x + exclusionRadius * normal.x, center.y + exclusionRadius * normal.y,
+                         center.z + exclusionRadius * normal.z};
+                    const float inward = v.x * normal.x + v.y * normal.y + v.z * normal.z;
+                    if (inward < 0.0f) {
+                        v.x -= 2.0f * inward * normal.x;
+                        v.y -= 2.0f * inward * normal.y;
+                        v.z -= 2.0f * inward * normal.z;
+                    }
                 }
                 ++frame;
             }
@@ -711,7 +798,7 @@ namespace ParticleEffects {
                 const auto& pos = p.motion.position;
                 // A shared rainbow wave gives neighbors similar colors. Age nudges the hue
                 // within that wave and fades particles in and out of the cloud.
-                const float gradient = (pos.x - center.x + pos.z - center.z) * (36.0f / orbitRadius);
+                const float gradient = (pos.x - center.x + pos.z - center.z) * colorScale;
                 const uint8_t index = settings.ageColor ? uint8_t(int(frame / 2) + int(gradient + 18.0f * p.life)) : p.type;
                 const float elapsed = (1.0f - p.life) / p.decay;
                 const uint8_t brightness = uint8_t(255.0f * min(1.0f, min(elapsed * 3.0f, p.life * 3.0f)));
@@ -855,90 +942,111 @@ namespace ParticleEffects {
     inline void animateGalaxy(uint32_t durationMs, const GalaxySettings& settings = {},
                               const CRGBPalette16* selectedPalette = nullptr) {
         using namespace Detail;
-        // WLED 16.0 palette 59, Fairy Reaf.
-        static const uint8_t fairyReaf[] PROGMEM = {0,220,19,187, 160,12,225,219, 219,203,242,223, 255,255,255,255};
-        const CRGBPalette16 palette = selectedPalette ? *selectedPalette : CRGBPalette16(fairyReaf);
+        const CRGBPalette16 palette = selectedPalette ? *selectedPalette : CRGBPalette16(RainbowColors_p);
         const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
-        constexpr float diskCos = 0.819152f, diskSin = 0.573576f; // A 35 degree tilt.
-        const float widthScale = cbrtf(volumeScale);
-        const float maxDistance = (RNDR_X + RNDR_Y + RNDR_Z) / 6.0f;
         const int colorControl = min(31, int(settings.color));
         const int huePeriod = (33 - colorControl) >> 1;
         const uint8_t size = settings.trace ? uint8_t(settings.size != 0) : settings.size;
-        Pool pool(population(maxParticles));
-        Motion nozzle{center, {-4 * wledVelocity, 0, 0}};
+        Pool pool(population(settings.starfield ? maxParticles :
+                             max(1, int(maxParticles * constrain(settings.discParticleFraction, 0.0f, 1.0f)))));
+        if (!settings.starfield) {
+            // Persistent normalized spiral seeds. Their coordinates describe the disc,
+            // not world positions. No inward force, aging, or center-born replacements:
+            // those progressively collapsed the previously full-sized galaxy.
+            const int arms = constrain(int(settings.arms), 1, pool.size());
+            for (int i = 0; i < pool.size(); ++i) {
+                const int arm = i % arms;
+                const int armParticles = (pool.size() - 1 - arm) / arms + 1;
+                const float fraction = (i / arms + 0.5f) / armParticles;
+                const float r = 0.15f + 0.85f * fraction;
+                const float angle = arm * (TWO_PI / arms) + 4.5f * fraction + sample(-0.10f, 0.10f);
+                pool[i] = {true, uint8_t(i * 256 / pool.size()),
+                           {{r * cosf(angle), r * sinf(angle), sample(-0.02f, 0.02f)}, {0, 0, 0}},
+                           1.0f, 0.0f, 1.0f, 0.0f, CRGB::Black, 0};
+            }
+        }
         uint8_t hue = random8();
         uint32_t frame = 0;
+        float elapsedSeconds = 0.0f;
         run(durationMs, settings.trace ? 250 : 0, [&](uint32_t tick) {
+            elapsedSeconds += dt;
             if (wledFrameDue(tick)) {
                 if (frame % huePeriod == 0) hue += 2;
-                if (random8() < (10 + (settings.intensity >> 1)) * volumeScale) {
-                    const int variance = settings.starfield ? 7 : 1;
-                    Point3 v{sample(-variance, variance) * wledVelocity, sample(-variance, variance) * wledVelocity,
-                             sample(-variance, variance) * wledVelocity};
-                    Point3 origin = nozzle.position;
-                    if (settings.starfield) {
-                        origin = center;
-                    } else {
-                        // Keep the wandering source and its seeds within a thin, tilted disk.
-                        const float normal = -(origin.y - center.y) * diskSin + (origin.z - center.z) * diskCos;
-                        origin.y += normal * diskSin * 0.82f;
-                        origin.z -= normal * diskCos * 0.82f;
-                        const float normalVelocity = -v.y * diskSin + v.z * diskCos;
-                        v.y += normalVelocity * diskSin * 0.80f;
-                        v.z -= normalVelocity * diskCos * 0.80f;
-                    }
-                    pool.spawn({true, hue, {origin, v}, 1.0f, 0.0f, 1.0f, 42.0f / sample(800, 4000), CRGB::Black, 0});
-                }
-                if (!settings.starfield && frame % 4 == 0) bounceEmitter(nozzle, 1.0f / 42, 4 * wledVelocity);
                 ++frame;
+                if (settings.starfield && random8() < (10 + (settings.intensity >> 1)) * volumeScale) {
+                    const Point3 v{sample(-7, 7) * wledVelocity, sample(-7, 7) * wledVelocity,
+                                   sample(-7, 7) * wledVelocity};
+                    pool.spawn({true, hue, {center, v}, 1.0f, 0.0f, 1.0f,
+                                42.0f / sample(800, 4000), CRGB::Black, 0});
+                }
             }
+            if (!settings.starfield) return;
             for (int i = 0; i < pool.size(); ++i) {
                 auto& p = pool[i];
                 if (!p.active) continue;
                 advance(p, dt);
                 auto& pos = p.motion.position;
                 const float x = pos.x - center.x, y = pos.y - center.y, z = pos.z - center.z;
-                if (settings.starfield) {
-                    const float distance = sqrtf(x*x + y*y + z*z);
-                    const float expand = (1 + (1 + (settings.speed >> 1)) * distance * 64.0f) * (42.0f / 400000.0f);
-                    pos.x += dt * (expand * x + wledVelocity * y);
-                    pos.y += dt * (expand * y - wledVelocity * x);
-                    pos.z += dt * expand * z;
-                    p.active = p.active && pos.x > -1 && pos.x < RNDR_X && pos.y > -1 && pos.y < RNDR_Y &&
-                               pos.z > -1 && pos.z < RNDR_Z;
-                } else {
-                    const float diskY = y * diskCos + z * diskSin;
-                    const float normal = -y * diskSin + z * diskCos;
-                    const float r = max(20.0f / 64.0f, sqrtf(x*x + diskY*diskY));
-                    const float angular = (2 + (50 + settings.speed) * widthScale / r) * (42.0f / 1024.0f);
-                    const float pull = (21.0f / 64.0f) / max(0.18f, r - 19.0f / 64.0f);
-                    const float flowY = -angular * x - pull * diskY;
-                    pos.x += dt * (angular * diskY - pull * x);
-                    pos.y += dt * (diskCos * flowY + 0.8f * diskSin * normal);
-                    pos.z += dt * (diskSin * flowY - 0.8f * diskCos * normal);
-                    if (r < 2.0f * widthScale) p.life -= 4 * p.decay * dt;
-                    if (p.life <= 0.0f) p.active = false;
-                }
+                const float distance = sqrtf(x*x + y*y + z*z);
+                const float expand = (1 + (1 + (settings.speed >> 1)) * distance * 64.0f) * (42.0f / 400000.0f);
+                pos.x += dt * (expand * x + wledVelocity * y);
+                pos.y += dt * (expand * y - wledVelocity * x);
+                pos.z += dt * expand * z;
+                p.active = p.active && pos.x > -1 && pos.x < RNDR_X && pos.y > -1 && pos.y < RNDR_Y &&
+                           pos.z > -1 && pos.z < RNDR_Z;
             }
         }, [&] {
+            // Coherent rotation with bounded shear keeps the arms readable. Unbounded
+            // differential rotation would eventually wind them into a filled ellipse.
+            const float orbit = elapsedSeconds * (0.12f + settings.speed * 0.0025f);
+            const auto discPoint = [&](int i) -> Point3 {
+                const auto& seed = pool[i].motion.position;
+                const float r = sqrtf(seed.x * seed.x + seed.y * seed.y);
+                const float angle = atan2f(seed.y, seed.x) - orbit +
+                                    0.18f * sinf(elapsedSeconds * 0.35f + r * 3.0f);
+                return {r * cosf(angle), r * sinf(angle), seed.z};
+            };
+            const float tilt = settings.rockSweepDegrees * (TWO_PI / 720.0f) *
+                               cosf(TWO_PI * elapsedSeconds / max(1.0f, settings.rockPeriodSeconds));
+            const float tiltCos = cosf(tilt), tiltSin = sinf(tilt);
+            float extentX = 0.001f, extentY = 0.001f;
+            if (!settings.starfield) {
+                for (int i = 0; i < pool.size(); ++i) {
+                    const Point3 p = discPoint(i);
+                    extentX = max(extentX, fabsf(p.x));
+                    extentY = max(extentY, fabsf(p.y));
+                }
+            }
+            // Fit the actual arms to the cube, extending the tilted disc into an
+            // ellipse as space permits. Reserve only its small thickness, not whole
+            // dark planes. At horizontal, a thin disc cannot reach top and bottom.
+            const float thickness = 0.02f * min(RNDR_CX, min(RNDR_CY, RNDR_CZ));
+            const float across = min((RNDR_CY - thickness * fabsf(tiltSin)) / max(0.0001f, fabsf(tiltCos)),
+                                     (RNDR_CZ - thickness * fabsf(tiltCos)) / max(0.0001f, fabsf(tiltSin)));
             for (int i = 0; i < pool.size(); ++i) {
                 const auto& p = pool[i];
                 if (!p.active) continue;
-                const auto& pos = p.motion.position;
-                const float x = pos.x - center.x, y = pos.y - center.y, z = pos.z - center.z;
-                const float distance = sqrtf(x*x + y*y + z*z);
+                Point3 display = p.motion.position;
                 uint8_t index = p.type;
-                if (colorControl == 0) index = uint8_t(min(180.0f, 180.0f * distance / maxDistance));
-                if (colorControl == 31) index = uint8_t(int(p.life * 42.0f / p.decay) >> 2);
-                auto color = ColorFromPalette(palette, index);
                 if (!settings.starfield) {
-                    color = blend(CRGB(CRGB::White), color, uint8_t(255.0f * min(1.0f, distance / (2 * widthScale))));
+                    const Point3 local = discPoint(i);
+                    const float y = local.y * across / extentY;
+                    const float normal = local.z * thickness / 0.02f;
+                    display = {center.x + local.x * RNDR_CX / extentX,
+                               center.y + y * tiltCos - normal * tiltSin,
+                               center.z + y * tiltSin + normal * tiltCos};
+                    index = uint8_t(int((atan2f(local.y, local.x) + PI) * (256.0f / TWO_PI)) + int(hue));
+                } else {
+                    const float x = display.x-center.x, y = display.y-center.y, z = display.z-center.z;
+                    const float distance = sqrtf(x*x + y*y + z*z);
+                    if (colorControl == 0) index = uint8_t(min(180.0f, 180.0f * distance / ((RNDR_X+RNDR_Y+RNDR_Z)/6.0f)));
+                    if (colorControl == 31) index = uint8_t(int(p.life * 42.0f / p.decay) >> 2);
                 }
-                color.nscale8(uint8_t(min(255.0f, 84.0f * p.life / p.decay)));
-                if (size == 0) drawParticlePoint(pos, color);
-                else if (settings.trace) drawSmooth(pos, color, false);
-                else drawBall(pos, 0.65f + size / 64.0f, color, false);
+                auto color = ColorFromPalette(palette, index);
+                if (settings.starfield) color.nscale8(uint8_t(min(255.0f, 84.0f * p.life / p.decay)));
+                if (size == 0) drawParticlePoint(display, color);
+                else if (!settings.starfield || settings.trace) drawSmooth(display, color, false);
+                else drawBall(display, 0.65f + size / 64.0f, color, false);
             }
         });
     }
