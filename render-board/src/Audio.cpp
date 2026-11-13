@@ -16,6 +16,21 @@ Audio::Controls &Audio::controls() {
     return settings;
 }
 
+bool Audio::displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]) {
+    const bool active = controls().spectrumCompensationEnabled;
+    // Start with the ADC reference song and its quiet lead-in. Leave the
+    // bass bins alone and lift only the signal above each higher band's floor.
+    constexpr uint8_t floor[] = {3, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4};
+    constexpr float gain[] = {1.25f, 1.45f, 1.6f, 2.2f, 2.7f, 3.3f, 3.7f, 4.2f, 4.7f, 5.0f, 5.5f, 5.5f};
+    for (int band = 0; band < 16; ++band) {
+        const int raw = audio.fftResult[band];
+        bins[band] = active && band >= 4
+            ? min(255, int(lroundf(max(0, raw - floor[band - 4]) * gain[band - 4])))
+            : raw;
+    }
+    return active;
+}
+
 namespace {
     float midrangeBoostGain() {
         const float gain = Audio::controls().midrangeBoostGain;
@@ -33,14 +48,16 @@ namespace {
             min(8.0f, max(0.0f, settings.juliaSensitivity)) : 1.5f;
         const float gamma = std::isfinite(settings.juliaVolumeGamma) ?
             min(4.0f, max(0.25f, settings.juliaVolumeGamma)) : 1.0f;
-        juliaBoost.update(audio, millis(), settings.midrangeBoostEnabled);
+        uint8_t bins[16];
+        const bool compensated = Audio::displaySpectrum(audio, bins);
+        juliaBoost.update(audio, millis(), settings.midrangeBoostEnabled, bins);
         const float lift = juliaBoost.lift * midrangeBoostGain();
         const float volume = min(1.0f, float(audio.volumeSm) * gain / 255.0f + lift);
         const float closure = gamma == 1.0f ? volume : powf(volume, gamma);
         char detail[96];
-        snprintf(detail, sizeof(detail), "Julia volume=%u target=%.3f gain=%.2f gamma=%.2f fft=%.3f",
-            unsigned(audio.volumeSm), double(closure), double(gain), double(gamma), double(lift));
-        Audio::debug(audio, detail);
+        snprintf(detail, sizeof(detail), "Julia curve=%s volume=%u target=%.3f gain=%.2f gamma=%.2f fft=%.3f",
+            compensated ? "comp" : "raw", unsigned(audio.volumeSm), double(closure), double(gain), double(gamma), double(lift));
+        Audio::debug(audio, detail, 0, bins);
         return closure;
     }
 
@@ -56,8 +73,8 @@ namespace {
         // VolumeSm already has attack and release smoothing. Apply it to
         // the geometry on every draw so the rose can follow individual swells.
         const float reach = quietReach + (1.0f - quietReach) * drive;
-        char detail[64];
-        snprintf(detail, sizeof(detail), "Drift Rose reach=%.0f%% fullVol=%d fft=%.3f",
+        char detail[80];
+        snprintf(detail, sizeof(detail), "Drift Rose curve=raw reach=%.0f%% fullVol=%d fft=%.3f",
                  double(reach * 100.0f), fullVolume, double(lift));
         Audio::debug(audio, detail);
         return reach;
@@ -82,11 +99,10 @@ void Audio::animateDriftRose() {
         driftRoseReach, TestDemo::audioRoutineRunning, max(8, spokeCount));
 }
 
-namespace {
 // Plasmoid by Andrew Tuline, adapted from WLED v16.0.1. Two independently
 // drifting strip waves set the fill and brightness. Their phases also color
 // the strip, independently of the volume cutoff.
-void drawPlasmoid(bool mirrorDepth) {
+void Audio::animatePlasmoidMirrored() {
     constexpr uint32_t stepMs = 23; // WLED's default 42 Hz effect clock.
     constexpr unsigned sliceSize = unsigned(RNDR_X) * RNDR_Z;
     constexpr unsigned sliceShift = RNDR_X + 1;
@@ -142,7 +158,7 @@ void drawPlasmoid(bool mirrorDepth) {
             }
 
             for (uint8_t y = 0; y < RNDR_Y; ++y) {
-                const unsigned depth = mirrorDepth ? min(unsigned(y), unsigned(RNDR_Y - 1 - y)) : y;
+                const unsigned depth = min(unsigned(y), unsigned(RNDR_Y - 1 - y));
                 // Read each upright slice as a matrix, with width first. Rotate
                 // its strip starting point so a 16x16 slice doesn't repeat at
                 // every depth just because it is exactly one period long.
@@ -165,22 +181,12 @@ void drawPlasmoid(bool mirrorDepth) {
         }
 
         char detail[104];
-        snprintf(detail, sizeof(detail), "Plasmoid map=%s cutoff=%u fresh=%u/%u",
-                 mirrorDepth ? "depth-mirror" : "single-strip", cutoff, refreshed, voxelCount);
+        snprintf(detail, sizeof(detail), "Plasmoid map=depth-mirror cutoff=%u fresh=%u/%u",
+                 cutoff, refreshed, voxelCount);
         Audio::debug(audio, detail);
         showCube();
     }
 }
-}
-
-void Audio::animatePlasmoid() {
-    drawPlasmoid(false);
-}
-
-void Audio::animatePlasmoidMirrored() {
-    drawPlasmoid(true);
-}
-
 void Audio::renderIcon(TextureState &) {
     for (uint8_t y = 0; y < RNDR_Y; ++y) {
         for (uint8_t x = 0; x < RNDR_X; ++x) {
@@ -196,7 +202,8 @@ void Audio::debug() {
     debug(RemoteInputs::audio());
 }
 
-void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail, uint32_t attackNumber) {
+void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail, uint32_t attackNumber,
+                  const uint8_t* displayBins) {
 #if AUDIO_SERIAL_DEBUG
     // Render task only. No printing in UARTReceiver and no lock held during TX.
     // Static storage survives a nonlocal app exit; no resource-owning locals.
@@ -241,7 +248,7 @@ void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail, uin
         int n = snprintf(
             text, sizeof(text),
             "Audio: source=%s routine=%s linked=%u VRaw=%u VSm=%u VAvg=%u "
-            "BPM=%.1f Bass=%u Mid=%u High=%u RXok=%lu RXbad=%lu Hold=%u %s\r\nBins:[",
+            "BPM=%.1f Bass=%u Mid=%u High=%u RXok=%lu RXbad=%lu Hold=%u %s\r\n",
             source, TestDemo::currentAudioRoutineName(), unsigned(control.linked),
             unsigned(audio.volumeRaw), unsigned(audio.volumeSm), unsigned(audio.volumeAvg),
             double(audio.bpm), unsigned(audio.bassKick), unsigned(audio.midAttack),
@@ -252,14 +259,19 @@ void Audio::debug(const RemoteInputs::AudioFrame &audio, const char *detail, uin
         }
         queued = size_t(n);
 
-        for (unsigned i = 0; i < 16; ++i) {
-            n = snprintf(text + queued, sizeof(text) - queued, i == 15 ? "%u]\r\n" : "%u ",
-                         unsigned(audio.fftResult[i]));
-            if (n <= 0 || size_t(n) >= sizeof(text) - queued) {
-                queued = 0;
-                return;
+        const auto appendBins = [&](const char* name, const uint8_t* bins) {
+            for (unsigned i = 0; i < 16; ++i) {
+                const int length = i == 0
+                    ? snprintf(text + queued, sizeof(text) - queued, "%s:[%u ", name, unsigned(bins[i]))
+                    : snprintf(text + queued, sizeof(text) - queued, i == 15 ? "%u]\r\n" : "%u ", unsigned(bins[i]));
+                if (length <= 0 || size_t(length) >= sizeof(text) - queued) return false;
+                queued += size_t(length);
             }
-            queued += size_t(n);
+            return true;
+        };
+        if (!appendBins("Bins", audio.fftResult) || (displayBins && !appendBins("DisplayBins", displayBins))) {
+            queued = 0;
+            return;
         }
     }
 
@@ -478,6 +490,132 @@ void Audio::animateAttackMonitor() {
     }
 }
 
+void Audio::bouncingBalls(BouncingBallsPattern pattern) {
+    constexpr int columnsOfSections = 4;
+    constexpr int sectionCount = 2 * columnsOfSections;
+    constexpr float radiansPerBeat = 6.283185307f / sectionCount;
+    constexpr uint32_t whiteAccentMs = 90;
+    constexpr float fullHeight = RNDR_Z - 1.0f;
+    constexpr float fullFlightMs = 800.0f;
+    constexpr float reboundSpeed = 0.65f;
+    constexpr float reboundHeight = reboundSpeed * reboundSpeed;
+    const CRGBPalette16 palette = RainbowColors_p;
+    // The grids are top views. Tiles with the same number launch together.
+    // Entry order matches BouncingBallsPattern; the original uses two rows.
+    struct Pattern {
+        const char* name;
+        int rows;
+        const uint8_t* launchBeat;
+    };
+    constexpr uint8_t clockwiseSteps[] = {1, 2, 3, 4, 8, 7, 6, 5};
+    uint8_t inwardSteps[16];
+    for (int i = 0; i < 16; ++i) inwardSteps[AudioLayouts::orbitInwardTiles[i]] = 1 + i / 2;
+    const Pattern patterns[] = {
+        {"Clockwise", 2, clockwiseSteps},
+        {"Orbit Inward", 4, inwardSteps},
+    };
+    const auto& layout = patterns[static_cast<unsigned>(pattern)];
+    const int tileCount = columnsOfSections * layout.rows;
+    struct Hop {
+        uint32_t startMs;
+        float height;
+        float durationMs;
+    };
+    Hop hops[sectionCount] = {};
+    uint8_t heightPercent[RNDR_X * RNDR_Y];
+    int lastBeat = -1;
+    int nextSection = 0;
+    int lastSection = -1;
+    float lastHeight = 0.0f;
+
+    while (TestDemo::audioRoutineRunning()) {
+        const auto audio = RemoteInputs::audio();
+        const uint32_t now = millis();
+        const int beat = min(sectionCount - 1, int(audio.beatAngle(sectionCount) / radiansPerBeat));
+        int launchedSection = -1;
+        if (lastBeat < 0 || audio.volumeSm <= 2) {
+            lastBeat = beat;
+        } else {
+            // Small backwards phase corrections near a beat must not fire it twice.
+            const int forward = (beat - lastBeat + sectionCount) % sectionCount;
+            if (forward > 0 && forward <= sectionCount / 2) {
+                lastBeat = beat;
+                const int fullVolume = max(1, int(controls().bouncingBallsVolumeForFullHeight));
+                const float drive = min(1.0f, float(audio.volumeSm) / fullVolume);
+                lastHeight = min(2.0f, fullHeight) + max(0.0f, fullHeight - 2.0f) * drive;
+                lastSection = nextSection;
+                launchedSection = nextSection;
+                hops[nextSection] = {now, lastHeight, fullFlightMs * sqrtf(lastHeight / fullHeight)};
+                nextSection = (nextSection + 1) % sectionCount;
+            }
+        }
+
+        clearAll();
+        bool bouncing[sectionCount] = {};
+        for (int tile = 0; tile < tileCount; ++tile) {
+            const int section = layout.launchBeat[tile] - 1;
+            const auto& hop = hops[section];
+            const uint32_t age = now - hop.startMs;
+            // Give all 16 tiles fixed rainbow hues. Opposite tiles sit half
+            // a palette cycle apart, so the Orbit pair has a clear color split.
+            const int hueSlot = layout.rows == 2 ? section : (tile < 8 ? tile : 23 - tile);
+            const CRGB sectionColor = ColorFromPalette(palette, uint8_t(hueSlot * 256 / tileCount), 255, LINEARBLEND);
+            const int row = tile / columnsOfSections;
+            const int column = tile % columnsOfSections;
+            const int xStart = column * RNDR_X / columnsOfSections;
+            const int xEnd = (column + 1) * RNDR_X / columnsOfSections;
+            const int yStart = row * RNDR_Y / layout.rows;
+            const int yEnd = (row + 1) * RNDR_Y / layout.rows;
+            for (int y = yStart; y < yEnd; ++y) {
+                for (int x = xStart; x < xEnd; ++x) {
+                    auto& heightPercentForBall = heightPercent[x + RNDR_X * y];
+                    if (section == launchedSection) heightPercentForBall = 85 + random(16);
+                    int z = 0;
+                    bool inFlight = false;
+                    if (hop.height > 0.0f) {
+                        const float scale = heightPercentForBall / 100.0f;
+                        float height = hop.height * scale;
+                        float flight = hop.durationMs * sqrtf(scale);
+                        float elapsed = age;
+                        // Follow successive arcs at constant gravity. On each
+                        // landing, reduce speed and let sub-voxel hops settle.
+                        while (height >= 1.0f && elapsed >= flight) {
+                            elapsed -= flight;
+                            height *= reboundHeight;
+                            flight *= reboundSpeed;
+                        }
+                        if (height >= 1.0f) {
+                            const float progress = elapsed / flight;
+                            z = lroundf(4.0f * height * progress * (1.0f - progress));
+                            inFlight = true;
+                        }
+                    }
+                    bouncing[section] |= inFlight;
+                    CRGB color = sectionColor;
+                    if (!inFlight) {
+                        color.nscale8(36);
+                    } else if (age < whiteAccentMs) {
+                        const uint8_t white = 255 * (whiteAccentMs - age) / whiteAccentMs;
+                        color.nscale8(255 - white);
+                        color += CRGB(white, white, white);
+                    }
+                    setVoxel(x, y, z, color);
+                }
+            }
+        }
+        // Both tiles in a pair share a launch. Keep the hop alive until
+        // the last ball in either tile has settled.
+        for (int section = 0; section < sectionCount; ++section) {
+            if (!bouncing[section]) hops[section].height = 0.0f;
+        }
+        char detail[112];
+        snprintf(detail, sizeof(detail), "Bouncing Balls pattern=%s step=%d next=%d hopHeight=%.1f",
+                 layout.name, lastSection + 1, nextSection + 1, double(lastHeight));
+        Audio::debug(audio, detail);
+        showCube();
+    }
+}
+
 void Audio::animateBpmCheckerboard() {
     bpm(BPM_CHECKERBOARD, controls().bpmSensitivity);
 }
@@ -528,7 +666,7 @@ void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
 // v16.0.1 mode_2DWaverly. This is a dimension-aware volumetric adaptation:
 // noise has TWO spatial coordinates and one time coordinate; Z is height.
 // Coloring is deliberately independent so audition entries share the exact
-// same geometry, gain and noise trajectory. No FFT/beat detector is involved.
+// same geometry and noise trajectory. The FFT lift is independent of color.
 void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
                     bool columnGradient, uint32_t durationMs) {
     // Keep excluded shaders out of Waverly even for direct experimental calls.
@@ -578,7 +716,9 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
             float(RNDR_Z) * attackFraction * (1.0f - float(attackAgeMs) / float(decayMs)) : 0.0f;
 
         const bool fftEnabled = controls().midrangeBoostEnabled;
-        boost.update(audio, now, fftEnabled);
+        uint8_t bins[16];
+        const bool compensated = displaySpectrum(audio, bins);
+        boost.update(audio, now, fftEnabled, bins);
         const float extraReach = fftEnabled ? boost.lift * midrangeBoostGain() * float(RNDR_Z) * 0.9f : attackReach;
 
         if (firstFrame || deltaMs >= stepMs) {
@@ -645,36 +785,117 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
 
         char detail[192];
         snprintf(detail, sizeof(detail),
-                 "Waverly height=%.1f/%u gain=%.2f step=%lums color=%s mid=%u high=%u push=%.2f fft=%u gate=%.2f bin=%u rise=%.1f",
-                 double(tallest), unsigned(RNDR_Z), double(gain),
+                 "Waverly curve=%s height=%.1f/%u gain=%.2f step=%lums color=%s mid=%u high=%u push=%.2f fft=%u gate=%.2f bin=%u rise=%.1f",
+                 compensated ? "comp" : "raw", double(tallest), unsigned(RNDR_Z), double(gain),
                  (unsigned long)stepMs, columnGradient ? "gradient-cycle" : "moving@1x",
                  unsigned(audio.midAttack), unsigned(audio.highAttack), double(extraReach), unsigned(fftEnabled),
                  double(boost.gate), boost.strongestBand, double(boost.strongestRise));
-        Audio::debug(audio, detail);
+        Audio::debug(audio, detail, 0, bins);
         // Keep servicing buttons/UART even between slower geometry updates.
         // showCube() supplies the existing 60 Hz limiter; no blocking sleep.
         showCube();
     }
 }
 
+namespace {
+    constexpr int surroundGroups = 8;
+    // The lowest four bins belong to the Surround GEQ sphere.
+    constexpr uint8_t surroundEdges[] = {4, 5, 6, 7, 8, 10, 12, 14, 16};
+
+    int surroundGroupAt(int x, int y, int thickness) {
+        // Reverse alternate faces so both faces agree at their shared corner.
+        if (y < thickness) return x * surroundGroups / RNDR_X;
+        if (x >= RNDR_X - thickness) return (RNDR_Y - 1 - y) * surroundGroups / RNDR_Y;
+        if (y >= RNDR_Y - thickness) return (RNDR_X - 1 - x) * surroundGroups / RNDR_X;
+        if (x < thickness) return y * surroundGroups / RNDR_Y;
+        return -1;
+    }
+}
+
+void Audio::animateFunkyPlank() {
+    constexpr uint32_t rowPeriodMs = 64;
+    // Lower bounds use the range seen in the reference ADC log.
+    constexpr uint8_t bucketStarts[] = {7, 12, 20, 28, 36, 44, 52};
+    const CRGB colors[] = {
+        CRGB::Black, CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00),
+        CRGB(0x00FF00), CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3)
+    };
+    constexpr char bucketNames[] = "-ROYGBIV";
+    CRGB history[RNDR_Z][surroundGroups] = {};
+    int newest = 0;
+    uint32_t lastRowMs = millis() - rowPeriodMs;
+    clearAll();
+    while (TestDemo::audioRoutineRunning()) {
+        const uint32_t now = millis();
+        if (uint32_t(now - lastRowMs) >= rowPeriodMs) {
+            lastRowMs = now;
+            const auto audio = RemoteInputs::audio();
+            uint8_t bins[16];
+            const bool compensated = displaySpectrum(audio, bins);
+            newest = (newest + 1) % RNDR_Z;
+            unsigned levels[surroundGroups];
+            char buckets[surroundGroups + 1] = {};
+            for (int group = 0; group < surroundGroups; ++group) {
+                const uint8_t level = max(bins[2 * group], bins[2 * group + 1]);
+                unsigned bucket = 0;
+                for (const auto start : bucketStarts) {
+                    if (level < start) break;
+                    ++bucket;
+                }
+                history[newest][group] = colors[bucket];
+                levels[group] = level;
+                buckets[group] = bucketNames[bucket];
+            }
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const int group = surroundGroupAt(x, y, 1);
+                    if (group < 0) continue;
+                    for (int age = 0; age < RNDR_Z; ++age) {
+                        setVoxel(x, y, RNDR_Z - 1 - age, history[(newest + RNDR_Z - age) % RNDR_Z][group]);
+                    }
+                }
+            }
+            char detail[128];
+            snprintf(detail, sizeof(detail),
+                     "Funky Plank curve=%s scroll=%lums levels=%u/%u/%u/%u/%u/%u/%u/%u colors=%s",
+                     compensated ? "comp" : "raw", (unsigned long)rowPeriodMs,
+                     levels[0], levels[1], levels[2], levels[3], levels[4], levels[5], levels[6], levels[7],
+                     buckets);
+            debug(audio, detail, 0, bins);
+        }
+        showCube();
+    }
+}
+
 void Audio::animateSurroundGEQ() {
-    constexpr uint8_t groupCount = 8;
-    // Keep the four lowest bands for the sphere. Preserve the first four
-    // non-bass bands individually and combine pairs higher up the spectrum.
-    constexpr uint8_t edges[] = {4, 5, 6, 7, 8, 10, 12, 14, 16};
-    const CRGB colors[groupCount] = {
+    drawGeqBars(false);
+}
+
+void Audio::animateInwardGEQ() {
+    drawGeqBars(true);
+}
+
+void Audio::drawGeqBars(bool inward) {
+    const int groupCount = inward ? 16 : surroundGroups;
+    const auto& edges = surroundEdges;
+    const CRGB surroundColors[surroundGroups] = {
         CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
         CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3), CRGB(0xFFFFFF)
     };
+    CRGB colors[16];
+    for (int group = 0; group < groupCount; ++group) {
+        colors[group] = inward ? ColorFromPalette(RainbowColors_p, group * 16, 255, LINEARBLEND)
+                               : surroundColors[group];
+    }
     // Two-deep blocks on the full cube. One-deep on the narrower cuboid
     // keeps the corner bands unambiguous and leaves room for the sphere.
-    const int thickness = min(RNDR_X, RNDR_Y) / groupCount;
+    const int thickness = min(RNDR_X, RNDR_Y) / surroundGroups;
     const float maxRadius = min(RNDR_CX, RNDR_CY) - thickness + 0.5f;
     const int maxBarHeight = RNDR_Z - 1; // Top row is available for the peak.
-    const TexturePlan plan = PaletteUtils::getRandomMovingTexturePlan();
-    TextureState texture(plan.sMode, plan.palette, 1.0f);
-    float peaks[groupCount] = {};
-    uint32_t peakMs[groupCount] = {};
+    // Anchor the rainbow to the cube as the bass shell moves.
+    const TextureState texture(MODE_SPATIAL_GRADIENT, RainbowColors_p);
+    float peaks[16] = {};
+    uint32_t peakMs[16] = {};
     // All voxels at the same distance share coverage, so store one value
     // per half-voxel shell instead of keeping another cube buffer.
     constexpr int shellCount = RNDR_X + RNDR_Y;
@@ -684,9 +905,10 @@ void Audio::animateSurroundGEQ() {
 
     while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio();
+        uint8_t displayBins[16];
+        const bool compensated = displaySpectrum(audio, displayBins);
         const uint32_t now = millis();
         const uint32_t elapsedMs = uint32_t(now - lastMs);
-        texture.advance(elapsedMs);
         lastMs = now;
 
         uint8_t bass = 0;
@@ -703,14 +925,31 @@ void Audio::animateSurroundGEQ() {
         // Loudness lifts all bars together. Spectrum strength determines
         // how much of the remaining height each bar fills.
         const float baseline = RNDR_Z * (3.0f / 16.0f) * min(1.0f, audio.volumeSm * gain / 255.0f);
-        float heights[groupCount];
-        int peakRows[groupCount];
+        const auto barStrength = [gain](float level) { return level * gain / 255.0f; };
+        float bassBarScale = 1.0f;
+        if (inward) {
+            uint8_t strongestSharedBand = 0;
+            for (int band = edges[0]; band < 16; ++band) {
+                strongestSharedBand = max(strongestSharedBand, displayBins[band]);
+            }
+            // Surround routes bass to the sphere. Keep those extra columns
+            // within the shared bars' range, with half-height headroom for
+            // bass-only passages. Scale the four together to preserve detail.
+            const float bassStrength = barStrength(bass);
+            const float bassCeiling = max(0.5f, min(1.0f, barStrength(strongestSharedBand)));
+            if (bassStrength > bassCeiling) bassBarScale = bassCeiling / bassStrength;
+        }
+        float heights[16];
+        int peakRows[16];
         for (uint8_t group = 0; group < groupCount; ++group) {
             uint8_t level = 0;
-            for (uint8_t band = edges[group]; band < edges[group + 1]; ++band) {
-                level = max(level, audio.fftResult[band]);
+            const int start = inward ? group : edges[group];
+            const int end = inward ? group + 1 : edges[group + 1];
+            for (int band = start; band < end; ++band) {
+                level = max(level, displayBins[band]);
             }
-            const float height = baseline + (maxBarHeight - baseline) * min(1.0f, level * gain / 255.0f);
+            const float strength = barStrength(level) * (inward && group < edges[0] ? bassBarScale : 1.0f);
+            const float height = baseline + (maxBarHeight - baseline) * min(1.0f, strength);
             // Keep one row lit without feeding the visual floor into peak tracking.
             heights[group] = max(1.0f, height);
             if (height >= peaks[group]) {
@@ -724,79 +963,98 @@ void Audio::animateSurroundGEQ() {
         }
 
         clearAll();
-        const int radiusSteps = int(radius * 2.0f);
-        const float fade = 255.0f * elapsedMs / recessionMs;
-        int outerShell = -1;
-        for (int shell = 0; shell < shellCount; ++shell) {
-            // Match the solid sphere's half-voxel radius and edge coverage.
-            const int edge = shell - radiusSteps + 2;
-            const int target = radius > 0.0f ? 255 - min(4, max(0, edge)) * 255 / 4 : 0;
-            sphereCoverage[shell] = max(float(target), sphereCoverage[shell] - fade);
-            if (sphereCoverage[shell] >= 1.0f) {
-                outerShell = shell;
+        if (!inward) {
+            const int radiusSteps = int(radius * 2.0f);
+            const float fade = 255.0f * elapsedMs / recessionMs;
+            int outerShell = -1;
+            for (int shell = 0; shell < shellCount; ++shell) {
+                // Match the solid sphere's half-voxel radius and edge coverage.
+                const int edge = shell - radiusSteps + 2;
+                const int target = radius > 0.0f ? 255 - min(4, max(0, edge)) * 255 / 4 : 0;
+                sphereCoverage[shell] = max(float(target), sphereCoverage[shell] - fade);
+                if (sphereCoverage[shell] >= 1.0f) {
+                    outerShell = shell;
+                }
             }
-        }
-        if (outerShell >= 0) {
-            const int distanceLimit = (outerShell + 1) * (outerShell + 1);
-            for (int x = 0; x < RNDR_X; ++x) {
-                const int dx = 2 * x - int(2 * RNDR_CX);
-                for (int y = 0; y < RNDR_Y; ++y) {
-                    const int dy = 2 * y - int(2 * RNDR_CY);
-                    const int xySquared = dx * dx + dy * dy;
-                    if (xySquared >= distanceLimit) continue;
-                    for (int z = 0; z < RNDR_Z; ++z) {
-                        const int dz = 2 * z - int(2 * RNDR_CZ);
-                        const int distanceSquared = xySquared + dz * dz;
-                        if (distanceSquared >= distanceLimit) continue;
-                        const int shell = int(sqrtf(float(distanceSquared)));
-                        const uint8_t coverage = uint8_t(sphereCoverage[shell]);
-                        if (coverage > 0) {
-                            CRGB color = texture.getColor(x, y, z);
-                            color.nscale8(coverage);
-                            setVoxel(x, y, z, color);
+            if (outerShell >= 0) {
+                const int distanceLimit = (outerShell + 1) * (outerShell + 1);
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const int dx = 2 * x - int(2 * RNDR_CX);
+                    for (int y = 0; y < RNDR_Y; ++y) {
+                        const int dy = 2 * y - int(2 * RNDR_CY);
+                        const int xySquared = dx * dx + dy * dy;
+                        if (xySquared >= distanceLimit) continue;
+                        for (int z = 0; z < RNDR_Z; ++z) {
+                            const int dz = 2 * z - int(2 * RNDR_CZ);
+                            const int distanceSquared = xySquared + dz * dz;
+                            if (distanceSquared >= distanceLimit) continue;
+                            const int shell = int(sqrtf(float(distanceSquared)));
+                            const uint8_t coverage = uint8_t(sphereCoverage[shell]);
+                            if (coverage > 0) {
+                                CRGB color = texture.getColor(x, y, z);
+                                color.nscale8(coverage);
+                                setVoxel(x, y, z, color);
+                            }
                         }
                     }
                 }
             }
         }
-        // Traverse each footprint voxel once. Reversing successive faces
-        // gives their shared corners the same band at either side of a seam.
-        for (int y = 0; y < RNDR_Y; ++y) {
-            for (int x = 0; x < RNDR_X; ++x) {
-                int group;
-                if (y < thickness) {
-                    group = x * groupCount / RNDR_X;
-                } else if (x >= RNDR_X - thickness) {
-                    group = (RNDR_Y - 1 - y) * groupCount / RNDR_Y;
-                } else if (y >= RNDR_Y - thickness) {
-                    group = (RNDR_X - 1 - x) * groupCount / RNDR_X;
-                } else if (x < thickness) {
-                    group = y * groupCount / RNDR_Y;
-                } else {
-                    continue;
+        const auto drawBar = [&](int x, int y, int group) {
+            const auto plot = [&](int z, CRGB color) {
+                if (inward && (RNDR_X < 16 || RNDR_Y < 16)) color += getVoxel(x, y, z);
+                setVoxel(x, y, z, color);
+            };
+            const float height = heights[group];
+            for (int z = 0; z < RNDR_Z && z < height; ++z) {
+                CRGB color = colors[group];
+                color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
+                plot(z, color);
+            }
+            // Draw the peak cap above the bar body.
+            const int peakRow = peakRows[group];
+            if (peaks[group] >= 1.0f) {
+                CRGB cap = colors[group];
+                // Fade the cap in above the idle row so tiny peaks cannot flash.
+                cap.nscale8(uint8_t(255.0f * min(1.0f, peaks[group] - 1.0f)));
+                plot(peakRow, cap);
+            }
+        };
+        if (inward) {
+            for (int block = 0; block < 16; ++block) {
+                for (int band = 0; band < 16; ++band) {
+                    const int tile = AudioLayouts::orbitInwardTiles[band];
+                    const int x = lroundf(AudioLayouts::inwardCoordinate(block % 4, tile % 4, RNDR_X));
+                    const int y = lroundf(AudioLayouts::inwardCoordinate(block / 4, tile / 4, RNDR_Y));
+                    drawBar(x, y, band);
                 }
-                const float height = heights[group];
-                for (int z = 0; z < RNDR_Z && z < height; ++z) {
-                    CRGB color = colors[group];
-                    color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
-                    setVoxel(x, y, z, color);
-                }
-                // Draw the peak cap above the bar body.
-                const int peakRow = peakRows[group];
-                if (peaks[group] >= 1.0f) {
-                    CRGB cap = colors[group];
-                    // Fade the cap in above the idle row so tiny peaks cannot flash.
-                    cap.nscale8(uint8_t(255.0f * min(1.0f, peaks[group] - 1.0f)));
-                    setVoxel(x, y, peakRow, cap);
+            }
+        } else {
+            // Traverse each footprint voxel once. Reversing successive faces
+            // gives their shared corners the same band at either side of a seam.
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const int group = surroundGroupAt(x, y, thickness);
+                    if (group >= 0) drawBar(x, y, group);
                 }
             }
         }
-        char detail[176];
-        snprintf(detail, sizeof(detail), "GEQ gain=%.2f bassGain=%.2f baseline=%.2f bass=%u radius=%.2f bars=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
-                 double(gain), double(bassGain), double(baseline), unsigned(bass), double(radius),
-                 double(heights[0]), double(heights[1]), double(heights[2]), double(heights[3]),
-                 double(heights[4]), double(heights[5]), double(heights[6]), double(heights[7]));
-        Audio::debug(audio, detail);
+        char detail[192];
+        if (inward) {
+            snprintf(detail, sizeof(detail),
+                     "GEQ Inward curve=%s gain=%.2f baseline=%.2f bassScale=%.2f bars=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+                     compensated ? "comp" : "raw", double(gain), double(baseline), double(bassBarScale),
+                     double(heights[0]), double(heights[1]), double(heights[2]), double(heights[3]),
+                     double(heights[4]), double(heights[5]), double(heights[6]), double(heights[7]),
+                     double(heights[8]), double(heights[9]), double(heights[10]), double(heights[11]),
+                     double(heights[12]), double(heights[13]), double(heights[14]), double(heights[15]));
+        } else {
+            snprintf(detail, sizeof(detail), "GEQ curve=%s gain=%.2f bassGain=%.2f baseline=%.2f bass=%u radius=%.2f bars=%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f/%.1f",
+                     compensated ? "comp" : "raw", double(gain), double(bassGain), double(baseline), unsigned(bass), double(radius),
+                     double(heights[0]), double(heights[1]), double(heights[2]), double(heights[3]),
+                     double(heights[4]), double(heights[5]), double(heights[6]), double(heights[7]));
+        }
+        Audio::debug(audio, detail, 0, displayBins);
         showCube();
     }
 }

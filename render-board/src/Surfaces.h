@@ -350,6 +350,43 @@ public:
     static void animateHyperbolicParaboloid(uint32_t durationMs, float step, Orientation axis, ShaderMode sMode, uint32_t speedMs = 0) { float sx = (axis == AXIS_X) ? step : 0.0f; float sy = (axis == AXIS_Y) ? step : 0.0f; float sz = (axis == AXIS_Z) ? step : 0.0f; animateHyperbolicParaboloidInternal(durationMs, sx, sy, sz, sMode, PaletteUtils::getSmartPalette(sMode), speedMs); }
 
     // --- Sine Waves ---
+    static void animateRockingSineWave(uint32_t durationMs, float waveSpeed) {
+        constexpr float rockPeriodMs = 8000.0f;
+        constexpr float maxTilt = 25.0f * PI / 180.0f;
+        const float extent = min(RNDR_X, RNDR_Y);
+        const float angleScale = 65536.0f / extent;
+        // Leave vertical room for the lifted edge of the rocking sheet.
+        const float amplitude = min(RNDR_CZ - 0.5f, extent * 0.28f);
+        TextureState tex(MODE_LINEAR_FLOW, RainbowColors_p, 4.0f);
+        const uint32_t start = millis();
+        uint32_t lastFrame = start;
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
+            const uint32_t now = millis();
+            const uint32_t elapsed = now - start;
+            tex.advance(now - lastFrame);
+            lastFrame = now;
+            const uint16_t phase = uint16_t(fmodf(waveSpeed * elapsed, 360.0f) * (65536.0f / 360.0f));
+            const float angle = maxTilt * sinf(TWO_PI * elapsed / rockPeriodMs);
+            const float sine = sinf(angle), cosine = cosf(angle);
+            clearAll();
+            for (int x = 0; x < RNDR_X; ++x) {
+                const float u = x - RNDR_CX;
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    const float v = y - RNDR_CY;
+                    const float distance = sqrtf(u * u + v * v);
+                    const float height = GeometryEngine::sineWaveHeight(distance, angleScale, phase, amplitude);
+                    const float wy = RNDR_CY + v * cosine - height * sine;
+                    const float wz = RNDR_CZ + v * sine + height * cosine;
+                    const CRGB color = tex.getColor(x, constrain(int(lroundf(wy)), 0, RNDR_Y - 1),
+                                                    constrain(int(lroundf(wz)), 0, RNDR_Z - 1));
+                    GeometryEngine::drawWuVoxel(x * 256, lroundf(wy * 256), lroundf(wz * 256), color);
+                }
+            }
+            showCube();
+            yield();
+        }
+    }
+
     static void animateSineWave(uint32_t durationMs, Orientation axis, WaveShape shape, int period, CRGBPalette16 pal, ShaderMode sMode, float waveSpeed = 0.8f) { animateSineWaveInternal(durationMs, axis, shape, period, sMode, pal, waveSpeed); }
     static void animateSineWave(uint32_t durationMs, Orientation axis, WaveShape shape, int period, CRGB::HTMLColorCode colorCode, float waveSpeed = 0.8f) { animateSineWaveInternal(durationMs, axis, shape, period, MODE_SOLID, CRGBPalette16(CRGB(colorCode)), waveSpeed); }
     static void animateSineWave(uint32_t durationMs, Orientation axis, WaveShape shape, int period, CRGB color, float waveSpeed = 0.8f) { animateSineWaveInternal(durationMs, axis, shape, period, MODE_SOLID, CRGBPalette16(color), waveSpeed); }

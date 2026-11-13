@@ -93,6 +93,16 @@ namespace {
         shapes[random(3)]();
     }
 
+    void drawRandomBouncingBalls() {
+        using Pattern = Audio::BouncingBallsPattern;
+        Audio::bouncingBalls(random(2) == 0 ? Pattern::Clockwise : Pattern::OrbitInward);
+    }
+
+    void drawRandomGeq() {
+        if (random(3) < 2) Audio::animateSurroundGEQ();
+        else Audio::animateInwardGEQ();
+    }
+
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
         {true, "Waverly", &drawWaverly},
@@ -101,14 +111,15 @@ namespace {
         {true, "Puddle Peak", &Audio::animatePuddlePeak},
         {true, "Breathe", &drawBreathe},
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
-        {true, "Surround GEQ", &Audio::animateSurroundGEQ},
         {true, "Corner Burst", &drawRandomCornerBurst},
         {true, "Drift Rose Volume", &Audio::animateDriftRose},
         {false, "Cylinder Attacks", &Audio::animateCylinder},
         {true, "Plasmoid Depth Mirror", &Audio::animatePlasmoidMirrored},
-        {true, "Plasmoid Single Strip", &Audio::animatePlasmoid},
-        {true, "PS GEQ Nova", &Audio::animateParticleGeqNova},
-        {true, "PS GEQ 2D", &Audio::animateParticleGeq},
+        {true, "Bouncing Balls Audio", &drawRandomBouncingBalls},
+        {true, "Funky Plank", &Audio::animateFunkyPlank},
+        {true, "GEQ", &drawRandomGeq},
+        {true, "PS GEQ Inward 16", &Audio::animateParticleGeqRandom},
+        {true, "PS GEQ Inward 4", &Audio::animateParticleGeqClusters},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;
@@ -146,14 +157,10 @@ namespace {
 
     void advanceAudio() {
         ensureAudioDeck();
-        if (!audioDeck.empty() && audioRoutines[audioDeck.current()].draw == &drawWaverly) {
-            // Next/expiry leaves Waverly after one look. Select afresh on its
-            // next visit; source/mode restarts keep the remembered choice.
-            waverlyLookSelected = false;
-        }
-        if (!audioDeck.empty() && audioRoutines[audioDeck.current()].draw == &drawBreathe) {
-            breathePatternSelected = false;
-        }
+        if (audioDeck.empty()) return;
+        const auto previous = audioRoutines[audioDeck.current()].draw;
+        if (previous == &drawWaverly) waverlyLookSelected = false;
+        if (previous == &drawBreathe) breathePatternSelected = false;
         audioDeck.advance(appliedOrder == TestDemo::PlaybackOrder::Shuffled, pickAudioIndex);
     }
 }

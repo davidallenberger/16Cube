@@ -5,6 +5,20 @@
 #include "UARTReceiver.h"
 #include "Streamers.h"
 
+namespace AudioLayouts {
+    // Top view, row-major tile indices. Each successive pair moves clockwise
+    // on opposing paths, then turns inward to the central four tiles.
+    constexpr uint8_t orbitInwardTiles[16] = {0, 15, 1, 14, 2, 13, 3, 12,
+                                             7, 8, 11, 4, 10, 5, 9, 6};
+
+    inline float inwardCoordinate(int block, int column, int extent, int blocksPerAxis = 4) {
+        const int first = block * extent / blocksPerAxis;
+        const int width = (block + 1) * extent / blocksPerAxis - first;
+        const int columnsPerBlock = 16 / blocksPerAxis;
+        return first + float(column * (width - 1)) / (columnsPerBlock - 1);
+    }
+}
+
 // Static animation collection, like Streamers and Surfaces. Callers do not
 // need to construct an Audio object.
 // Future volume/frequency/kick routines can be added as independent methods.
@@ -22,8 +36,12 @@ class Audio {
         float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
         float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
+        float particleGeqGain = 3.0f;      // FFT gain for PS GEQ's launch speed and rate.
+        float particleGeqBrightness = 2.5f; // Boost particle light before the spatial blend.
+        bool spectrumCompensationEnabled = true; // Display compensation for GEQs, Waverly and Julia.
         uint8_t plasmoidIntensity = 128;    // WLED's # of pixels setting. 128 gives a cutoff of 2 * VolumeSm.
         uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
+        uint8_t bouncingBallsVolumeForFullHeight = 75; // VolumeSm where a hop reaches the ceiling.
         bool midrangeBoostEnabled = true; // Shared by audio Julia, Waverly and Drift Rose.
         float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
@@ -80,11 +98,15 @@ class Audio {
     static void animateJulia();
     static void animateDriftRose();
     static void animateCylinder();
-    static void animatePlasmoid();
     static void animatePlasmoidMirrored();
     static void animateSurroundGEQ();
-    static void animateParticleGeq();
-    static void animateParticleGeqNova();
+    static void animateFunkyPlank();
+    static void animateInwardGEQ();
+    enum class BouncingBallsPattern { Clockwise, OrbitInward };
+    static void bouncingBalls(BouncingBallsPattern pattern);
+    static void animateParticleGeqClusters();
+    static void animateParticleGeqRandom();
+    static bool displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]);
     static void animateCornerBurst();
     static void animateCornerBurstSphere();
     static void animateCornerBurstBox();
@@ -106,6 +128,8 @@ class Audio {
     // same audio values that produced this frame.
     // A nonzero attack number adds a timestamped record to the serial stream.
     static void debug(const RemoteInputs::AudioFrame &audio, const char *detail = "",
-                      uint32_t attackNumber = 0);
+                      uint32_t attackNumber = 0, const uint8_t* displayBins = nullptr);
 
+private:
+    static void drawGeqBars(bool inward);
 };

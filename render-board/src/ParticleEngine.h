@@ -223,34 +223,39 @@ namespace ParticleEngine {
         }
     }
 
+    enum class ParticleBlend { Add, Brightest };
+
     // Sample a soft sphere in its local bounds so larger heads stay bright
     // even when their centers fall between voxels.
     inline void drawBall(Point3 center, float radius, CRGB color, bool wrapX,
-                         bool fullBrightnessCore = false) {
+                         bool fullBrightnessCore = false, float horizontalScale = 1.0f,
+                         ParticleBlend blend = ParticleBlend::Add) {
         const float outer = fullBrightnessCore ? max(1.0f, radius + 0.5f) : radius + 0.5f;
+        const float horizontalOuter = outer * horizontalScale;
+        const float inverseHorizontalScale = 1.0f / horizontalScale;
         const float inner = max(0.0f, radius - 0.5f);
         const float outerSq = outer * outer;
         float innerSq = inner * inner;
         if (fullBrightnessCore) {
             // Expand the core just enough to reach the closest voxel center.
-            const float dx = center.x - roundf(center.x);
-            const float dy = center.y - roundf(center.y);
+            const float dx = (center.x - roundf(center.x)) * inverseHorizontalScale;
+            const float dy = (center.y - roundf(center.y)) * inverseHorizontalScale;
             const float dz = center.z - roundf(center.z);
             innerSq = max(innerSq, dx * dx + dy * dy + dz * dz);
         }
         const float fadeScale = 255.0f / (outerSq - innerSq);
-        const int firstX = int(ceilf(center.x - outer));
-        const int lastX = int(floorf(center.x + outer));
-        const int firstY = max(0, int(ceilf(center.y - outer)));
-        const int lastY = min(RNDR_Y - 1, int(floorf(center.y + outer)));
+        const int firstX = int(ceilf(center.x - horizontalOuter));
+        const int lastX = int(floorf(center.x + horizontalOuter));
+        const int firstY = max(0, int(ceilf(center.y - horizontalOuter)));
+        const int lastY = min(RNDR_Y - 1, int(floorf(center.y + horizontalOuter)));
         const int firstZ = max(0, int(ceilf(center.z - outer)));
         const int lastZ = min(RNDR_Z - 1, int(floorf(center.z + outer)));
         for (int x = firstX; x <= lastX; ++x) {
             if (!wrapX && (x < 0 || x >= RNDR_X)) continue;
             const int voxelX = wrapX ? (x % RNDR_X + RNDR_X) % RNDR_X : x;
-            const float dx = x - center.x;
+            const float dx = (x - center.x) * inverseHorizontalScale;
             for (int y = firstY; y <= lastY; ++y) {
-                const float dy = y - center.y;
+                const float dy = (y - center.y) * inverseHorizontalScale;
                 const float xySq = dx * dx + dy * dy;
                 for (int z = firstZ; z <= lastZ; ++z) {
                     const float dz = z - center.z;
@@ -260,7 +265,12 @@ namespace ParticleEngine {
                     if (!fullBrightnessCore || xySq + dz * dz > innerSq) {
                         lit.nscale8(uint8_t(min(255.0f, coverage)));
                     }
-                    setVoxel(voxelX, y, z, getVoxel(voxelX, y, z) + lit);
+                    const CRGB existing = getVoxel(voxelX, y, z);
+                    if (blend == ParticleBlend::Add) {
+                        setVoxel(voxelX, y, z, existing + lit);
+                    } else if (max(lit.r, max(lit.g, lit.b)) > max(existing.r, max(existing.g, existing.b))) {
+                        setVoxel(voxelX, y, z, lit);
+                    }
                 }
             }
         }

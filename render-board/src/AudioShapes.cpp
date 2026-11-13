@@ -29,11 +29,12 @@ namespace {
         // Sample every non-solid shader. Skip the active one so successive
         // texture changes are visible even when they draw the same palette.
         constexpr uint8_t firstMode = MODE_UNIFORM_CYCLE;
-        constexpr uint8_t modeCount = MODE_DISTORTION_WAVES - firstMode + 1;
+        constexpr uint8_t modeCount = SHADER_MODE_COUNT - firstMode;
         const uint8_t modeIndex = response.caps.mode == MODE_SOLID ? random8(modeCount) :
             (response.caps.mode - firstMode + random8(1, modeCount)) % modeCount;
         response.caps.mode = ShaderMode(firstMode + modeIndex);
-        response.caps.palette = PaletteUtils::getRandomPalette();
+        response.caps.palette = response.caps.mode == MODE_SOAP || response.caps.mode == MODE_WAVING_CELL
+            ? PaletteUtils::getSmartPalette(response.caps.mode) : PaletteUtils::getRandomPalette();
     }
 
     float updateCylinder(TextureState &texture, uint32_t deltaMs, void *context) {

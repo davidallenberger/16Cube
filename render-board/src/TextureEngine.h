@@ -13,8 +13,58 @@ enum ShaderMode {
     MODE_SCATTER,         // Digital Hash Glitter (Random)
     MODE_DISTANCE_FIELD,  // 3D Lava Lamp Cores (Metaballs) - moving texture
     MODE_HIPHOTIC,         // Self-contained generative math - moving texture: Use Hiphotic when you want a smooth, highly structured, full-color mathematical gradient washing across a shape. 
-    MODE_DISTORTION_WAVES // 3D Euclidean Interference Patterns: Use Distortion Waves when you want an organic, liquid-like, palette-specific texture where expanding rings collide and warp against each other.
+    MODE_DISTORTION_WAVES, // 3D Euclidean interference patterns
+    MODE_SOAP,
+    MODE_WAVING_CELL,
+    SHADER_MODE_COUNT
 };
+
+namespace TextureDetail {
+    inline uint8_t soapNoise(uint32_t seed, uint32_t phase, int32_t x, int32_t y, int32_t z) {
+        return inoise16(seed + phase + uint32_t(x), seed + 0x2356B1u + phase + uint32_t(y),
+                        seed + 0x61798Du + phase + uint32_t(z)) >> 8;
+    }
+
+    inline uint8_t soapPalettePosition(uint8_t noise) {
+        return uint8_t(3 * (255 - noise));
+    }
+
+    // Sample the displaced dye field directly so independently timed brushes
+    // can coexist without the standalone Soap animation's history buffer.
+    inline uint8_t soapIndex(uint8_t x, uint8_t y, uint8_t z, uint32_t phase) {
+        constexpr uint32_t seed = 0x268000u;
+        constexpr int32_t displacement = 600;
+        int32_t sx = x * (160000 / RNDR_X);
+        int32_t sy = y * (160000 / RNDR_Y);
+        int32_t sz = z * (160000 / RNDR_Z);
+        // Trace backwards through the three axis shifts, sampling each lane
+        // at its edge as in the history-based version.
+        sz += (int32_t(soapNoise(seed, phase, sx, sy, 0)) - 128) * displacement;
+        sy += (int32_t(soapNoise(seed, phase, sx, 0, sz)) - 128) * displacement;
+        sx += (int32_t(soapNoise(seed, phase, 0, sy, sz)) - 128) * displacement;
+        return soapPalettePosition(soapNoise(seed, phase, sx, sy, sz));
+    }
+
+    inline uint8_t wavingCellIndex(uint8_t x, uint8_t y, uint8_t z, float elapsedMs) {
+#ifdef HARDWARE_BURNCUBE
+        const int column = y, depth = x;
+        constexpr int depthSize = RNDR_X;
+#else
+        const int column = x, depth = y;
+        constexpr int depthSize = RNDR_Y;
+#endif
+        const int row = RNDR_Z - 1 - z;
+        const uint32_t time = uint32_t(elapsedMs * (129.0f / 32.0f));
+        const uint8_t depthTime = uint32_t(elapsedMs / 19.0f);
+        const int depthPhase = 220 * depth / (depthSize - 1);
+        const int depthWave = (int(sin8(uint8_t(depthPhase + depthTime))) - int(sin8(depthTime))) / 2;
+        const int anchorShift = (int(cos8(uint8_t(depthPhase))) - 255) / 8;
+        const uint8_t bend = sin8(uint8_t((((uint32_t(row) << 8) + time) * 9) >> 8));
+        const uint8_t anchor = cos8(uint8_t(row * 17 + anchorShift));
+        const uint8_t wave = sin8(uint8_t(column * 17 + bend + depthWave));
+        return uint8_t(wave + anchor + (time >> 8));
+    }
+}
 
 // ==========================================
 // UNIFIED PALETTE UTILITIES
@@ -69,6 +119,18 @@ public:
     }
 
     static CRGBPalette16 getSmartPalette(ShaderMode sMode) {
+        if (sMode == MODE_SOAP) {
+            switch (random8(4)) {
+                case 0: strcpy(getPaletteNameBuffer(), "Rainbow"); return RainbowColors_p;
+                case 1: strcpy(getPaletteNameBuffer(), "Party (Neon Mix)"); return PartyColors_p;
+                case 2: strcpy(getPaletteNameBuffer(), "Ocean (Blues/Greens)"); return OceanColors_p;
+                default: strcpy(getPaletteNameBuffer(), "Lava (Reds/Oranges)"); return LavaColors_p;
+            }
+        }
+        if (sMode == MODE_WAVING_CELL) {
+            strcpy(getPaletteNameBuffer(), "Rainbow");
+            return RainbowColors_p;
+        }
         if (sMode == MODE_SOLID || sMode == MODE_SPATIAL_GRADIENT) {
             return CRGBPalette16(getRandomVibrantColor());
         }
@@ -79,57 +141,48 @@ public:
         return PartyColors_p; 
     }
    
+    static ShaderMode getRandomNonSolidShader() {
+        return ShaderMode(random8(MODE_UNIFORM_CYCLE, SHADER_MODE_COUNT));
+    }
+
    static TexturePlan getRandomNonSolidTexturePlan() {
         TexturePlan plan;
-        uint8_t m = random8(8); // Now rolling evenly across all 8 non-solid shaders
+        plan.sMode = getRandomNonSolidShader();
         
-        switch (m) {
-            case 0:
-                plan.sMode = MODE_UNIFORM_CYCLE;
+        switch (plan.sMode) {
+            case MODE_UNIFORM_CYCLE:
+                strcpy(getPaletteNameBuffer(), "Rainbow");
                 plan.palette = RainbowColors_p; 
                 break;
-            case 1:
-                plan.sMode = MODE_SPATIAL_GRADIENT;
+            case MODE_SPATIAL_GRADIENT:
+            case MODE_LINEAR_FLOW:
+            case MODE_NOISE_FIELD:
+            case MODE_SCATTER:
+            case MODE_DISTORTION_WAVES:
                 plan.palette = PaletteUtils::getRandomOrganicPalette();
                 break;
-            case 2:
-                plan.sMode = MODE_LINEAR_FLOW;
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
-                break;
-            case 3:
-                plan.sMode = MODE_NOISE_FIELD;
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
-                break;
-            case 4:
-                plan.sMode = MODE_SCATTER;
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
-                break;
-            case 5:
-                plan.sMode = MODE_DISTANCE_FIELD;
+            case MODE_HIPHOTIC:
+                strcpy(getPaletteNameBuffer(), "Hiphotic Native");
                 plan.palette = PartyColors_p;
                 break;
-            case 6:
-                plan.sMode = MODE_HIPHOTIC;
-                plan.palette = PartyColors_p;
-                break;
-            case 7:
-                plan.sMode = MODE_DISTORTION_WAVES;
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
+            default:
+                plan.palette = getSmartPalette(plan.sMode);
                 break;
         }
         return plan;
     }
 
     // Moving, spatially varied paints for volume-driven shapes. Every
-    // palette-driven mode can use Rainbow or any of the four organic palettes.
+    // mode uses its own palette policy or the general moving texture palettes.
     // Hiphotic generates its own hues. Solid, uniform cycle and scatter are
     // deliberately outside this pool so the shape retains spatial color detail.
     static TexturePlan getRandomMovingTexturePlan() {
         const ShaderMode modes[] = {MODE_LINEAR_FLOW, MODE_NOISE_FIELD,
-            MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
+            MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES, MODE_SOAP, MODE_WAVING_CELL};
         TexturePlan plan;
-        plan.sMode = modes[random8(5)];
-        plan.palette = getRandomPalette();
+        plan.sMode = modes[random8(sizeof(modes) / sizeof(modes[0]))];
+        plan.palette = plan.sMode == MODE_SOAP || plan.sMode == MODE_WAVING_CELL
+            ? getSmartPalette(plan.sMode) : getRandomPalette();
         if (plan.sMode == MODE_HIPHOTIC) {
             strcpy(getPaletteNameBuffer(), "Hiphotic Native");
         }
@@ -326,6 +379,15 @@ struct TextureState {
 
     inline CRGB getColor(uint8_t x, uint8_t y, uint8_t z) const {
         if (mode == MODE_SOLID)  return palette[0];
+
+        if (mode == MODE_SOAP) {
+            return ColorFromPalette(palette, TextureDetail::soapIndex(x, y, z, uint32_t(internalPhase * 240.0f)),
+                                    255, LINEARBLEND);
+        }
+        if (mode == MODE_WAVING_CELL) {
+            return ColorFromPalette(palette, TextureDetail::wavingCellIndex(x, y, z, internalPhase * 5.0f),
+                                    255, LINEARBLEND);
+        }
         
         if (mode == MODE_HIPHOTIC) { 
             uint8_t math_val = sin8(hX[x] + hY[y] + hZ[z] + ((phase * 3) / 4));
@@ -391,14 +453,13 @@ public:
         + RNDR_X * RNDR_Y + RNDR_X * RNDR_Z + RNDR_Y * RNDR_Z;
 
     SoapTextureState(const CRGBPalette16 &palette, uint8_t *scratch, uint32_t seed)
-        : palette_(palette), field_(scratch),
-          origin_{seed, seed + 0x2356B1u, seed + 0x61798Du} {
+        : palette_(palette), field_(scratch), seed_(seed) {
         const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
         for (int z = 0; z < RNDR_Z; ++z) {
             for (int y = 0; y < RNDR_Y; ++y) {
                 for (int x = 0; x < RNDR_X; ++x) {
                     const int position[] = {x, y, z};
-                    field_[index(x, y, z)] = palettePosition(noiseAt(position, dims));
+                    field_[index(x, y, z)] = TextureDetail::soapPalettePosition(noiseAt(position, dims));
                 }
             }
         }
@@ -422,7 +483,7 @@ public:
 private:
     CRGBPalette16 palette_;
     uint8_t *field_;
-    uint32_t origin_[3];
+    uint32_t seed_;
     uint32_t phase_ = 0;
 
     static size_t index(int x, int y, int z) {
@@ -430,15 +491,8 @@ private:
     }
 
     uint8_t noiseAt(const int position[3], const int dims[3]) const {
-        uint32_t sample[3];
-        for (int axis = 0; axis < 3; ++axis) {
-            sample[axis] = origin_[axis] + phase_ + uint32_t(position[axis] * (160000 / dims[axis]));
-        }
-        return inoise16(sample[0], sample[1], sample[2]) >> 8;
-    }
-
-    static uint8_t palettePosition(uint8_t noise) {
-        return uint8_t(3 * (255 - noise));
+        return TextureDetail::soapNoise(seed_, phase_, position[0] * (160000 / dims[0]),
+                                        position[1] * (160000 / dims[1]), position[2] * (160000 / dims[2]));
     }
 
     void sweep(uint32_t deltaMs, bool initialize) {
@@ -471,7 +525,7 @@ private:
                         if (source >= 0 && source < dims[axis]) return base[source * stride];
                         // Newly exposed edges take fresh dye from the noise field.
                         position[axis] = source;
-                        return palettePosition(noiseAt(position, dims));
+                        return TextureDetail::soapPalettePosition(noiseAt(position, dims));
                     };
                     for (int i = 0; i < dims[axis]; ++i) {
                         const uint8_t a = sample(i + whole);

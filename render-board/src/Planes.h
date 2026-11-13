@@ -241,46 +241,15 @@ public:
         }
     }
 
-    // A depth wave enters the WLED color formula alongside its original
-    // bend and stationary ripple. Its contribution is zero on the front face.
     static void animateWavingCell(uint32_t durationMs, uint32_t stepMs = 24) {
-        constexpr uint32_t speed = 128;
-        constexpr uint32_t timeDivisor = 4;
-        constexpr int horizontalPitch = 128 / 16 + 9;
-        constexpr int bendPitch = 128 / 16 + 1;
-        constexpr int anchorPitch = 16 + 1;
-#ifdef HARDWARE_BURNCUBE
-        constexpr uint8_t faceAxis = 0;
-#else
-        constexpr uint8_t faceAxis = 1;
-#endif
-        constexpr int width = faceAxis == 1 ? RNDR_X : RNDR_Y;
-        constexpr int depth = faceAxis == 1 ? RNDR_Y : RNDR_X;
-        const CRGBPalette16 palette = RainbowColors_p;
+        TextureState texture(MODE_WAVING_CELL, RainbowColors_p);
         const uint32_t started = millis();
+        uint32_t previous = started;
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t elapsed = millis() - started;
-            const uint32_t time = uint32_t(uint64_t(elapsed) * (speed + 1) / (8 * timeDivisor));
-            const uint8_t colorOffset = uint8_t(time >> 8);
-            const uint8_t depthTime = uint8_t(elapsed / 19);
-            const int frontWave = sin8(depthTime);
-            for (int d = 0; d < depth; ++d) {
-                const int depthPhase = 220 * d / (depth - 1);
-                const int depthWave = (int(sin8(uint8_t(depthPhase + depthTime))) - frontWave) / 2;
-                const int anchorShift = (int(cos8(uint8_t(depthPhase))) - 255) / 8;
-                for (int row = 0; row < RNDR_Z; ++row) {
-                    const uint8_t bend = sin8(uint8_t((((uint32_t(row) << 8) + time) * bendPitch) >> 8));
-                    const uint8_t anchor = cos8(uint8_t(row * anchorPitch + anchorShift));
-                    const int z = RNDR_Z - 1 - row;
-                    for (int column = 0; column < width; ++column) {
-                        const uint8_t wave = sin8(uint8_t(column * horizontalPitch + bend + depthWave));
-                        const uint8_t hue = uint8_t(wave + anchor + colorOffset);
-                        const CRGB color = ColorFromPalette(palette, hue, 255, LINEARBLEND);
-                        if (faceAxis == 1) setVoxel(column, d, z, color);
-                        else setVoxel(d, column, z, color);
-                    }
-                }
-            }
+            const uint32_t now = millis();
+            texture.advance(now - previous);
+            previous = now;
+            for (uint8_t y = 0; y < RNDR_Y; ++y) drawPlane(1, y, texture);
             showCube();
             delay(stepMs);
         }
@@ -289,10 +258,7 @@ public:
     static void animateSoapTexture(uint32_t durationMs, uint32_t stepMs = 24) {
         static_assert(SoapTextureState::ScratchBytes <= SHARED_APP_MEMORY_BYTES,
                       "The Soap field must fit the animation arena");
-        const TProgmemRGBPalette16 *const palettes[] = {
-            &RainbowColors_p, &PartyColors_p, &OceanColors_p, &LavaColors_p
-        };
-        const auto &palette = *palettes[random8(sizeof(palettes) / sizeof(palettes[0]))];
+        const auto palette = PaletteUtils::getSmartPalette(MODE_SOAP);
         SoapTextureState soap(palette, SharedAppMemory, uint32_t(random16()) << 12);
         const uint32_t started = millis();
         uint32_t previous = started;

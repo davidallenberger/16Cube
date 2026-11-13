@@ -10,8 +10,8 @@
 
 // The host playback fixture isolates the effects it exercises from the shape and particle renderers.
 void Audio::animateCylinder() {}
-void Audio::animateParticleGeq() {}
-void Audio::animateParticleGeqNova() {}
+void Audio::animateParticleGeqClusters() {}
+void Audio::animateParticleGeqRandom() {}
 
 SerialStub Serial;
 SerialStub Serial2;
@@ -32,6 +32,14 @@ static bool variedPlacement = false;
 static uint32_t placementState = 1;
 static CRGB buffer[RNDR_X * RNDR_Y * RNDR_Z];
 static bool checkWaverly = false;
+static bool checkBouncingBalls = false;
+static bool checkBouncingBallsPairs = false;
+static std::vector<unsigned> ballLaunches;
+static unsigned airborneSections = 0;
+static bool ballHeightVaries = false;
+static bool sawFirstLift = false;
+static bool sawFirstLanding = false;
+static bool sawFirstRebound = false;
 static std::vector<unsigned> lightTotals;
 static bool drawn[RNDR_X * RNDR_Y * RNDR_Z] = {};
 static unsigned uniqueThisFrame = 0;
@@ -130,6 +138,64 @@ void fadeAll(uint8_t amount) {
 }
 
 void showCube() {
+    if (checkBouncingBalls) {
+        assert(voxelsThisFrame == RNDR_X * RNDR_Y);
+        int heights[8];
+        std::fill(heights, heights + 8, -1);
+        unsigned activePerTile[16] = {};
+        unsigned inFlight = 0;
+        for (int y = 0; y < RNDR_Y; ++y) {
+            for (int x = 0; x < RNDR_X; ++x) {
+                int height = -1;
+                bool moving = false;
+                for (int z = 0; z < RNDR_Z; ++z) {
+                    const auto color = getVoxel(x, y, z);
+                    if (color.r || color.g || color.b) {
+                        assert(height == -1);
+                        height = z;
+                        moving = color.r > 36; // Host palette stub is grayscale.
+                    }
+                }
+                assert(height >= 0);
+                const int column = ((x + 1) * 4 - 1) / RNDR_X;
+                const int section = y < RNDR_Y / 2 ? column : 7 - column;
+                ballHeightVaries |= heights[section] >= 0 && heights[section] != height;
+                heights[section] = height;
+                if (moving) {
+                    if (checkBouncingBallsPairs) {
+                        const int row = ((y + 1) * 4 - 1) / RNDR_Y;
+                        const int tile = row * 4 + column;
+                        inFlight |= 1u << tile;
+                        ++activePerTile[tile];
+                    } else {
+                        inFlight |= 1u << section;
+                    }
+                }
+                if (x == 0 && y == 0 && clockMs < 3000) {
+                    sawFirstRebound |= sawFirstLanding && height > 0;
+                    sawFirstLanding |= sawFirstLift && height == 0;
+                    sawFirstLift |= height > 0;
+                }
+            }
+        }
+        const unsigned launched = inFlight & ~airborneSections;
+        if (checkBouncingBallsPairs) {
+            for (int tile = 0; tile < 16; ++tile) {
+                if (!(launched & (1u << tile))) continue;
+                const int column = tile % 4;
+                const int row = tile / 4;
+                const int width = (column + 1) * RNDR_X / 4 - column * RNDR_X / 4;
+                const int depth = (row + 1) * RNDR_Y / 4 - row * RNDR_Y / 4;
+                assert(activePerTile[tile] == unsigned(width * depth));
+            }
+            if (launched) ballLaunches.push_back(launched);
+        } else {
+            for (int section = 0; section < 8; ++section) {
+                if (launched & (1u << section)) ballLaunches.push_back(section);
+            }
+        }
+        airborneSections = inFlight;
+    }
     if (checkWaverly) {
         unsigned total = 0;
         for (unsigned i = 0; i < RNDR_X * RNDR_Y * RNDR_Z; ++i) {
@@ -294,27 +360,49 @@ int main() {
     // footprint needs fewer lines on 10x10x16 than on the full 16^3 cube.
     const unsigned defaultLines = RNDR_X == 16 ? 6 : 4;
 
-    // Compare the same wave phase at three volumes, then verify that only
-    // the mirrored mapping matches corresponding front and back pixels.
+    // Exercise a full clockwise lap and wrap using the real shared beat clock.
+    makeStream(295);
+    for (unsigned i = 0; i < input.size(); ++i) {
+        input[i].values.tempoBpm100 = 12000;
+        input[i].values.tempoFlags = CubinaWire::AUDIO_ACTIVE | CubinaWire::TEMPO_LOCKED;
+        input[i].values.tempoPhase = (i * 16 % 500) * 65536 / 500;
+    }
+    checkBouncingBalls = true;
+    variedPlacement = true;
+    render([] { Audio::bouncingBalls(Audio::BouncingBallsPattern::Clockwise); });
+    assert(ballLaunches == std::vector<unsigned>({0, 1, 2, 3, 4, 5, 6, 7, 0}));
+    assert(ballHeightVaries && sawFirstRebound);
+    checkBouncingBallsPairs = true;
+    ballLaunches.clear();
+    airborneSections = 0;
+    render([] { Audio::bouncingBalls(Audio::BouncingBallsPattern::OrbitInward); });
+    assert(ballLaunches.size() == 9 && ballLaunches.front() == ballLaunches.back());
+    unsigned visited = 0;
+    for (unsigned beat = 0; beat < 8; ++beat) {
+        const unsigned pair = ballLaunches[beat];
+        const unsigned second = pair & (pair - 1);
+        assert(second && !(second & (second - 1))); // Exactly two tiles.
+        assert(!(visited & pair));
+        visited |= pair;
+    }
+    assert(visited == 0xFFFF);
+    checkBouncingBallsPairs = false;
+    variedPlacement = false;
+    checkBouncingBalls = false;
+
+    // Compare the same wave phase at three volumes, then verify that the
+    // mirrored mapping matches corresponding front and back pixels.
     makeStream(1);
     input[0].values.volumeSm = 1;
-    render(&Audio::animatePlasmoid);
+    render(&Audio::animatePlasmoidMirrored);
     assert(writeCounts[0] == 0);
     input[0].values.volumeSm = 25;
-    render(&Audio::animatePlasmoid);
+    render(&Audio::animatePlasmoidMirrored);
     const unsigned quietPlasmoid = writeCounts[0];
     assert(quietPlasmoid > 0);
     input[0].values.volumeSm = 128;
-    render(&Audio::animatePlasmoid);
-    assert(writeCounts[0] > quietPlasmoid);
-    bool depthVaries = false;
-    for (uint8_t z = 0; z < RNDR_Z; ++z) {
-        for (uint8_t x = 0; x < RNDR_X; ++x) {
-            depthVaries |= getVoxel(x, 0, z).r != getVoxel(x, RNDR_Y - 1, z).r;
-        }
-    }
-    assert(depthVaries);
     render(&Audio::animatePlasmoidMirrored);
+    assert(writeCounts[0] > quietPlasmoid);
     for (uint8_t z = 0; z < RNDR_Z; ++z) {
         for (uint8_t y = 0; y < RNDR_Y / 2; ++y) {
             for (uint8_t x = 0; x < RNDR_X; ++x) {
@@ -564,6 +652,24 @@ int main() {
     render(&testanimatePuddlePeak);
     assert(lineFrames == std::vector<unsigned>({10, 30}));
 
+    // One spectrum sample moves down the four side faces at the next row tick.
+    makeStream(5);
+    for (auto& sample : input) {
+        for (auto& band : sample.values.fftResult) band = 0;
+    }
+    input[0].values.fftResult[1] = 28; // The second bin drives the first pair green.
+    input[4].values.fftResult[0] = 11; // Top of the red bucket.
+    input[4].values.fftResult[2] = 12; // Start of the orange bucket.
+    render(&Audio::animateFunkyPlank);
+    assert(getVoxel(0, 0, RNDR_Z - 2).g == 255);
+    assert(getVoxel(RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 2).g == 255);
+    assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 2).r == 0);
+    const auto red = getVoxel(0, 0, RNDR_Z - 1);
+    assert(red.r == 255 && red.g == 0 && red.b == 0);
+    const auto orange = getVoxel((RNDR_X + 7) / 8, 0, RNDR_Z - 1);
+    assert(orange.r == 255 && orange.g == 128 && orange.b == 0);
+    assert(getVoxel(1, 1, RNDR_Z - 2).r == 0);
+
     // Separate bass, volume and frequency inputs on both canvases.
     makeStream(1);
     input[0].values.volumeSm = 0;
@@ -618,6 +724,91 @@ int main() {
     assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
     assert(getVoxel(0, 0, RNDR_Z - 2).r == 255);
     assert(getVoxel(0, 0, RNDR_Z - 2).g == 0);
+
+    // The curve lifts real mids and cuts the measured idle floor. Toggling it
+    // changes the bars while preserving the bass response.
+    RemoteInputs::AudioFrame quietSpectrum{};
+    const uint8_t idleBins[16] = {5, 4, 3, 2, 2, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3};
+    std::copy(idleBins, idleBins + 16, quietSpectrum.fftResult);
+    uint8_t displayBins[16];
+    assert(Audio::displaySpectrum(quietSpectrum, displayBins));
+    assert(std::equal(idleBins, idleBins + 4, displayBins));
+    assert(std::all_of(displayBins + 4, displayBins + 16, [](uint8_t level) { return level == 0; }));
+    makeStream(1);
+    input[0].values.volumeSm = 0;
+    for (auto &band : input[0].values.fftResult) band = 0;
+    input[0].values.fftResult[0] = 40;
+    input[0].values.fftResult[8] = 15;
+    const int blueBarX = (4 * RNDR_X + 7) / 8;
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(blueBarX, 0, 4).b > 0);
+    const auto compensatedSphere = getVoxel(cx, cy, cz);
+    Audio::controls().spectrumCompensationEnabled = false;
+    assert(!Audio::displaySpectrum(quietSpectrum, displayBins));
+    assert(std::equal(idleBins, idleBins + 16, displayBins));
+    render(&Audio::animateSurroundGEQ);
+    assert(getVoxel(blueBarX, 0, 4).b == 0);
+    const auto rawSphere = getVoxel(cx, cy, cz);
+    assert(compensatedSphere.r == rawSphere.r && compensatedSphere.g == rawSphere.g &&
+           compensatedSphere.b == rawSphere.b);
+    Audio::controls().spectrumCompensationEnabled = true;
+
+    // The filled-bar audition repeats the same band at the same position in
+    // every block. Silence retains the one-row floor of the normal GEQ.
+    makeStream(1);
+    input[0].values.volumeSm = 0;
+    for (auto &band : input[0].values.fftResult) band = 0;
+    render(&Audio::animateInwardGEQ);
+    for (int x = 0; x < RNDR_X; ++x) {
+        for (int y = 0; y < RNDR_Y; ++y) {
+            assert(getVoxel(x, y, 0).r > 0 && getVoxel(x, y, 1).r == 0);
+        }
+    }
+    constexpr int testBand = 6;
+    input[0].values.fftResult[testBand] = 80;
+    render(&Audio::animateInwardGEQ);
+    bool expectedColumn[RNDR_X][RNDR_Y] = {};
+    for (int block = 0; block < 16; ++block) {
+        const int tile = AudioLayouts::orbitInwardTiles[testBand];
+        const int x = lroundf(AudioLayouts::inwardCoordinate(block % 4, tile % 4, RNDR_X));
+        const int y = lroundf(AudioLayouts::inwardCoordinate(block / 4, tile / 4, RNDR_Y));
+        expectedColumn[x][y] = true;
+    }
+    for (int x = 0; x < RNDR_X; ++x) {
+        for (int y = 0; y < RNDR_Y; ++y) {
+            assert((getVoxel(x, y, 2).r > 0) == expectedColumn[x][y]);
+        }
+    }
+
+    // Both bass bins would clip at the standard bar gain. With bass alone,
+    // the stronger one reaches half height and the weaker one stays shorter.
+    input[0].values.fftResult[testBand] = 0;
+    input[0].values.fftResult[0] = 200;
+    input[0].values.fftResult[1] = 100;
+    render(&Audio::animateInwardGEQ);
+    const int halfHeightPeak = RNDR_Z / 2;
+    assert(maxZ == unsigned(halfHeightPeak));
+    // These two positions are distinct on the 16-wide cube. On the narrower
+    // cuboid, adjacent columns can share a voxel.
+    const auto inwardBarTop = [](int block, int band) {
+        const int tile = AudioLayouts::orbitInwardTiles[band];
+        const int x = lroundf(AudioLayouts::inwardCoordinate(block % 4, tile % 4, RNDR_X));
+        const int y = lroundf(AudioLayouts::inwardCoordinate(block / 4, tile / 4, RNDR_Y));
+        for (int z = RNDR_Z - 1; z > 0; --z) {
+            if (getVoxel(x, y, z).r > 0) return z;
+        }
+        return 0;
+    };
+    if (RNDR_X == 16 && RNDR_Y == 16) {
+        assert(inwardBarTop(0, 0) == halfHeightPeak);
+        assert(inwardBarTop(0, 1) == int(ceilf((RNDR_Z - 1) * 0.25f)));
+        // Strong mids raise the bass ceiling and use their usual height.
+        input[0].values.fftResult[testBand] = 40;
+        render(&Audio::animateInwardGEQ);
+        const int sharedPeak = inwardBarTop(0, testBand);
+        assert(sharedPeak > halfHeightPeak);
+        assert(inwardBarTop(0, 0) == sharedPeak);
+    }
 
     // A brief dip cancels at rebound. A sustained drop releases the
     // front past the crest and it travels even after volume reaches zero.
@@ -854,7 +1045,7 @@ int main() {
         assert((entry == 1 || entry == 3) ? lineFrames.empty() : !lineFrames.empty());
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
-    assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Surround GEQ") == 0);
+    assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Corner Burst") == 0);
     while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }

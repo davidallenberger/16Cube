@@ -43,7 +43,7 @@ namespace {
     const uint32_t SPEED_SCENE_SPLAT            = (uint32_t)(19 * SCALE_MS);  
     const uint32_t SPEED_SCENE_BOUNCE           = (uint32_t)(37 * SCALE_MS);  
     const float    SPEED_SCENE_SADDLE           = (2.33f * SCALE_RATE); 
-    const float    SPEED_SCENE_SINE_WAVE        = (0.48f * SCALE_RATE); 
+    const float    SPEED_SCENE_SINE_WAVE        = (0.48f * SCALE_RATE);
     const float    SPEED_SCENE_RAIN             = (0.58f * SCALE_RATE); 
     const float    SPEED_SCENE_CYCLONE          = (0.60f * SCALE_RATE);
     const uint32_t SPEED_SCENE_VERT_STREAMER    = (uint32_t)(25 * SCALE_MS);   
@@ -112,7 +112,7 @@ namespace {
         CONCEPT_SCENE_NOISE_CLOUDS, CONCEPT_SCENE_METEOR,
         // Descending playback auditions particle effects and their counterparts together.
         CONCEPT_SCENE_PLANE_SPLIT,
-        CONCEPT_SCENE_PS_IMPACT, CONCEPT_SCENE_PS_VOLCANO,
+        CONCEPT_SCENE_PS_IMPACT,
         CONCEPT_SCENE_PS_GHOST_RIDER,
         CONCEPT_SCENE_PS_BOX,
         CONCEPT_SCENE_BOUNCING_BALL,
@@ -122,6 +122,9 @@ namespace {
         CONCEPT_SCENE_MATRIX_RAIN,
         CONCEPT_SCENE_PS_ATTRACTOR, CONCEPT_SCENE_PS_WATERFALL_FACES,
         CONCEPT_SCENE_PS_WATERFALL, CONCEPT_SCENE_PS_GALAXY,
+        CONCEPT_SCENE_PS_VOLCANO_WIDE_JET,
+        CONCEPT_SCENE_PS_FIRE,
+        CONCEPT_SCENE_PS_VORTEX,
         CONCEPT_COUNT
     };
 
@@ -167,7 +170,7 @@ namespace {
         /* Frizzles Matrix */ { true, 1 },
         /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
         /* Plane Split */ { true, 1 }, /* PS Impact */ { true, 1 },
-        /* PS Volcano */ { true, 1 }, /* PS Ghost Rider */ { true, 1 },
+        /* PS Ghost Rider */ { true, 1 },
         /* PS Box */ { true, 1 },
         /* Bouncing Ball */ { true, 1 },
         /* Atom Smasher */ { true, 1 }, /* Fireworks */ { true, 1 },
@@ -175,7 +178,9 @@ namespace {
         /* PS Spray */ { true, 1 },
         /* Matrix Rain 3D */ { true, 1 },
         /* PS Attractor */ { true, 1 }, /* PS Waterfall Four Faces */ { true, 1 },
-        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 }, /* PS Galaxy */ { true, 1 }
+        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 }, /* PS Galaxy */ { true, 1 },
+        /* PS Volcano Wide Jet */ { true, 1 }, /* PS Fire */ { true, 1 },
+        /* PS Vortex */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -191,13 +196,14 @@ namespace {
         "Soap Texture", "Waving Cell 3D", "Polar Lights", "Frizzles", "Frizzles Matrix",
         "Noise Clouds", "Meteor 3D",
         "Plane Split", "PS Impact",
-        "PS Volcano", "PS Ghost Rider", "PS Box",
+        "PS Ghost Rider", "PS Box",
         "Bouncing Ball",
         "Atom Smasher", "Fireworks",
         "Lava Lamp",
         "PS Spray",
         "Matrix Rain 3D",
-        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall", "PS Galaxy"
+        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall", "PS Galaxy",
+        "PS Volcano Wide Jet", "PS Fire", "PS Vortex"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -206,7 +212,9 @@ namespace {
                   "Scene names must match the concept deck");
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
-    static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves"};
+    static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves", "Soap", "Waving Cell"};
+    static_assert(sizeof(shaderModeNames) / sizeof(shaderModeNames[0]) == SHADER_MODE_COUNT,
+                  "Every shader needs a display name");
     static const char* motionNames[] = {"Static", "Expand/Collapse", "Spring", "Tumbling", "Spinning"};
 
     template <typename T>
@@ -275,13 +283,17 @@ namespace {
             if (motion == MOTION_TUMBLING && shape == SHAPE_BOX) { rMode = RENDER_SOLID; stretch = false; }
         }
 
-        const bool isSelfManaged = isSelfManagedScene(concept);
+        const bool rockingSineWave = concept == CONCEPT_SCENE_SINE_WAVE && random8(3) == 0;
+        const bool isSelfManaged = isSelfManagedScene(concept) || rockingSineWave;
         const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
         const char* displayColor = isSelfManaged ? "Self-Managed" : (sModeTracker == MODE_HIPHOTIC ? "N/A" : PaletteUtils::getPaletteNameBuffer());
         if (concept == CONCEPT_SCENE_MATRIX_RAIN) displayColor = "Matrix Green";
         if (concept == CONCEPT_SCENE_NOISE_CLOUDS || concept == CONCEPT_SCENE_METEOR) displayColor = "Rainbow";
         if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
-        if (concept == CONCEPT_SCENE_PS_VOLCANO) displayColor = "Fire by age";
+        if (concept == CONCEPT_SCENE_PS_VOLCANO_WIDE_JET) displayColor = "Fire by age";
+        if (concept == CONCEPT_SCENE_PS_FIRE) displayColor = "Fire by heat";
+        if (concept == CONCEPT_SCENE_PS_VORTEX) displayColor = "Cycling Rainbow";
+        if (rockingSineWave) displayColor = "Rainbow Linear Flow (Rocking)";
         if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
         if (concept == CONCEPT_SCENE_PS_WATERFALL || concept == CONCEPT_SCENE_PS_WATERFALL_FACES) displayColor = "Ocean";
         if (concept == CONCEPT_SCENE_PS_GHOST_RIDER) displayColor = "Cycling Rainbow";
@@ -400,7 +412,9 @@ namespace {
         }
         else if (concept >= CONCEPT_SCENE_SADDLE && concept <= CONCEPT_SCENE_SINE_WAVE) { 
             if (concept == CONCEPT_SCENE_SADDLE) Surfaces::animateHyperbolicParaboloid(durationMs, SPEED_SCENE_SADDLE, (Orientation)random8(3), pal, sModeTracker, 15);
-            else {
+            else if (rockingSineWave) {
+                Surfaces::animateRockingSineWave(durationMs, SPEED_SCENE_SINE_WAVE);
+            } else {
                 #ifndef TARGET_2026_CUBOID
                 Surfaces::animateSineWave(durationMs, (Orientation)random8(3), WAVE_RADIAL, 360, pal, sModeTracker, SPEED_SCENE_SINE_WAVE);
                 #else
@@ -424,7 +438,14 @@ namespace {
                 case CONCEPT_SCENE_NOISE_CLOUDS:    Streamers::animateNoiseClouds(durationMs); break;
                 case CONCEPT_SCENE_METEOR:         Streamers::animateMeteor(durationMs); break;
                 case CONCEPT_SCENE_PS_IMPACT:      Streamers::animatePSImpact(durationMs); break;
-                case CONCEPT_SCENE_PS_VOLCANO:     ParticleEffects::animateVolcano(durationMs); break;
+                case CONCEPT_SCENE_PS_FIRE:        ParticleEffects::animateFire(durationMs); break;
+                case CONCEPT_SCENE_PS_VORTEX:      ParticleEffects::animateVortex(durationMs); break;
+                case CONCEPT_SCENE_PS_VOLCANO_WIDE_JET: {
+                    ParticleEffects::VolcanoSettings settings;
+                    settings.plumeWidthScale = 1.5f;
+                    ParticleEffects::animateVolcano(durationMs, settings);
+                    break;
+                }
                 case CONCEPT_SCENE_PS_BOX:         ParticleEffects::animateBox(durationMs); break;
                 case CONCEPT_SCENE_PS_WATERFALL:   ParticleEffects::animateWaterfall(durationMs); break;
                 case CONCEPT_SCENE_PS_WATERFALL_FACES: {
@@ -756,13 +777,16 @@ namespace TestDemo {
             static CRGBPalette16 boxPalettes[5] = {RainbowColors_p, LavaColors_p, ForestColors_p, OceanColors_p, PartyColors_p};
             static const char* boxPaletteNames[5] = {"Rainbow", "Lava", "Forest", "Ocean", "Party"};
             
+            static constexpr ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW,
+                MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC,
+                MODE_DISTORTION_WAVES, MODE_SOAP, MODE_WAVING_CELL};
+            constexpr uint8_t flowCount = sizeof(flow) / sizeof(flow[0]);
             if (motion == MOTION_STATIC) {
-                ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
                 if (shape == SHAPE_BOX) { 
-                    uint8_t step = states[concept].shaderTracker % 7; // Expanded to 7
+                    uint8_t step = states[concept].shaderTracker % flowCount;
                     sModeTracker = flow[step]; 
                     
-                    // Trigger a private shuffle at the start of every 7-step Box cycle
+                    // Trigger a private shuffle at the start of every Box cycle
                     if (step == 0) {
                         for (int i = 4; i > 0; i--) {
                             int j = random8(i + 1);
@@ -771,13 +795,12 @@ namespace TestDemo {
                         }
                     }
                 } else {
-                    sModeTracker = flow[random8(7)];
+                    sModeTracker = flow[random8(flowCount)];
                 }
             } else {
                 if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
                 else {
-                    ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES};
-                    sModeTracker = comp[random8(8)];
+                    sModeTracker = PaletteUtils::getRandomNonSolidShader();
                 }
             }
             
@@ -787,7 +810,7 @@ namespace TestDemo {
             // THE BOX PALETTE ENFORCER
             // ==========================================
             if (shape == SHAPE_BOX) {
-                uint8_t step = states[concept].shaderTracker % 7;
+                uint8_t step = states[concept].shaderTracker % flowCount;
                 
                 if (sModeTracker == MODE_UNIFORM_CYCLE) { 
                     pal = RainbowColors_p; 
@@ -800,9 +823,9 @@ namespace TestDemo {
                     pal = PaletteUtils::getRandomOrganicPalette(); 
                     strcpy(PaletteUtils::getPaletteNameBuffer(), "Distortion Organic");
                 }
-                else {
-                    // Steps 1, 2, 3, and 4 grab the first 4 palettes from the freshly shuffled pool
-                    int palIndex = step - 1; 
+                else if (sModeTracker != MODE_SOAP && sModeTracker != MODE_WAVING_CELL) {
+                    // The four original box brushes use the shuffled palettes.
+                    const int palIndex = step >= 1 && step <= 4 ? step - 1 : random8(5);
                     pal = boxPalettes[palIndex];
                     strcpy(PaletteUtils::getPaletteNameBuffer(), boxPaletteNames[palIndex]);
                 }
@@ -827,7 +850,7 @@ namespace TestDemo {
                 
                 if (concept == CONCEPT_SCENE_SADDLE || concept == CONCEPT_SCENE_SINE_WAVE || concept == CONCEPT_SCENE_ROLLING_BALL) {
                     if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
-                    else { ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC, MODE_DISTORTION_WAVES}; sModeTracker = comp[random8(8)]; }
+                    else sModeTracker = PaletteUtils::getRandomNonSolidShader();
                 } 
                 else if (concept == CONCEPT_SCENE_SINE_WAVE) {
                     // ISOLATED: De-seizured pool for Sine Wave (Removed Noise & Distance Fields)
@@ -836,10 +859,17 @@ namespace TestDemo {
                 }
                 else { 
                     if (allowSolid) sModeTracker = MODE_SOLID; 
-                    else { ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW, MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTORTION_WAVES}; sModeTracker = flow[random8(5)]; }
+                    else {
+                        constexpr ShaderMode sceneFlow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW,
+                            MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTORTION_WAVES, MODE_SOAP, MODE_WAVING_CELL};
+                        sModeTracker = sceneFlow[random8(sizeof(sceneFlow) / sizeof(sceneFlow[0]))];
+                    }
                 }
                 
-                if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_WILD_MOUSE || concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_LAVA_LAMP || concept == CONCEPT_SCENE_CHUNCHUN_SERP || concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS || concept == CONCEPT_SCENE_BPM_CHECKERBOARD || concept == CONCEPT_SCENE_BOUNCING_BALLS) {
+                if (sModeTracker == MODE_SOAP || sModeTracker == MODE_WAVING_CELL) {
+                    pal = PaletteUtils::getSmartPalette(sModeTracker);
+                }
+                else if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_WILD_MOUSE || concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_LAVA_LAMP || concept == CONCEPT_SCENE_CHUNCHUN_SERP || concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS || concept == CONCEPT_SCENE_BPM_CHECKERBOARD || concept == CONCEPT_SCENE_BOUNCING_BALLS) {
                     pal = PaletteUtils::getRandomOrganicPalette(); // Satisfies "random palette no solids" requirement
                 }
                 else {

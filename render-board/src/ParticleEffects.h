@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio.h"
 #include "ParticleEngine.h"
 #include "TestDemo.h"
 #include "UARTReceiver.h"
@@ -7,6 +8,19 @@
 #include <algorithm>
 
 namespace ParticleEffects {
+    struct FireSettings {
+        uint8_t speed = 110;
+        uint8_t intensity = 128;
+        uint8_t flameHeight = 110;
+        uint8_t wind = 50;
+        uint8_t spread = 31; // 0–31, across the floor.
+        float visibleHeightScale = 1.00f; // Scale the flame above the floor.
+        uint8_t emissionPercent = 100; // Percent of the reference emission rate.
+        float hotParticleRadius = 1.55f; // Hot particles overlap, then narrow as they cool.
+        bool logTiming = true;
+        uint8_t turbulence = 120; // Local rolling motion through the body of the flame.
+    };
+
     struct VolcanoSettings {
         uint8_t speed = 100;
         uint8_t intensity = 190;
@@ -16,9 +30,17 @@ namespace ParticleEffects {
         float particleRadius = 0.75f; // Radius on the 16³ cube.
         float radiusWobble = 0.04f;
         float emitterWobble = 0.325f; // Nozzle travel around its resting position.
+        float plumeWidthScale = 1.0f; // Scale the rendered plume around its nozzle in X and Y.
         bool ageColor = true;
         bool walls = false;
         bool collide = false;
+    };
+
+    struct VortexSettings {
+        uint8_t rotationSpeed = 128, particleSpeed = 128;
+        uint8_t arms = 3; // Per plane, within WLED's 1–8 range.
+        uint8_t flip = 200, nozzle = 0, motionBlur = 130;
+        bool smear = false, direction = false, randomFlip = false;
     };
 
     struct BoxSettings {
@@ -71,14 +93,14 @@ namespace ParticleEffects {
         bool gravity = false, cylinder = false, collide = false;
     };
 
+    enum class GeqLayout { Clusters, Random };
+
     struct GeqSettings {
         uint8_t speed = 155, intensity = 200, diverge = 0, bounce = 128, gravity = 16;
         bool cylinder = false, walls = false, floor = false;
-    };
-
-    struct GeqNovaSettings {
-        uint8_t speed = 128, intensity = 180, rotationSpeed = 0, colorChange = 0, nozzle = 8;
-        bool direction = false; // Reverse rotation.
+        GeqLayout layout = GeqLayout::Clusters;
+        float inputGain = 1.0f;
+        float brightnessGain = 1.0f;
     };
 
     struct GalaxySettings {
@@ -92,6 +114,15 @@ namespace ParticleEffects {
 
     namespace Detail {
         using namespace ParticleEngine;
+
+        // Render a face-local point once per side, rotating around the Z axis.
+        template <typename Draw>
+        inline void drawFourFaceCopies(float along, float depth, float z, const Draw& draw) {
+            draw({RNDR_CX + along, depth, z});
+            draw({RNDR_X - 1 - depth, RNDR_CY + along, z});
+            draw({RNDR_CX - along, RNDR_Y - 1 - depth, z});
+            draw({depth, RNDR_CY - along, z});
+        }
 
         constexpr float verticalScale = RNDR_Z / 16.0f;
         constexpr float volumeScale = RNDR_X * RNDR_Y * RNDR_Z / 4096.0f;
@@ -143,12 +174,6 @@ namespace ParticleEffects {
 
         inline bool emitBand(uint8_t level, int threshold) {
             return level > threshold || (level > 0 && random16(0, ((threshold - level) >> 2) + 2) == 0);
-        }
-
-        inline bool liveAudioSource() {
-            const auto control = RemoteInputs::control();
-            return control.linked && control.ready && control.mode >= CubinaWire::Mode::AudioMic &&
-                   control.mode <= CubinaWire::Mode::AudioDJ;
         }
 
         inline void drawSpray(Pool& pool, const CRGBPalette16& palette, bool wrapX) {
@@ -242,6 +267,294 @@ namespace ParticleEffects {
         }
     }
 
+    inline void animateFire(uint32_t durationMs, const FireSettings& settings = {}) {
+        using namespace Detail;
+        // PS Fire by DedeHai, adapted from WLED 16.0.1 with its Fire palette.
+        static const uint8_t fireGradient[] PROGMEM = {
+            0, 0, 0, 0, 46, 77, 0, 0, 96, 177, 0, 0, 108, 196, 38, 9,
+            119, 215, 76, 19, 146, 235, 115, 29, 174, 255, 153, 41,
+            188, 255, 178, 41, 202, 255, 204, 41, 218, 255, 230, 41,
+            234, 255, 255, 41, 244, 255, 255, 143, 255, 255, 255, 255
+        };
+        const CRGBPalette16 palette(fireGradient);
+        // WLED's units are 1/64 voxel and velocity is per simulation update.
+        // Compact records leave room for independent trajectories in the shared arena.
+        constexpr int subpixels = 64;
+        struct Ember {
+            int16_t x, y, z;
+            int8_t vx, vy, vz;
+            uint8_t heat;
+            bool active;
+        };
+        using FirePool = ParticlePool<Ember>;
+        static_assert(sizeof(Ember) <= 12, "PS Fire needs a compact particle record");
+        FirePool pool(population(FirePool::capacity, FirePool::capacity));
+
+        struct Emitter { int16_t x, y; uint32_t nextFrame; };
+        constexpr int emittersX = (RNDR_X + 1) / 2;
+        constexpr int emittersY = (RNDR_Y + 1) / 2;
+        constexpr int emitterCount = emittersX * emittersY;
+        Emitter emitters[emitterCount];
+        const float spreadFraction = (min(31, int(settings.spread)) + 1) / 32.0f;
+        for (int y = 0; y < emittersY; ++y) {
+            for (int x = 0; x < emittersX; ++x) {
+                const float u = (x + 0.5f) / emittersX - 0.5f;
+                const float v = (y + 0.5f) / emittersY - 0.5f;
+                emitters[x + y * emittersX] = {
+                    int16_t(lroundf((RNDR_CX + u * RNDR_X * spreadFraction) * subpixels)),
+                    int16_t(lroundf((RNDR_CY + v * RNDR_Y * spreadFraction) * subpixels)), random8(5)};
+            }
+        }
+
+        const int fireSpeed = max(100, int(settings.speed));
+        const int height = settings.flameHeight;
+        const int heatRange = (height * height) >> 8;
+        const int rise = (RNDR_Z >> 1) + (fireSpeed >> 4);
+        const int launchZ = lroundf(-4.0f * verticalScale * subpixels);
+        const int jitterX = int(0.5f * RNDR_X * spreadFraction * subpixels / emittersX);
+        const int jitterY = int(0.5f * RNDR_Y * spreadFraction * subpixels / emittersY);
+        const uint32_t stepUs = settings.speed < 100 ?
+            1000u * max(24L, map(settings.speed, 0, 99, 50, 10)) : 1000000u / 42u;
+        constexpr uint32_t maxCatchUpSteps = 3;
+        constexpr int warmPaletteStart = 180;
+        constexpr int hottestPaletteIndex = 210;
+        constexpr float coolRadius = 0.65f;
+        // Cache the brush for each possible lifetime. Speed is at least 100,
+        // so the flame's starting heat divides by at least four.
+        constexpr int maxFlameHeat = 20 + ((255 * 255) >> 8) / 4 + 16 + (RNDR_Z >> 1);
+        constexpr int maxSparkHeat = 30 + RNDR_Z;
+        constexpr int maxHeat = maxFlameHeat > maxSparkHeat ? maxFlameHeat : maxSparkHeat;
+        struct Brush { float radius; CRGB color; };
+        Brush brushes[maxHeat + 1];
+        for (int lifetime = 0; lifetime <= maxHeat; ++lifetime) {
+            const int heat = min(255, lifetime * (3 + (settings.intensity >> 5)) + 5);
+            const float warmth = heat / 255.0f;
+            const float radius = coolRadius + (settings.hotParticleRadius - coolRadius) * warmth * warmth;
+            const int paletteIndex = heat <= warmPaletteStart ? heat :
+                warmPaletteStart + (heat - warmPaletteStart) *
+                (hottestPaletteIndex - warmPaletteStart) / (255 - warmPaletteStart);
+            const float widthRatio = (radius + 0.5f) / (coolRadius + 0.5f);
+            const uint8_t brightness = uint8_t(heat / max(1.0f, widthRatio * widthRatio * widthRatio));
+            CRGB color = ColorFromPalette(palette, paletteIndex, brightness, LINEARBLEND_NOWRAP);
+            color.b = 0;
+            brushes[lifetime] = {radius, color};
+        }
+        uint16_t windPhase = random16();
+        const uint16_t gustSeed = random16();
+        uint16_t fuelPhase = random16();
+        int windRemainderX = 0, windRemainderY = 0;
+        uint32_t frame = 0;
+
+        struct Timing {
+            uint32_t steps, renders, skipped, catchUp;
+            uint32_t simulationUs, drawUs, outputUs, worstFrameUs;
+            uint32_t emitted, rejected, active, peakActive;
+            uint32_t riseUnits, riseSamples;
+            int peakWindX, peakWindY, peakTurbulence;
+        } timing{};
+        const uint32_t start = millis();
+        uint32_t lastStepUs = micros() - stepUs;
+        uint32_t lastLogUs = lastStepUs + stepUs;
+
+        constexpr int flowSpacing = 3;
+        constexpr int flowStep = flowSpacing * subpixels;
+        constexpr int flowWidth = (RNDR_X + flowSpacing - 1) / flowSpacing + 1;
+        constexpr int flowDepth = (RNDR_Y + flowSpacing - 1) / flowSpacing + 1;
+        constexpr int turbulenceTop = RNDR_Z * subpixels * 3 / 4;
+        constexpr int flowHeight = (turbulenceTop + flowStep - 1) / flowStep + 1;
+        struct Current { int16_t x, y; };
+        Current currents[flowHeight][flowDepth][flowWidth];
+
+        const auto updateCurrents = [&] {
+            // Reuse noise samples for the neighboring gradients. A quarter
+            // turn of each gradient gives a sideways current around it.
+            uint8_t noise[flowDepth + 2][flowWidth + 2];
+            for (int z = 0; z < flowHeight; ++z) {
+                const uint16_t phase = uint16_t(frame * 14u + z * flowStep);
+                for (int y = 0; y < flowDepth + 2; ++y) {
+                    for (int x = 0; x < flowWidth + 2; ++x) {
+                        noise[y][x] = inoise8(uint16_t(gustSeed + (x - 1) * flowStep),
+                                              uint16_t((y - 1) * flowStep), phase);
+                    }
+                }
+                for (int y = 0; y < flowDepth; ++y) {
+                    for (int x = 0; x < flowWidth; ++x) {
+                        currents[z][y][x] = {int16_t(noise[y + 2][x + 1] - noise[y][x + 1]),
+                                             int16_t(noise[y + 1][x] - noise[y + 1][x + 2])};
+                    }
+                }
+            }
+        };
+        const auto currentAt = [&](const Ember& p) {
+            const int x = constrain(int(p.x), 0, (flowWidth - 1) * flowStep);
+            const int y = constrain(int(p.y), 0, (flowDepth - 1) * flowStep);
+            const int z = max(0, int(p.z));
+            const int ix = min(x / flowStep, flowWidth - 2);
+            const int iy = min(y / flowStep, flowDepth - 2);
+            const int iz = min(z / flowStep, flowHeight - 2);
+            const int fx = x - ix * flowStep, fy = y - iy * flowStep, fz = z - iz * flowStep;
+            const auto lerp = [flowStep](Current a, Current b, int fraction) -> Current {
+                return {int16_t(a.x + (b.x - a.x) * fraction / flowStep),
+                        int16_t(a.y + (b.y - a.y) * fraction / flowStep)};
+            };
+            const auto inLayer = [&](int layer) {
+                const auto& plane = currents[layer];
+                return lerp(lerp(plane[iy][ix], plane[iy][ix + 1], fx),
+                            lerp(plane[iy + 1][ix], plane[iy + 1][ix + 1], fx), fy);
+            };
+            return lerp(inLayer(iz), inLayer(iz + 1), fz);
+        };
+
+        const auto stepFire = [&] {
+            const bool windUpdate = frame % 3 == 0;
+            int windX = 0, windY = 0;
+            if (windUpdate) {
+                ++windPhase;
+                // As in WLED, keep fractional changes to velocity across gust updates.
+                windRemainderX += (int(inoise8(windPhase, gustSeed)) - 127) * settings.wind / 128;
+                windRemainderY += (int(inoise8(windPhase, gustSeed + 0x6100)) - 127) * settings.wind / 128;
+                windX = windRemainderX / 16;
+                windY = windRemainderY / 16;
+                windRemainderX %= 16;
+                windRemainderY %= 16;
+                timing.peakWindX = max(timing.peakWindX, abs(windX));
+                timing.peakWindY = max(timing.peakWindY, abs(windY));
+                if (settings.turbulence) updateCurrents();
+            }
+
+            timing.active = 0;
+            for (int i = 0; i < pool.size(); ++i) {
+                auto& p = pool[i];
+                if (!p.active) continue;
+                if (--p.heat == 0) { p.active = false; continue; }
+                if (windUpdate) {
+                    int localX = 0, localY = 0;
+                    if (settings.turbulence && p.z > -subpixels && p.z < turbulenceTop) {
+                        const Current current = currentAt(p);
+                        const int envelope = min(256, min((p.z + subpixels) * 2, turbulenceTop - p.z));
+                        const int strength = settings.turbulence * envelope;
+                        localX = constrain(current.x * strength / (1536 * 256), -6, 6);
+                        localY = constrain(current.y * strength / (1536 * 256), -6, 6);
+                        timing.peakTurbulence = max(timing.peakTurbulence, max(abs(localX), abs(localY)));
+                    }
+                    p.vx = constrain(p.vx + windX + localX, -127, 127);
+                    p.vy = constrain(p.vy + windY + localY, -127, 127);
+                }
+                p.x += p.vx;
+                p.y += p.vy;
+                const int upward = p.vz + (p.heat >> 2);
+                p.z += upward;
+                constexpr int edge = 2 * subpixels;
+                p.active = p.x > -edge && p.x < RNDR_X * subpixels + edge &&
+                           p.y > -edge && p.y < RNDR_Y * subpixels + edge &&
+                           p.z < RNDR_Z * subpixels + edge;
+                timing.active += p.active;
+                if (p.active && p.z >= 0 && p.z < RNDR_Z * subpixels) {
+                    timing.riseUnits += upward;
+                    ++timing.riseSamples;
+                }
+            }
+
+            fuelPhase += 3;
+            int nextSlot = 0;
+            if (settings.emissionPercent > 0) {
+                // Rotate priority so pool pressure doesn't starve one side.
+                for (int i = 0; i < emitterCount; ++i) {
+                    auto& emitter = emitters[(frame + i) % emitterCount];
+                    if (int32_t(frame - emitter.nextFrame) < 0) continue;
+                    // Nearby sources respond to the same fuel field, but
+                    // have independent launch times and never switch off as a block.
+                    const int fuel = inoise8(uint16_t(emitter.x * 2), uint16_t(emitter.y * 2), fuelPhase);
+                    const int gap = 1 + random8(3) + (255 - fuel) / 80 + max(0, 96 - fuel) / 8;
+                    emitter.nextFrame = frame + max(1, gap * 100 / int(settings.emissionPercent));
+                    nextSlot = pool.firstFree(nextSlot);
+                    if (nextSlot == pool.size()) { ++timing.rejected; continue; }
+
+                    const int maxLife = 16 + random8(max(1, RNDR_Z >> 1));
+                    const int spread = 2 + random8(2 + (fireSpeed >> 4));
+                    Ember p{int16_t(emitter.x + int(random16(2 * jitterX + 1)) - jitterX),
+                            int16_t(emitter.y + int(random16(2 * jitterY + 1)) - jitterY),
+                            int16_t(launchZ),
+                            int8_t(int(random8(5)) - 2 + int(random8(2 * spread + 1)) - spread),
+                            int8_t(int(random8(5)) - 2 + int(random8(2 * spread + 1)) - spread),
+                            int8_t(rise + (height >> 4) + int(random8(2 * spread + 1)) - spread),
+                            uint8_t(20 + random16(max(1, heatRange)) / (1 + (fireSpeed >> 5)) +
+                                    random8(maxLife >> 1, maxLife)),
+                            true};
+                    if (random16(4096) < 10 + (settings.intensity >> 2)) {
+                        p.vz = rise + ((30 + (settings.intensity >> 1) + height) >> 4);
+                        p.heat = 30 + random8(RNDR_Z);
+                    }
+                    // Age through the invisible part of the rise at launch,
+                    // leaving the pool for particles that can contribute light.
+                    while (p.z < -subpixels * 2 && p.heat > 1) {
+                        --p.heat;
+                        p.x += p.vx;
+                        p.y += p.vy;
+                        p.z += p.vz + (p.heat >> 2);
+                    }
+                    pool[nextSlot++] = p;
+                    ++timing.emitted;
+                    ++timing.active;
+                }
+            }
+            timing.peakActive = max(timing.peakActive, timing.active);
+            ++frame;
+        };
+
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
+            const uint32_t frameStartUs = micros();
+            const uint32_t due = (frameStartUs - lastStepUs) / stepUs;
+            if (!due) { delay(1); continue; }
+            lastStepUs += due * stepUs;
+            const uint32_t steps = min(due, maxCatchUpSteps);
+            timing.steps += steps;
+            timing.skipped += due - steps;
+            timing.catchUp += steps - 1;
+            for (uint32_t i = 0; i < steps; ++i) stepFire();
+            const uint32_t drawStartUs = micros();
+
+            fadeAll(255 - 170);
+            for (int i = 0; i < pool.size(); ++i) {
+                const auto& p = pool[i];
+                if (!p.active) continue;
+                float z = p.z / float(subpixels);
+                z += max(0.0f, z) * (settings.visibleHeightScale - 1.0f);
+                const auto& brush = brushes[p.heat];
+                if (z <= -brush.radius - 0.5f || z >= RNDR_Z + brush.radius - 0.5f) continue;
+                drawBall({p.x / float(subpixels), p.y / float(subpixels), z}, brush.radius, brush.color, false);
+            }
+            const uint32_t outputStartUs = micros();
+            showCube();
+            const uint32_t frameEndUs = micros();
+
+            ++timing.renders;
+            timing.simulationUs += drawStartUs - frameStartUs;
+            timing.drawUs += outputStartUs - drawStartUs;
+            timing.outputUs += frameEndUs - outputStartUs;
+            timing.worstFrameUs = max(timing.worstFrameUs, frameEndUs - frameStartUs);
+            const uint32_t logElapsedUs = frameEndUs - lastLogUs;
+            if (settings.logTiming && logElapsedUs >= 2000000) {
+                const double perSecond = 1000000.0 / logElapsedUs;
+                const double msPerRender = 0.001 / timing.renders;
+                Serial.printf("PS Fire target=%.1fHz sim=%.1fHz render=%.1ffps catchup=%u missed=%u "
+                              "ms sim/draw/show=%.2f/%.2f/%.2f worst=%.2f "
+                              "sources=%d embers=%u/%d peak=%u emit/s=%.0f rejected=%u rise=%.1fvox/s windPeak=%d/%d rollPeak=%d\n",
+                              1000000.0 / stepUs, timing.steps * perSecond, timing.renders * perSecond,
+                              unsigned(timing.catchUp), unsigned(timing.skipped),
+                              timing.simulationUs * msPerRender, timing.drawUs * msPerRender,
+                              timing.outputUs * msPerRender, timing.worstFrameUs * 0.001,
+                              emitterCount, unsigned(timing.active), pool.size(), unsigned(timing.peakActive),
+                              timing.emitted * perSecond, unsigned(timing.rejected),
+                              timing.riseUnits * (timing.steps * perSecond) / max(1u, timing.riseSamples) / subpixels,
+                              timing.peakWindX, timing.peakWindY, timing.peakTurbulence);
+                lastLogUs = frameEndUs;
+                timing = {};
+            }
+        }
+    }
+
     inline void animateVolcano(uint32_t durationMs, const VolcanoSettings& settings = {}) {
         using namespace Detail;
         // WLED uses its Fire palette. Keep the upper end yellow so the
@@ -267,10 +580,11 @@ namespace ParticleEffects {
             emission += emissionRate * dt;
             while (emission >= 1.0f) {
                 emission -= 1.0f;
-                // Wobble the source itself. Spread still changes individual
-                // spark velocities around that moving point.
+                // Wobble the source itself. Spread changes individual spark
+                // velocities around that moving point.
                 const Point3 origin{
-                    constrain(nozzle.position.x + emitterWobble * sinf(tick * 0.025f), 0.0f, RNDR_X - 1.0f),
+                    constrain(nozzle.position.x + emitterWobble * sinf(tick * 0.025f),
+                              0.0f, RNDR_X - 1.0f),
                     constrain(nozzle.position.y + emitterWobble * 0.7f * sinf(tick * 0.018f),
                               0.0f, RNDR_Y - 1.0f),
                     nozzle.position.z};
@@ -291,8 +605,15 @@ namespace ParticleEffects {
                 const uint8_t phase = p.type * 41 + int((1.0f - p.life) * 512.0f);
                 const float wobble = (sin8(phase) - 128) / 128.0f;
                 const float radius = max(0.0f, settings.particleRadius + settings.radiusWobble * wobble);
-                drawBall(p.motion.position, radius * lengthScale,
-                         ColorFromPalette(palette, index, brightness, blendMode), false);
+                const CRGB color = ColorFromPalette(palette, index, brightness, blendMode);
+                Point3 position = p.motion.position;
+                if (settings.plumeWidthScale != 1.0f) {
+                    // Apply the same horizontal scale to spark centers and their
+                    // footprints. Wobble, rise, and cooling run in the original simulation.
+                    position.x = nozzle.position.x + (position.x - nozzle.position.x) * settings.plumeWidthScale;
+                    position.y = nozzle.position.y + (position.y - nozzle.position.y) * settings.plumeWidthScale;
+                }
+                drawBall(position, radius * lengthScale, color, false, false, settings.plumeWidthScale);
             }
         });
     }
@@ -349,10 +670,7 @@ namespace ParticleEffects {
             const float along = (dx - dy) * diagonalComponent * settings.faceWidthScale;
             const float depth = (dx + dy) * diagonalComponent * settings.faceDepthScale;
             const float recess = min(RNDR_X - 1, RNDR_Y - 1) * settings.faceRecessFraction;
-            draw({RNDR_CX + along, recess + depth, position.z});
-            draw({RNDR_X - 1 - recess - depth, RNDR_CY + along, position.z});
-            draw({RNDR_CX - along, RNDR_Y - 1 - recess - depth, position.z});
-            draw({recess + depth, RNDR_CY - along, position.z});
+            drawFourFaceCopies(along, recess + depth, position.z, draw);
         };
         run(durationMs, 190, [&](uint32_t) {
             for (int i = 0; i < nozzles; ++i) {
@@ -693,8 +1011,6 @@ namespace ParticleEffects {
         run(durationMs, 0, [&](uint32_t tick) {
             const bool emitFrame = wledFrameDue(tick);
             bool applyFriction = false;
-            float mass = settings.mass;
-            if (liveAudioSource()) mass *= RemoteInputs::audio().volumeSm / 255.0f;
             if (emitFrame) {
                 if (settings.move && frame % 3 == 0) moveEmitter(attractor);
                 if (frame % 5 == 0) ++hue;
@@ -776,7 +1092,7 @@ namespace ParticleEffects {
                                    attractor.position.z - pos.z};
                 const float r2 = delta.x * delta.x + delta.y * delta.y + delta.z * delta.z;
                 // WLED softens the central pull and ages particles quickly in Swallow mode.
-                const float force = mass * wledGravity / max(2.0f, r2);
+                const float force = settings.mass * wledGravity / max(2.0f, r2);
                 constexpr float limit = 120.0f * wledVelocity;
                 const auto updateVelocity = [&](float speed, float offset) {
                     speed = constrain(speed + force * offset * dt, -limit, limit);
@@ -824,22 +1140,19 @@ namespace ParticleEffects {
         float emission = 1.0f - volumeScale;
         run(durationMs, 200, [&](uint32_t tick) {
             if (wledFrameDue(tick)) {
-                const bool reactive = liveAudioSource();
-                const auto audio = reactive ? RemoteInputs::audio() : RemoteInputs::AudioFrame{};
-                const int period = reactive ? 11 - audio.volumeSm / 25 : 11 - settings.intensity / 25;
-                if (frame % period == 0 || (reactive && frame % 20 == 0)) {
+                const int period = 11 - settings.intensity / 25;
+                if (frame % period == 0) {
                     emission += volumeScale;
                     if (emission >= 1.0f) {
                         emission -= 1.0f;
-                        const float speed = ((settings.speed >> 2) + (audio.volumeRaw >> 3)) * wledVelocity;
-                        const int spread = reactive ? 1 + ((audio.volumeRaw * settings.speed) >> 12) : 3;
+                        const float speed = (settings.speed >> 2) * wledVelocity;
+                        constexpr int spread = 3;
                         const float horizontal = speed * cosf(angle) * 0.70710678f;
                         const Point3 v{horizontal + sample(-spread, spread) * wledVelocity,
                                        horizontal + sample(-spread, spread) * wledVelocity,
                                        speed * sinf(angle) + sample(-spread, spread) * wledVelocity};
-                        const float life = reactive ? sample(30, max(31, (audio.volumeSm + settings.intensity) / 2)) :
-                                                     sample(150 + settings.intensity, 300 + settings.intensity);
-                        hue += reactive ? audio.volumeSm / 30 : 1;
+                        const float life = sample(150 + settings.intensity, 300 + settings.intensity);
+                        ++hue;
                         pool.spawn({true, hue, {nozzle, v}, 1.0f, settings.gravity ? 8 * wledGravity : 0.0f,
                                     1.0f, 42.0f / life, CRGB::Black, 0});
                     }
@@ -852,91 +1165,282 @@ namespace ParticleEffects {
     }
 
     inline void animateGeq(uint32_t durationMs, const GeqSettings& settings = {},
-                           const CRGBPalette16& palette = PartyColors_p, bool (*keepDrawing)() = nullptr) {
+                           const CRGBPalette16& palette = RainbowColors_p, bool (*keepDrawing)() = nullptr) {
         using namespace Detail;
+        const bool randomLaunch = settings.layout == GeqLayout::Random;
+        const bool clustered = !randomLaunch;
         const Side xSide = settings.walls ? Side::Bounce : (settings.cylinder ? Side::Wrap : Side::Open);
         const Side ySide = settings.walls ? Side::Bounce : Side::Open;
         const float bounce = settings.bounce / 255.0f;
-        const float gravity = min(31, int(settings.gravity)) * 4 * wledGravity * verticalScale;
+        const int gravity = min(31, int(settings.gravity)) << 2; // WLED 3.4 fixed-point force.
         const int threshold = 300 - settings.intensity;
-        const float divergence = (settings.diverge >> 2) * wledVelocity;
-        Pool pool(population(maxParticles * 2 / 3));
+        const int divergence = settings.diverge >> 2;
+        const auto lateralSpeed = [divergence](int first, int second) {
+            return ((first % (divergence + 1)) - (second % (divergence + 1))) * wledVelocity;
+        };
+        const float inputGain = std::isfinite(settings.inputGain) ? constrain(settings.inputGain, 0.0f, 8.0f) : 1.0f;
+        const float brightnessGain = std::isfinite(settings.brightnessGain) ? constrain(settings.brightnessGain, 0.0f, 8.0f) : 1.0f;
+        constexpr float geqStep = 1.0f / 42.0f;
+        int gravityRemainder = 0;
+        const auto launchPoint = [&](int bin) -> Point3 {
+            // Swap bands 7/16 and 9/15 to give the center two active mids.
+            constexpr uint8_t placement[] = {0, 1, 2, 3, 4, 5, 15, 7, 14, 9, 10, 11, 12, 13, 8, 6};
+            const int tile = AudioLayouts::orbitInwardTiles[placement[bin]];
+            const int column = tile % 4, row = tile / 4;
+            const int x = column * RNDR_X / 4, y = row * RNDR_Y / 4;
+            const int width = (column + 1) * RNDR_X / 4 - x;
+            const int depth = (row + 1) * RNDR_Y / 4 - y;
+            return {float(x + random8(width)), float(y + random8(depth)), 0.0f};
+        };
+        const Point3 fixedOrigin{RNDR_CX, RNDR_CY, 0.0f};
+        // Lifetimes use whole effect updates. Clusters shares one record for all
+        // copies of a launch, with a mask and a seed for individual fades.
+        struct GeqParticle {
+            Motion motion;
+            uint16_t age, blocks;
+            uint8_t band, speed, variation;
+            bool active;
+        };
+        static_assert(sizeof(GeqParticle) <= 32, "PS GEQ needs a compact particle record");
+        using GeqPool = ParticlePool<GeqParticle>;
+        GeqPool pool(population(GeqPool::capacity, GeqPool::capacity));
+        const auto lifetime = [&](int speed, int variation) {
+            return 20 + (speed >> 1) + (speed - (speed >> 1) + variation) * settings.intensity / 255;
+        };
+        RemoteInputs::AudioFrame audio{};
+        uint8_t displayBins[16] = {};
+        bool compensated = false;
+        struct GeqPeaks {
+            int raw, driven, launch, voxel;
+            unsigned clipped, spawned, blocked;
+            float height, flightHeight;
+            bool fallingVisible;
+        } peaks{};
+        char detail[192] = "PS GEQ measuring first 500 ms";
+        uint32_t lastReport = millis();
         run(durationMs, 0, [&](uint32_t tick) {
-            if (wledFrameDue(tick)) {
-                const auto audio = RemoteInputs::audio();
-                int nextSlot = 0;
-                for (int bin = 0; bin < 16; ++bin) {
-                    const uint8_t level = audio.fftResult[bin];
-                    if (!emitBand(level, threshold) || (volumeScale < 1.0f && sample(0, 1) >= volumeScale)) continue;
-                    nextSlot = pool.firstFree(nextSlot);
-                    if (nextSlot == pool.size()) break;
-                    const int speed = (level * settings.speed) >> 9;
-                    const int lifetimeVariation = speed ? random16(speed) : 0;
-                    const float life = 20 + (speed >> 1) + (speed - (speed >> 1) + lifetimeVariation) *
-                                       (settings.intensity / 255.0f);
-                    // Sixteen bands in four rows, with bass-to-treble groups along X.
-                    const Point3 origin{(bin / 4 + sample(0, 1)) * (RNDR_X - 1) / 4.0f,
-                                        (bin % 4 + sample(0, 1)) * (RNDR_Y - 1) / 4.0f, 0.0f};
-                    const Point3 velocity{sample(-divergence, divergence), sample(-divergence, divergence),
-                                          speed * wledVelocity * verticalScale};
-                    pool[nextSlot++] = {true, uint8_t(bin * 16 + int(random8(17)) - 8), {origin, velocity},
-                                        1.0f, gravity, 1.0f, 42.0f / life, CRGB::Black, 0};
+            if (!wledFrameDue(tick)) return;
+            audio = RemoteInputs::audio();
+            compensated = Audio::displaySpectrum(audio, displayBins);
+            int nextSlot = 0;
+            bool poolBlocked = false;
+            // Preserve WLED's bass-first priority for Random. Rotate priority
+            // for the replicated layouts so bass can't take every shared trajectory.
+            const int firstBin = randomLaunch ? 0 : tick % 16;
+            for (int i = 0; i < 16; ++i) {
+                const int bin = (firstBin + i) % 16;
+                const int raw = audio.fftResult[bin];
+                const int amplified = lroundf(displayBins[bin] * inputGain);
+                const int level = min(255, amplified);
+                peaks.raw = max(peaks.raw, raw);
+                peaks.driven = max(peaks.driven, level);
+                peaks.clipped += amplified > 255;
+                if (poolBlocked || level == 0) continue;
+                const auto fires = [&] {
+                    return emitBand(level, threshold) && (volumeScale >= 1.0f || sample(0, 1) < volumeScale);
+                };
+                uint16_t blocks = 0;
+                unsigned launches = 0;
+                // Give each cluster one chance per update, then pick one of
+                // its four nozzles so strong bins leave room for the spray.
+                const int clusters = randomLaunch ? 1 : 4;
+                for (int cluster = 0; cluster < clusters; ++cluster) {
+                    if (!fires()) continue;
+                    const int nozzle = randomLaunch ? 0 : 4 * cluster + random8(4);
+                    blocks |= uint16_t(1u << nozzle);
+                    ++launches;
+                }
+                if (!launches) continue;
+                nextSlot = pool.firstFree(nextSlot);
+                if (nextSlot == pool.size()) { poolBlocked = true; continue; }
+                const int speed = (level * settings.speed) >> 9;
+                const uint8_t randomLifetime = randomLaunch && speed ? random16(speed) : 0;
+                const auto sideways = [&] {
+                    if (!divergence) return 0.0f;
+                    // Most shots stay near their nozzle, with occasional wider arcs.
+                    return lateralSpeed(random16(), random16());
+                };
+                // Clusters share vertical motion. Each rendered copy gets its own
+                // horizontal velocity so spray does not drift in lockstep.
+                const Point3 velocity{clustered ? 0.0f : sideways(), clustered ? 0.0f : sideways(),
+                                      speed * wledVelocity * verticalScale};
+                const Point3 origin = randomLaunch ? launchPoint(bin) : fixedOrigin;
+                const uint8_t variation = randomLaunch ? randomLifetime : random8();
+                pool[nextSlot++] = {{origin, velocity}, 0, blocks, uint8_t(bin), uint8_t(speed), variation, true};
+                peaks.launch = max(peaks.launch, speed);
+                peaks.spawned += launches;
+            }
+            peaks.blocked += poolBlocked;
+            // WLED applies gravity before moving. At low forces, save fractional kicks.
+            const int force = gravity >= 16 ? gravity : gravityRemainder + gravity;
+            gravityRemainder = gravity < 16 ? force % 16 : 0;
+            const float kick = (force / 16) * wledVelocity * verticalScale;
+            const float terminal = 127 * wledVelocity * verticalScale;
+            for (int i = 0; i < pool.size(); ++i) {
+                auto& particle = pool[i];
+                if (!particle.active) continue;
+                const int variation = randomLaunch ? particle.variation : max(0, int(particle.speed) - 1);
+                if (++particle.age >= lifetime(particle.speed, variation)) { particle.active = false; continue; }
+                auto& motion = particle.motion;
+                auto& p = motion.position;
+                auto& v = motion.velocity;
+                v.z = max(-terminal, v.z - kick);
+                advance(motion, geqStep, {}, 1.0f);
+                particle.active = resolveSide(p.x, v.x, RNDR_X, xSide, bounce) &&
+                                  resolveSide(p.y, v.y, RNDR_Y, ySide, bounce) &&
+                                  (settings.floor || p.z > -1.0f);
+                if (particle.active && settings.floor) bounceFloor(motion, bounce, 0.0f);
+                if (particle.active && !gravity && p.z > RNDR_Z - 1.0f) {
+                    particle.active = resolveSide(p.z, v.z, RNDR_Z, settings.floor ? Side::Bounce : Side::Open, bounce);
                 }
             }
-            stepSpray(pool, xSide, ySide, settings.floor, bounce, 0.0f, false);
-            if (!settings.gravity) resolveSprayTop(pool, settings.floor ? Side::Bounce : Side::Open, bounce);
-        }, [&] { drawSpray(pool, palette, xSide == Side::Wrap); }, keepDrawing);
+        }, [&] {
+            const auto draw = [&](Point3 p, uint8_t hue, int remainingFrames, bool falling = false) {
+                if (remainingFrames <= 0 || p.x <= -1.0f || p.x >= RNDR_X ||
+                    p.y <= -1.0f || p.y >= RNDR_Y) return;
+                // WLED fades by remaining lifetime in frames.
+                float light = remainingFrames * 2.0f;
+                // Keep descending spray visible through the spatial blend,
+                // then fade it over the final eight updates.
+                if (falling) light = max(light, 36.0f * min(1.0f, remainingFrames / 8.0f));
+                const uint8_t brightness = min(255, int(lroundf(light * brightnessGain)));
+                if (brightness == 0) return;
+                const CRGB color = ColorFromPalette(palette, hue, brightness);
+                drawBall(p, 0.55f, color, xSide == Side::Wrap, true, 1.0f, ParticleBlend::Brightest);
+                const int x = constrain(int(lroundf(p.x)), 0, RNDR_X - 1);
+                const int y = constrain(int(lroundf(p.y)), 0, RNDR_Y - 1);
+                const int z = constrain(int(lroundf(p.z)), 0, RNDR_Z - 1);
+                const CRGB lit = getVoxel(x, y, z);
+                const int voxel = max(lit.r, max(lit.g, lit.b));
+                peaks.voxel = max(peaks.voxel, voxel);
+                if (voxel > 0) {
+                    peaks.height = max(peaks.height, min(p.z, float(RNDR_Z - 1)));
+                    peaks.fallingVisible |= falling;
+                }
+            };
+            for (int i = 0; i < pool.size(); ++i) {
+                const auto& particle = pool[i];
+                if (!particle.active) continue;
+                const auto& p = particle.motion.position;
+                peaks.flightHeight = max(peaks.flightHeight, p.z);
+                if (p.z <= -1.0f || p.z >= RNDR_Z) continue;
+                const uint8_t hue = particle.band * 16;
+                if (randomLaunch) {
+                    draw(p, hue, lifetime(particle.speed, particle.variation) - particle.age,
+                         particle.motion.velocity.z < 0.0f);
+                    continue;
+                }
+                const int tile = AudioLayouts::orbitInwardTiles[particle.band];
+                for (int block = 0; block < 16; ++block) {
+                    if (!(particle.blocks & (1u << block))) continue;
+                    // Four 8×8 blocks on 16³, with a 2×2 set of nozzles per bin.
+                    const int quadrant = block / 4;
+                    const int column = 2 * (tile % 4) + block % 2;
+                    const int row = 2 * (tile / 4) + (block % 4) / 2;
+                    Point3 copy{
+                        p.x - fixedOrigin.x + AudioLayouts::inwardCoordinate(quadrant % 2, column, RNDR_X, 2),
+                        p.y - fixedOrigin.y + AudioLayouts::inwardCoordinate(quadrant / 2, row, RNDR_Y, 2), p.z};
+                    const uint16_t variation = uint16_t((particle.variation * 257u ^ (block + 1) * 0x9E37u) * 40503u);
+                    const int life = lifetime(particle.speed, (uint32_t(variation) * particle.speed) >> 16);
+                    if (divergence) {
+                        // Constant horizontal velocity with open sides. Derive
+                        // it from the launch seed to keep the current pool size.
+                        const uint32_t spray = uint32_t(variation) * 0x9E3779B1u;
+                        const float ageSeconds = particle.age * geqStep;
+                        copy.x += lateralSpeed(spray & 255u, (spray >> 8) & 255u) * ageSeconds;
+                        copy.y += lateralSpeed((spray >> 16) & 255u, spray >> 24) * ageSeconds;
+                    }
+                    draw(copy, hue, life - particle.age, particle.motion.velocity.z < 0.0f);
+                }
+            }
+            const uint32_t now = millis();
+            if (uint32_t(now - lastReport) >= 500) {
+                snprintf(detail, sizeof(detail), "PS GEQ curve=%s gain=%.1f light=%.1f rawPeak=%d drivePeak=%d clips=%u "
+                         "launchPeak=%.1f zPeak=%.1f flightPeak=%.1f falling=%u lightPeak=%d spawned=%u poolFullSteps=%u cap=%d",
+                         compensated ? "comp" : "raw", double(inputGain), double(brightnessGain), peaks.raw, peaks.driven, peaks.clipped,
+                         double(peaks.launch * wledVelocity * verticalScale), double(peaks.height),
+                         double(peaks.flightHeight), unsigned(peaks.fallingVisible), peaks.voxel,
+                         peaks.spawned, peaks.blocked, pool.size());
+                peaks = {};
+                lastReport = now;
+            }
+            Audio::debug(audio, detail, 0, displayBins);
+        }, keepDrawing);
     }
 
-    inline void animateGeqNova(uint32_t durationMs, const GeqNovaSettings& settings = {},
-                               bool (*keepDrawing)() = nullptr, const CRGBPalette16* selectedPalette = nullptr) {
+    // Based on DedeHai's PS Vortex in WLED 16.0.1. The nozzles turn at
+    // the center, and each released particle retains its launch velocity.
+    inline void animateVortex(uint32_t durationMs, const VortexSettings& settings = {}) {
         using namespace Detail;
-        // WLED 16.0's palette 13 is Sunset Real.
-        static const uint8_t sunset[] PROGMEM = {0,181,0,0, 22,218,85,0, 51,255,170,0, 85,211,85,77,
-                                                 135,167,0,169, 198,73,0,188, 255,0,0,207};
-        const CRGBPalette16 palette = selectedPalette ? *selectedPalette : CRGBPalette16(sunset);
+        const CRGBPalette16 palette(RainbowColors_p);
         const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
-        const int threshold = 300 - settings.intensity;
-        const float spread = (min(31, int(settings.nozzle)) >> 2) * wledVelocity;
-        const float turn = (settings.direction ? 1.0f : -1.0f) * settings.rotationSpeed * (TWO_PI / 16384.0f);
-        constexpr float goldenAngle = 2.39996323f;
-        Pool pool(population(maxParticles));
-        float rotation = 0.0f;
+        const int arms = constrain(int(settings.arms), 1, 8);
+        const int sourceCount = 2 * arms;
+        const float scale = min(RNDR_X, min(RNDR_Y, RNDR_Z)) / 16.0f;
+        const float speed = ((settings.particleSpeed >> 2) + 1) * wledVelocity * scale;
+        const float spread = (min(31, int(settings.nozzle)) >> 1) * wledVelocity * scale;
+        const int emissionPeriod = 32 / (int(settings.particleSpeed) + 1) + 1;
+        const uint32_t flipPeriod = 1040 - 4 * uint32_t(settings.flip);
+        uint32_t nextFlip = flipPeriod + (settings.randomFlip ? 20 + random16(flipPeriod) : 0);
         uint32_t frame = 0;
-        uint8_t hueOffset = 0;
-        run(durationMs, 0, [&](uint32_t tick) {
+        bool direction = settings.direction;
+        int rotation = 0;
+        uint16_t phase[2] = {0, 8192};
+        float emission = 1.0f - volumeScale;
+        Pool pool(population((maxParticles * 171) / 256));
+        run(durationMs, settings.motionBlur, [&](uint32_t tick) {
             if (wledFrameDue(tick)) {
-                const auto audio = RemoteInputs::audio();
-                rotation += turn;
-                if (rotation >= TWO_PI) rotation -= TWO_PI;
-                if (rotation <= -TWO_PI) rotation += TWO_PI;
-                if (settings.colorChange && frame % (32 - (settings.colorChange >> 3)) == 0) {
-                    hueOffset += 1 + (settings.colorChange >> 4);
+                if (settings.flip && frame == nextFlip) {
+                    direction = !direction;
+                    nextFlip += flipPeriod + (settings.randomFlip ? 20 + random16(flipPeriod) : 0);
+                }
+                const int target = (direction ? 8 : -8) * settings.rotationSpeed;
+                const int difference = target - rotation;
+                const int increment = difference / 50;
+                rotation += increment ? increment : (difference > 0) - (difference < 0);
+                phase[0] += rotation;
+                phase[1] -= rotation * 3 / 4;
+                if (frame % emissionPeriod == 0) {
+                    emission += volumeScale;
+                    if (emission >= 1.0f) {
+                        emission -= 1.0f;
+                        const int first = random8(sourceCount);
+                        for (int i = 0; i < sourceCount; ++i) {
+                            const int source = (first + i) % sourceCount;
+                            const int plane = source / arms;
+                            const uint16_t angle = phase[plane] + (source % arms) * (65536u / arms);
+                            const float alongX = cos16(angle) * (speed / 32767.0f);
+                            const float across = sin16(angle) * (speed / 32767.0f);
+                            const Point3 velocity{alongX + sample(-spread, spread),
+                                                  (plane ? 0.0f : across) + sample(-spread, spread),
+                                                  (plane ? across : 0.0f) + sample(-spread, spread)};
+                            // Cycle the source colors. Released particles keep their launch hue.
+                            const uint8_t hue = frame + ((source % arms) * 2 + plane) * 256 / sourceCount;
+                            pool.spawn({true, hue, {center, velocity}, 1.0f, 0.0f, 1.0f,
+                                        42.0f / (800 + random16(100)), CRGB::Black, 0});
+                        }
+                    }
                 }
                 ++frame;
-                const uint8_t first = random8(16);
-                int nextSlot = 0;
-                for (int i = 0; i < 16; ++i) {
-                    const int bin = (i + first) & 15;
-                    const uint8_t level = audio.fftResult[bin];
-                    if (!emitBand(level, threshold) || (volumeScale < 1.0f && sample(0, 1) >= volumeScale)) continue;
-                    nextSlot = pool.firstFree(nextSlot);
-                    if (nextSlot == pool.size()) break;
-                    // Equal-area Fibonacci directions extend the original radial spray to a sphere.
-                    const float z = 1.0f - (bin + 0.5f) / 8.0f;
-                    const float speed = (5 + ((level * (settings.speed + 20)) >> 10)) * wledVelocity;
-                    auto v = GeometryEngine::helixPoint({}, speed * sqrtf(1.0f - z * z),
-                                                       bin * goldenAngle + rotation, speed * z);
-                    v.x += sample(-spread, spread);
-                    v.y += sample(-spread, spread);
-                    v.z += sample(-spread, spread);
-                    pool[nextSlot++] = {true, uint8_t(bin * 16 + hueOffset), {center, v}, 1.0f, 0.0f,
-                                        1.0f, 42.0f / sample(200, 400), CRGB::Black, 0};
-                }
             }
-            stepSpray(pool, Side::Open, Side::Open, false, 0.0f, 0.0f, false);
-            resolveSprayTop(pool, Side::Open, 0.0f);
-        }, [&] { drawSpray(pool, palette, false); }, keepDrawing);
+            for (int i = 0; i < pool.size(); ++i) {
+                auto& p = pool[i];
+                if (!p.active) continue;
+                advance(p.motion, dt, {}, 1.0f);
+                p.life -= p.decay * dt;
+                const auto& pos = p.motion.position;
+                p.active = p.life > 0.0f && pos.x > -1.0f && pos.x < RNDR_X &&
+                           pos.y > -1.0f && pos.y < RNDR_Y && pos.z > -1.0f && pos.z < RNDR_Z;
+            }
+        }, [&] {
+            for (int i = 0; i < pool.size(); ++i) {
+                const auto& p = pool[i];
+                if (!p.active) continue;
+                const CRGB color = ColorFromPalette(palette, p.type, uint8_t(255 * min(1.0f, 4 * p.life)));
+                drawBall(p.motion.position, settings.smear ? 0.85f : 0.55f, color, false,
+                         true, 1.0f, ParticleBlend::Brightest);
+            }
+        });
     }
 
     inline void animateGalaxy(uint32_t durationMs, const GalaxySettings& settings = {},

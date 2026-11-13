@@ -131,9 +131,9 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
-    assert(std::strcmp(currentAudioRoutineName(), "PS GEQ 2D") == 0);
-    play(4);
-    assert(launches == std::vector<unsigned>({13, 12, 11, 10}));
+    assert(std::strcmp(currentAudioRoutineName(), "PS GEQ Inward 4") == 0);
+    play(6);
+    assert(launches == std::vector<unsigned>({14, 13, 12, 11, 10, 9}));
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
     const unsigned rememberedLook = waverlyLook;
@@ -229,6 +229,7 @@ int main() {
     assert(audioRoutineRunning()); // A direct experimental call is untimed.
     play(1);
     assert(launches[0] == 1);
+    assert(std::strcmp(currentAudioRoutineName(), "Puddles") == 0 && !waverlyLookSelected);
 
     reset(PlaybackOrder::Shuffled);
     play(count * 3);
@@ -300,16 +301,18 @@ void Audio::waverly(ShaderMode, CRGBPalette16, bool, uint32_t) {
     draw(1);
 }
 
-void Audio::animateSurroundGEQ() { draw(6); }
+void Audio::animateInwardGEQ() { draw(12); }
+void Audio::animateSurroundGEQ() { draw(12); }
 
 void Audio::animateJulia() { draw(0); }
 
-void Audio::animateCornerBurst() { draw(7); }
-void Audio::animateCornerBurstSphere() { draw(7); }
-void Audio::animateCornerBurstBox() { draw(7); }
-void Audio::animateDriftRose() { draw(8); }
-void Audio::animateCylinder() { draw(9); }
-void Audio::animatePlasmoidMirrored() { draw(10); }
-void Audio::animatePlasmoid() { draw(11); }
-void Audio::animateParticleGeqNova() { draw(12); }
-void Audio::animateParticleGeq() { draw(13); }
+void Audio::animateCornerBurst() { draw(6); }
+void Audio::animateCornerBurstSphere() { draw(6); }
+void Audio::animateCornerBurstBox() { draw(6); }
+void Audio::animateDriftRose() { draw(7); }
+void Audio::animateCylinder() { draw(8); }
+void Audio::animatePlasmoidMirrored() { draw(9); }
+void Audio::animateParticleGeqRandom() { draw(13); }
+void Audio::animateParticleGeqClusters() { draw(14); }
+void Audio::animateFunkyPlank() { draw(11); }
+void Audio::bouncingBalls(BouncingBallsPattern) { draw(10); }

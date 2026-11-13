@@ -941,6 +941,11 @@ namespace GeometryEngine {
     // ==========================================
     // SINE WAVES
     // ==========================================
+    inline float sineWaveHeight(float distance, float angleScale, uint16_t phase, float amplitude) {
+        const uint16_t angle = uint16_t(int32_t(distance * angleScale));
+        return amplitude * float(sin16(angle - phase)) / 32767.0f;
+    }
+
     inline void drawSineWave(float amplitude, int periodDegrees, int phaseShiftDegrees, float verticalShift, float uShift, float vShift, int orientation, WaveShape shape, const TextureState &tex) {
         float angleScale = (360.0f / (float)periodDegrees) * 4096.0f;
         uint16_t phaseShift16 = (uint16_t)(((uint32_t)phaseShiftDegrees * 65536) / 360);
@@ -956,10 +961,7 @@ namespace GeometryEngine {
                 float fy = (float)v + vShift; 
                 float dist = (shape == WAVE_RADIAL) ? sqrtf((fx * fx) + (fy * fy)) : fx;
 
-                uint16_t r_angle16 = (uint16_t)(dist * angleScale);
-                int16_t s16 = sin16(r_angle16 - phaseShift16);
-                
-                int w = (int)roundf(((amplitude * (float)s16) / 32767.0f) + verticalShift);
+                int w = (int)roundf(sineWaveHeight(dist, angleScale, phaseShift16, amplitude) + verticalShift);
 
                 if (w >= 0 && w < limitW) {
                     uint8_t finalX, finalY, finalZ;

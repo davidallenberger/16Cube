@@ -15,7 +15,7 @@ struct MidrangeBoost {
     unsigned strongestBand = 0;
 
     void update(const RemoteInputs::AudioFrame &audio, uint32_t now,
-                bool fftEnabled) {
+                bool fftEnabled, const uint8_t* displayBins = nullptr) {
         // One-based bands
         // 2..9 include lower instruments; downweight the two bass-adjacent bands.
         // Track each band's recent level so steady spectral energy settles out.
@@ -24,8 +24,9 @@ struct MidrangeBoost {
         const float baselineBlend = 1.0f - expf(-float(fftDeltaMs) / 1000.0f);
         strongestRise = 0.0f;
         strongestBand = 0;
+        const uint8_t* bins = displayBins ? displayBins : audio.fftResult;
         for (unsigned i = 0; i < 8; ++i) {
-            const float level = float(audio.fftResult[i + 1]);
+            const float level = float(bins[i + 1]);
             if (!fftInitialized || !fftEnabled) bandBaseline[i] = level;
             const float weight = i == 0 ? 0.35f : (i == 1 ? 0.65f : 1.0f);
             const float rise = std::max(0.0f, std::min(level - 12.0f, level - bandBaseline[i] - 5.0f)) * weight;
