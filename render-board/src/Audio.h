@@ -105,7 +105,8 @@ class Audio {
     enum class BouncingBallsPattern { Clockwise, OrbitInward };
     static void bouncingBalls(BouncingBallsPattern pattern);
     static void animateParticleGeqClusters();
-    static void animateParticleGeqRandom();
+    static void animateParticleGeqTiles();
+    static void animateParticleGeqPairedBands();
     static bool displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]);
     static void animateCornerBurst();
     static void animateCornerBurstSphere();

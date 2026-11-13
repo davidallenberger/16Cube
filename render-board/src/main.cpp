@@ -91,10 +91,8 @@ Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_
 //Streamers::animateLissajous3D(10000, PartyColors_p, 128);
 return;
 
-// 2. THE PARTY VORTEX
-// 10 Seconds. Maximum speed (255). PartyColors.
-// High-energy, aggressive twisting that will fill the room with overlapping sweeps.
-Streamers::animateDrift3D(120000, RainbowColors_p, 32);
+// Drift 3D with cycling rainbow pairs.
+Streamers::animateDrift3D(120000, 32);
 return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 

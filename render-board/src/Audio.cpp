@@ -1008,7 +1008,7 @@ void Audio::drawGeqBars(bool inward) {
             const float height = heights[group];
             for (int z = 0; z < RNDR_Z && z < height; ++z) {
                 CRGB color = colors[group];
-                color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
+                if (z > 0) color.nscale8(uint8_t(192.0f * min(1.0f, height - z)));
                 plot(z, color);
             }
             // Draw the peak cap above the bar body.

@@ -36,13 +36,6 @@ namespace ParticleEffects {
         bool collide = false;
     };
 
-    struct VortexSettings {
-        uint8_t rotationSpeed = 128, particleSpeed = 128;
-        uint8_t arms = 3; // Per plane, within WLED's 1–8 range.
-        uint8_t flip = 200, nozzle = 0, motionBlur = 130;
-        bool smear = false, direction = false, randomFlip = false;
-    };
-
     struct BoxSettings {
         uint8_t speed = 128;
         uint8_t particles = 200; // Population on the 16³ reference cube.
@@ -93,10 +86,10 @@ namespace ParticleEffects {
         bool gravity = false, cylinder = false, collide = false;
     };
 
-    enum class GeqLayout { Clusters, Random };
+    enum class GeqLayout { Clusters, Tiles, PairedBands };
 
     struct GeqSettings {
-        uint8_t speed = 155, intensity = 200, diverge = 0, bounce = 128, gravity = 16;
+        uint8_t speed = 165, intensity = 200, diverge = 28, bounce = 128, gravity = 16;
         bool cylinder = false, walls = false, floor = false;
         GeqLayout layout = GeqLayout::Clusters;
         float inputGain = 1.0f;
@@ -171,10 +164,6 @@ namespace ParticleEffects {
 
         // Seven evenly spaced WLED emission opportunities per ten 60 Hz steps.
         inline bool wledFrameDue(uint32_t tick) { return ((tick % 10) * 7) % 10 < 7; }
-
-        inline bool emitBand(uint8_t level, int threshold) {
-            return level > threshold || (level > 0 && random16(0, ((threshold - level) >> 2) + 2) == 0);
-        }
 
         inline void drawSpray(Pool& pool, const CRGBPalette16& palette, bool wrapX) {
             for (int i = 0; i < pool.size(); ++i) {
@@ -1167,13 +1156,15 @@ namespace ParticleEffects {
     inline void animateGeq(uint32_t durationMs, const GeqSettings& settings = {},
                            const CRGBPalette16& palette = RainbowColors_p, bool (*keepDrawing)() = nullptr) {
         using namespace Detail;
-        const bool randomLaunch = settings.layout == GeqLayout::Random;
-        const bool clustered = !randomLaunch;
+        const bool tiled = settings.layout == GeqLayout::Tiles;
+        const bool pairedBands = settings.layout == GeqLayout::PairedBands;
+        const int binsPerBand = pairedBands ? 2 : 1;
+        const int bandCount = 16 / binsPerBand;
+        const int nozzlesPerBand = 256 / bandCount;
         const Side xSide = settings.walls ? Side::Bounce : (settings.cylinder ? Side::Wrap : Side::Open);
         const Side ySide = settings.walls ? Side::Bounce : Side::Open;
         const float bounce = settings.bounce / 255.0f;
         const int gravity = min(31, int(settings.gravity)) << 2; // WLED 3.4 fixed-point force.
-        const int threshold = 300 - settings.intensity;
         const int divergence = settings.diverge >> 2;
         const auto lateralSpeed = [divergence](int first, int second) {
             return ((first % (divergence + 1)) - (second % (divergence + 1))) * wledVelocity;
@@ -1181,23 +1172,54 @@ namespace ParticleEffects {
         const float inputGain = std::isfinite(settings.inputGain) ? constrain(settings.inputGain, 0.0f, 8.0f) : 1.0f;
         const float brightnessGain = std::isfinite(settings.brightnessGain) ? constrain(settings.brightnessGain, 0.0f, 8.0f) : 1.0f;
         constexpr float geqStep = 1.0f / 42.0f;
+        constexpr unsigned batchInterval = 6; // Simultaneous launches every ~143 ms.
+        unsigned geqFrame = 0;
         int gravityRemainder = 0;
-        const auto launchPoint = [&](int bin) -> Point3 {
+        const auto speedSpread = [](int speed) { return speed * 15 / 100; };
+        const auto tileNozzle = [](int bin, int nozzle) -> Point3 {
             // Swap bands 7/16 and 9/15 to give the center two active mids.
             constexpr uint8_t placement[] = {0, 1, 2, 3, 4, 5, 15, 7, 14, 9, 10, 11, 12, 13, 8, 6};
             const int tile = AudioLayouts::orbitInwardTiles[placement[bin]];
-            const int column = tile % 4, row = tile / 4;
-            const int x = column * RNDR_X / 4, y = row * RNDR_Y / 4;
-            const int width = (column + 1) * RNDR_X / 4 - x;
-            const int depth = (row + 1) * RNDR_Y / 4 - y;
-            return {float(x + random8(width)), float(y + random8(depth)), 0.0f};
+            return {AudioLayouts::inwardCoordinate(tile % 4, nozzle % 4, RNDR_X),
+                    AudioLayouts::inwardCoordinate(tile / 4, nozzle / 4, RNDR_Y), 0.0f};
         };
+        const auto clusterNozzle = [](int bin, int block) -> Point3 {
+            const int tile = AudioLayouts::orbitInwardTiles[bin];
+            const int quadrant = block / 4;
+            const int column = 2 * (tile % 4) + block % 2;
+            const int row = 2 * (tile / 4) + (block % 4) / 2;
+            return {AudioLayouts::inwardCoordinate(quadrant % 2, column, RNDR_X, 2),
+                    AudioLayouts::inwardCoordinate(quadrant / 2, row, RNDR_Y, 2), 0.0f};
+        };
+        const auto pairedBandNozzle = [](int band, int nozzle) -> Point3 {
+            // Sweep clockwise across two rows of four 4×8 patches.
+            const int row = band / 4;
+            const int column = row == 0 ? band : 7 - band;
+            return {AudioLayouts::inwardCoordinate(column, nozzle % 4, RNDR_X),
+                    AudioLayouts::inwardCoordinate(row, nozzle / 4, RNDR_Y, 2), 0.0f};
+        };
+        const auto nozzlePosition = [&](int bin, int nozzle) {
+            if (pairedBands) return pairedBandNozzle(bin, nozzle);
+            return tiled ? tileNozzle(bin, nozzle) : clusterNozzle(bin, nozzle);
+        };
+        // Keep the nozzle row at full band color, independent of the spray
+        // and its brightness and height diagnostics.
+        CRGB floorColors[RNDR_Y][RNDR_X]{};
+        for (int bin = 0; bin < bandCount; ++bin) {
+            const CRGB color = ColorFromPalette(palette, bin * (256 / bandCount), 255);
+            for (int nozzle = 0; nozzle < nozzlesPerBand; ++nozzle) {
+                const auto point = nozzlePosition(bin, nozzle);
+                const int x = constrain(int(lroundf(point.x)), 0, RNDR_X - 1);
+                const int y = constrain(int(lroundf(point.y)), 0, RNDR_Y - 1);
+                floorColors[y][x] = color;
+            }
+        }
         const Point3 fixedOrigin{RNDR_CX, RNDR_CY, 0.0f};
-        // Lifetimes use whole effect updates. Clusters shares one record for all
-        // copies of a launch, with a mask and a seed for individual fades.
+        // One record per band launch. A seed varies the nozzle copies
+        // independently without allocating a particle for every nozzle.
         struct GeqParticle {
             Motion motion;
-            uint16_t age, blocks;
+            uint16_t age;
             uint8_t band, speed, variation;
             bool active;
         };
@@ -1220,55 +1242,35 @@ namespace ParticleEffects {
         uint32_t lastReport = millis();
         run(durationMs, 0, [&](uint32_t tick) {
             if (!wledFrameDue(tick)) return;
+            const bool launchFrame = geqFrame % batchInterval == 0;
             audio = RemoteInputs::audio();
             compensated = Audio::displaySpectrum(audio, displayBins);
             int nextSlot = 0;
             bool poolBlocked = false;
-            // Preserve WLED's bass-first priority for Random. Rotate priority
-            // for the replicated layouts so bass can't take every shared trajectory.
-            const int firstBin = randomLaunch ? 0 : tick % 16;
-            for (int i = 0; i < 16; ++i) {
-                const int bin = (firstBin + i) % 16;
-                const int raw = audio.fftResult[bin];
-                const int amplified = lroundf(displayBins[bin] * inputGain);
+            // Rotate priority between batches if the particle pool fills.
+            const int firstBin = (geqFrame / batchInterval) % bandCount;
+            ++geqFrame;
+            for (int i = 0; i < bandCount; ++i) {
+                const int band = (firstBin + i) % bandCount;
+                const int bin = band * binsPerBand;
+                const int lastBin = bin + binsPerBand - 1;
+                const int raw = max(audio.fftResult[bin], audio.fftResult[lastBin]);
+                const int amplified = lroundf(max(displayBins[bin], displayBins[lastBin]) * inputGain);
                 const int level = min(255, amplified);
                 peaks.raw = max(peaks.raw, raw);
                 peaks.driven = max(peaks.driven, level);
                 peaks.clipped += amplified > 255;
-                if (poolBlocked || level == 0) continue;
-                const auto fires = [&] {
-                    return emitBand(level, threshold) && (volumeScale >= 1.0f || sample(0, 1) < volumeScale);
-                };
-                uint16_t blocks = 0;
-                unsigned launches = 0;
-                // Give each cluster one chance per update, then pick one of
-                // its four nozzles so strong bins leave room for the spray.
-                const int clusters = randomLaunch ? 1 : 4;
-                for (int cluster = 0; cluster < clusters; ++cluster) {
-                    if (!fires()) continue;
-                    const int nozzle = randomLaunch ? 0 : 4 * cluster + random8(4);
-                    blocks |= uint16_t(1u << nozzle);
-                    ++launches;
-                }
-                if (!launches) continue;
+                if (!launchFrame || poolBlocked || level == 0) continue;
+                const int speed = (level * settings.speed) >> 9;
+                if (speed <= (gravity >> 4)) continue;
                 nextSlot = pool.firstFree(nextSlot);
                 if (nextSlot == pool.size()) { poolBlocked = true; continue; }
-                const int speed = (level * settings.speed) >> 9;
-                const uint8_t randomLifetime = randomLaunch && speed ? random16(speed) : 0;
-                const auto sideways = [&] {
-                    if (!divergence) return 0.0f;
-                    // Most shots stay near their nozzle, with occasional wider arcs.
-                    return lateralSpeed(random16(), random16());
-                };
-                // Clusters share vertical motion. Each rendered copy gets its own
-                // horizontal velocity so spray does not drift in lockstep.
-                const Point3 velocity{clustered ? 0.0f : sideways(), clustered ? 0.0f : sideways(),
-                                      speed * wledVelocity * verticalScale};
-                const Point3 origin = randomLaunch ? launchPoint(bin) : fixedOrigin;
-                const uint8_t variation = randomLaunch ? randomLifetime : random8();
-                pool[nextSlot++] = {{origin, velocity}, 0, blocks, uint8_t(bin), uint8_t(speed), variation, true};
-                peaks.launch = max(peaks.launch, speed);
-                peaks.spawned += launches;
+                // Slower copies share gravity and derive their displacement at draw time.
+                const int referenceSpeed = speed + speedSpread(speed);
+                const Point3 velocity{0.0f, 0.0f, referenceSpeed * wledVelocity * verticalScale};
+                pool[nextSlot++] = {{fixedOrigin, velocity}, 0, uint8_t(band), uint8_t(speed), random8(), true};
+                peaks.launch = max(peaks.launch, referenceSpeed);
+                peaks.spawned += nozzlesPerBand;
             }
             peaks.blocked += poolBlocked;
             // WLED applies gravity before moving. At low forces, save fractional kicks.
@@ -1279,8 +1281,8 @@ namespace ParticleEffects {
             for (int i = 0; i < pool.size(); ++i) {
                 auto& particle = pool[i];
                 if (!particle.active) continue;
-                const int variation = randomLaunch ? particle.variation : max(0, int(particle.speed) - 1);
-                if (++particle.age >= lifetime(particle.speed, variation)) { particle.active = false; continue; }
+                const bool expired = ++particle.age >= lifetime(particle.speed, particle.speed - 1);
+                if (expired) { particle.active = false; continue; }
                 auto& motion = particle.motion;
                 auto& p = motion.position;
                 auto& v = motion.velocity;
@@ -1295,18 +1297,7 @@ namespace ParticleEffects {
                 }
             }
         }, [&] {
-            const auto draw = [&](Point3 p, uint8_t hue, int remainingFrames, bool falling = false) {
-                if (remainingFrames <= 0 || p.x <= -1.0f || p.x >= RNDR_X ||
-                    p.y <= -1.0f || p.y >= RNDR_Y) return;
-                // WLED fades by remaining lifetime in frames.
-                float light = remainingFrames * 2.0f;
-                // Keep descending spray visible through the spatial blend,
-                // then fade it over the final eight updates.
-                if (falling) light = max(light, 36.0f * min(1.0f, remainingFrames / 8.0f));
-                const uint8_t brightness = min(255, int(lroundf(light * brightnessGain)));
-                if (brightness == 0) return;
-                const CRGB color = ColorFromPalette(palette, hue, brightness);
-                drawBall(p, 0.55f, color, xSide == Side::Wrap, true, 1.0f, ParticleBlend::Brightest);
+            const auto measure = [&](Point3 p, bool falling) {
                 const int x = constrain(int(lroundf(p.x)), 0, RNDR_X - 1);
                 const int y = constrain(int(lroundf(p.y)), 0, RNDR_Y - 1);
                 const int z = constrain(int(lroundf(p.z)), 0, RNDR_Z - 1);
@@ -1318,39 +1309,66 @@ namespace ParticleEffects {
                     peaks.fallingVisible |= falling;
                 }
             };
-            for (int i = 0; i < pool.size(); ++i) {
-                const auto& particle = pool[i];
-                if (!particle.active) continue;
-                const auto& p = particle.motion.position;
-                peaks.flightHeight = max(peaks.flightHeight, p.z);
-                if (p.z <= -1.0f || p.z >= RNDR_Z) continue;
-                const uint8_t hue = particle.band * 16;
-                if (randomLaunch) {
-                    draw(p, hue, lifetime(particle.speed, particle.variation) - particle.age,
-                         particle.motion.velocity.z < 0.0f);
-                    continue;
-                }
-                const int tile = AudioLayouts::orbitInwardTiles[particle.band];
-                for (int block = 0; block < 16; ++block) {
-                    if (!(particle.blocks & (1u << block))) continue;
-                    // Four 8×8 blocks on 16³, with a 2×2 set of nozzles per bin.
-                    const int quadrant = block / 4;
-                    const int column = 2 * (tile % 4) + block % 2;
-                    const int row = 2 * (tile / 4) + (block % 4) / 2;
-                    Point3 copy{
-                        p.x - fixedOrigin.x + AudioLayouts::inwardCoordinate(quadrant % 2, column, RNDR_X, 2),
-                        p.y - fixedOrigin.y + AudioLayouts::inwardCoordinate(quadrant / 2, row, RNDR_Y, 2), p.z};
-                    const uint16_t variation = uint16_t((particle.variation * 257u ^ (block + 1) * 0x9E37u) * 40503u);
-                    const int life = lifetime(particle.speed, (uint32_t(variation) * particle.speed) >> 16);
-                    if (divergence) {
-                        // Constant horizontal velocity with open sides. Derive
-                        // it from the launch seed to keep the current pool size.
-                        const uint32_t spray = uint32_t(variation) * 0x9E3779B1u;
-                        const float ageSeconds = particle.age * geqStep;
-                        copy.x += lateralSpeed(spray & 255u, (spray >> 8) & 255u) * ageSeconds;
-                        copy.y += lateralSpeed((spray >> 16) & 255u, spray >> 24) * ageSeconds;
+            const auto draw = [&](Point3 p, uint8_t hue, int remainingFrames, float fade, bool falling) {
+                if (remainingFrames <= 0 || p.x <= -1.0f || p.x >= RNDR_X ||
+                    p.y <= -1.0f || p.y >= RNDR_Y) return;
+                // WLED fades by remaining lifetime in frames.
+                float light = remainingFrames * 2.0f;
+                // Keep descending spray visible through the spatial blend,
+                // then fade it over the final eight updates.
+                if (falling) light = max(light, 36.0f * min(1.0f, remainingFrames / 8.0f));
+                const uint8_t brightness = lroundf(min(255.0f, light * brightnessGain) * fade);
+                if (brightness == 0) return;
+                const CRGB color = ColorFromPalette(palette, hue, brightness);
+                drawBall(p, 0.55f, color, xSide == Side::Wrap, true, 1.0f,
+                         falling ? ParticleBlend::EmptyOnly : ParticleBlend::Brightest);
+                measure(p, falling);
+            };
+            const auto drawParticles = [&](bool fallingPass) {
+                for (int i = 0; i < pool.size(); ++i) {
+                    const auto& particle = pool[i];
+                    if (!particle.active) continue;
+                    const auto& p = particle.motion.position;
+                    const uint8_t hue = particle.band * (256 / bandCount);
+                    const float ageSeconds = particle.age * geqStep;
+                    const int spread = speedSpread(particle.speed);
+                    for (int block = 0; block < nozzlesPerBand; ++block) {
+                        Point3 copy = nozzlePosition(particle.band, block);
+                        copy.z = p.z;
+                        const uint16_t variation = uint16_t((particle.variation * 257u ^ (block + 1) * 0x9E37u) * 40503u);
+                        const uint16_t speedSeed = uint16_t(variation * 25173u + 13849u);
+                        const int speedBelowReference = (uint32_t(speedSeed) * (2 * spread + 1)) >> 16;
+                        const float velocityOffset = speedBelowReference * wledVelocity * verticalScale;
+                        copy.z -= velocityOffset * ageSeconds;
+                        const bool falling = particle.motion.velocity.z < velocityOffset;
+                        if (falling != fallingPass) continue;
+                        const int life = lifetime(particle.speed, (uint32_t(variation) * particle.speed) >> 16);
+                        peaks.flightHeight = max(peaks.flightHeight, copy.z);
+                        if (copy.z <= -1.0f || copy.z >= RNDR_Z) continue;
+                        if (divergence) {
+                            // Constant horizontal velocity with open sides. Derive
+                            // it from the launch seed to keep the current pool size.
+                            const uint32_t spray = uint32_t(variation) * 0x9E3779B1u;
+                            copy.x += lateralSpeed(spray & 255u, (spray >> 8) & 255u) * ageSeconds;
+                            copy.y += lateralSpeed((spray >> 16) & 255u, spray >> 24) * ageSeconds;
+                        }
+                        // Ease in over two updates and taper across the last voxel
+                        // at open boundaries where flight can end before lifetime.
+                        const float edge = min(min(copy.y + 1.0f, RNDR_Y - copy.y),
+                                               min(copy.z + 1.0f, RNDR_Z - copy.z));
+                        const float xEdge = xSide == Side::Wrap ? 1.0f : min(copy.x + 1.0f, RNDR_X - copy.x);
+                        const float fade = min(particle.age * 0.5f, constrain(min(edge, xEdge), 0.0f, 1.0f));
+                        draw(copy, hue, life - particle.age, fade, falling);
                     }
-                    draw(copy, hue, life - particle.age, particle.motion.velocity.z < 0.0f);
+                }
+            };
+            // Falling spray can only fill voxels the rising pass left empty.
+            drawParticles(false);
+            drawParticles(true);
+            for (int y = 0; y < RNDR_Y; ++y) {
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const CRGB color = floorColors[y][x];
+                    if (color != CRGB::Black) setVoxel(x, y, 0, color);
                 }
             }
             const uint32_t now = millis();
@@ -1366,81 +1384,6 @@ namespace ParticleEffects {
             }
             Audio::debug(audio, detail, 0, displayBins);
         }, keepDrawing);
-    }
-
-    // Based on DedeHai's PS Vortex in WLED 16.0.1. The nozzles turn at
-    // the center, and each released particle retains its launch velocity.
-    inline void animateVortex(uint32_t durationMs, const VortexSettings& settings = {}) {
-        using namespace Detail;
-        const CRGBPalette16 palette(RainbowColors_p);
-        const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
-        const int arms = constrain(int(settings.arms), 1, 8);
-        const int sourceCount = 2 * arms;
-        const float scale = min(RNDR_X, min(RNDR_Y, RNDR_Z)) / 16.0f;
-        const float speed = ((settings.particleSpeed >> 2) + 1) * wledVelocity * scale;
-        const float spread = (min(31, int(settings.nozzle)) >> 1) * wledVelocity * scale;
-        const int emissionPeriod = 32 / (int(settings.particleSpeed) + 1) + 1;
-        const uint32_t flipPeriod = 1040 - 4 * uint32_t(settings.flip);
-        uint32_t nextFlip = flipPeriod + (settings.randomFlip ? 20 + random16(flipPeriod) : 0);
-        uint32_t frame = 0;
-        bool direction = settings.direction;
-        int rotation = 0;
-        uint16_t phase[2] = {0, 8192};
-        float emission = 1.0f - volumeScale;
-        Pool pool(population((maxParticles * 171) / 256));
-        run(durationMs, settings.motionBlur, [&](uint32_t tick) {
-            if (wledFrameDue(tick)) {
-                if (settings.flip && frame == nextFlip) {
-                    direction = !direction;
-                    nextFlip += flipPeriod + (settings.randomFlip ? 20 + random16(flipPeriod) : 0);
-                }
-                const int target = (direction ? 8 : -8) * settings.rotationSpeed;
-                const int difference = target - rotation;
-                const int increment = difference / 50;
-                rotation += increment ? increment : (difference > 0) - (difference < 0);
-                phase[0] += rotation;
-                phase[1] -= rotation * 3 / 4;
-                if (frame % emissionPeriod == 0) {
-                    emission += volumeScale;
-                    if (emission >= 1.0f) {
-                        emission -= 1.0f;
-                        const int first = random8(sourceCount);
-                        for (int i = 0; i < sourceCount; ++i) {
-                            const int source = (first + i) % sourceCount;
-                            const int plane = source / arms;
-                            const uint16_t angle = phase[plane] + (source % arms) * (65536u / arms);
-                            const float alongX = cos16(angle) * (speed / 32767.0f);
-                            const float across = sin16(angle) * (speed / 32767.0f);
-                            const Point3 velocity{alongX + sample(-spread, spread),
-                                                  (plane ? 0.0f : across) + sample(-spread, spread),
-                                                  (plane ? across : 0.0f) + sample(-spread, spread)};
-                            // Cycle the source colors. Released particles keep their launch hue.
-                            const uint8_t hue = frame + ((source % arms) * 2 + plane) * 256 / sourceCount;
-                            pool.spawn({true, hue, {center, velocity}, 1.0f, 0.0f, 1.0f,
-                                        42.0f / (800 + random16(100)), CRGB::Black, 0});
-                        }
-                    }
-                }
-                ++frame;
-            }
-            for (int i = 0; i < pool.size(); ++i) {
-                auto& p = pool[i];
-                if (!p.active) continue;
-                advance(p.motion, dt, {}, 1.0f);
-                p.life -= p.decay * dt;
-                const auto& pos = p.motion.position;
-                p.active = p.life > 0.0f && pos.x > -1.0f && pos.x < RNDR_X &&
-                           pos.y > -1.0f && pos.y < RNDR_Y && pos.z > -1.0f && pos.z < RNDR_Z;
-            }
-        }, [&] {
-            for (int i = 0; i < pool.size(); ++i) {
-                const auto& p = pool[i];
-                if (!p.active) continue;
-                const CRGB color = ColorFromPalette(palette, p.type, uint8_t(255 * min(1.0f, 4 * p.life)));
-                drawBall(p.motion.position, settings.smear ? 0.85f : 0.55f, color, false,
-                         true, 1.0f, ParticleBlend::Brightest);
-            }
-        });
     }
 
     inline void animateGalaxy(uint32_t durationMs, const GalaxySettings& settings = {},

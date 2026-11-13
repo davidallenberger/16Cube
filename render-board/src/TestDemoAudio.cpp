@@ -118,8 +118,9 @@ namespace {
         {true, "Bouncing Balls Audio", &drawRandomBouncingBalls},
         {true, "Funky Plank", &Audio::animateFunkyPlank},
         {true, "GEQ", &drawRandomGeq},
-        {true, "PS GEQ Inward 16", &Audio::animateParticleGeqRandom},
-        {true, "PS GEQ Inward 4", &Audio::animateParticleGeqClusters},
+        {true, "PS GEQ 32", &Audio::animateParticleGeqPairedBands},
+        {true, "PS GEQ 16", &Audio::animateParticleGeqTiles},
+        {true, "PS GEQ 4", &Audio::animateParticleGeqClusters},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

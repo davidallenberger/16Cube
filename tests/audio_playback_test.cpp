@@ -11,7 +11,8 @@
 // The host playback fixture isolates the effects it exercises from the shape and particle renderers.
 void Audio::animateCylinder() {}
 void Audio::animateParticleGeqClusters() {}
-void Audio::animateParticleGeqRandom() {}
+void Audio::animateParticleGeqTiles() {}
+void Audio::animateParticleGeqPairedBands() {}
 
 SerialStub Serial;
 SerialStub Serial2;
@@ -675,7 +676,7 @@ int main() {
     input[0].values.volumeSm = 0;
     for (auto &band : input[0].values.fftResult) band = 0;
     render(&Audio::animateSurroundGEQ);
-    assert(getVoxel(0, 0, 0).r == 192);
+    assert(getVoxel(0, 0, 0).r == 255);
     assert(getVoxel(0, 0, 1).r == 0);
     const auto idleSphere = getVoxel(int(RNDR_CX), int(RNDR_CY), int(RNDR_CZ)).r;
     assert(idleSphere > 0);
@@ -720,7 +721,7 @@ int main() {
     }
     input[0].values.fftResult[4] = 255;
     render(&Audio::animateSurroundGEQ);
-    assert(getVoxel(0, 0, 0).r == 192);
+    assert(getVoxel(0, 0, 0).r == 255);
     assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 1).r == 0);
     assert(getVoxel(0, 0, RNDR_Z - 2).r == 255);
     assert(getVoxel(0, 0, RNDR_Z - 2).g == 0);

@@ -223,7 +223,7 @@ namespace ParticleEngine {
         }
     }
 
-    enum class ParticleBlend { Add, Brightest };
+    enum class ParticleBlend { Add, Brightest, EmptyOnly };
 
     // Sample a soft sphere in its local bounds so larger heads stay bright
     // even when their centers fall between voxels.
@@ -268,7 +268,8 @@ namespace ParticleEngine {
                     const CRGB existing = getVoxel(voxelX, y, z);
                     if (blend == ParticleBlend::Add) {
                         setVoxel(voxelX, y, z, existing + lit);
-                    } else if (max(lit.r, max(lit.g, lit.b)) > max(existing.r, max(existing.g, existing.b))) {
+                    } else if (blend == ParticleBlend::EmptyOnly ? existing == CRGB::Black
+                               : max(lit.r, max(lit.g, lit.b)) > max(existing.r, max(existing.g, existing.b))) {
                         setVoxel(voxelX, y, z, lit);
                     }
                 }

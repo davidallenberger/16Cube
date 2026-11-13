@@ -99,7 +99,7 @@ namespace {
         CONCEPT_SCENE_DNA_SPIRAL, CONCEPT_SCENE_DRIFT_ROSE, CONCEPT_SCENE_COLOR_TWINKLES,
         CONCEPT_SCENE_COLORED_BURSTS, CONCEPT_SCENE_CHUNCHUN_SERP, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS,
         CONCEPT_SCENE_BPM_CHECKERBOARD, CONCEPT_SCENE_BOUNCING_BALLS,
-        CONCEPT_SCENE_DRIFT3D, CONCEPT_SCENE_BLACKHOLE,
+        CONCEPT_SCENE_BLACKHOLE,
         // Text & Icons
         CONCEPT_SCENE_TEXT_FYB, CONCEPT_SCENE_ICONS_CCW, CONCEPT_SCENE_ICONS_CW, CONCEPT_SCENE_TEXT_PIZZA,
         CONCEPT_SCENE_TEXT_CUBINA, CONCEPT_SCENE_TEXT_YES, CONCEPT_SCENE_TEXT_YEAH, CONCEPT_SCENE_TEXT_ISRAEL,
@@ -124,7 +124,7 @@ namespace {
         CONCEPT_SCENE_PS_WATERFALL, CONCEPT_SCENE_PS_GALAXY,
         CONCEPT_SCENE_PS_VOLCANO_WIDE_JET,
         CONCEPT_SCENE_PS_FIRE,
-        CONCEPT_SCENE_PS_VORTEX,
+        CONCEPT_SCENE_DRIFT3D,
         CONCEPT_COUNT
     };
 
@@ -157,7 +157,7 @@ namespace {
         /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 },
         /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Twinkles */     { true,  1 }, /* Col Bursts   */ { true,  1 },
         /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Bounce Ballsz*/ { true,  1 },
-        /* Drift 3D     */ { true,  2 }, /* Blackhole    */ { true,  1 },
+        /* Blackhole    */ { true,  1 },
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { false,  1 }, /* Icons CW     */ { true,  2},
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
@@ -180,7 +180,7 @@ namespace {
         /* PS Attractor */ { true, 1 }, /* PS Waterfall Four Faces */ { true, 1 },
         /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 }, /* PS Galaxy */ { true, 1 },
         /* PS Volcano Wide Jet */ { true, 1 }, /* PS Fire */ { true, 1 },
-        /* PS Vortex */ { true, 1 }
+        /* Drift 3D */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -189,7 +189,7 @@ namespace {
         "Random Fall", "Pipes", "Wild Mouse", "Wobbling Dish", "What The Helix",
         "Flying Box", "Moving Boxes", "Rolling Ball", "DNA Spiral", "Drift Rose 3D",
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
-        "Drift 3D", "Blackhole",
+        "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
         "Passing Planes", "Plasma Ball", "Tartan",
@@ -203,7 +203,7 @@ namespace {
         "PS Spray",
         "Matrix Rain 3D",
         "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall", "PS Galaxy",
-        "PS Volcano Wide Jet", "PS Fire", "PS Vortex"
+        "PS Volcano Wide Jet", "PS Fire", "Drift 3D"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -270,7 +270,7 @@ namespace {
                (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                concept == CONCEPT_SCENE_FLYING_BOX || concept == CONCEPT_SCENE_MOVING_BOXES ||
                (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
-               concept == CONCEPT_SCENE_DRIFT3D || concept == CONCEPT_SCENE_BLACKHOLE ||
+               concept == CONCEPT_SCENE_BLACKHOLE ||
                (concept >= CONCEPT_SCENE_TEXT_FYB && concept < TOTAL_CONCEPTS);
     }
 
@@ -292,7 +292,7 @@ namespace {
         if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
         if (concept == CONCEPT_SCENE_PS_VOLCANO_WIDE_JET) displayColor = "Fire by age";
         if (concept == CONCEPT_SCENE_PS_FIRE) displayColor = "Fire by heat";
-        if (concept == CONCEPT_SCENE_PS_VORTEX) displayColor = "Cycling Rainbow";
+        if (concept == CONCEPT_SCENE_DRIFT3D) displayColor = "Cycling Rainbow Pairs";
         if (rockingSineWave) displayColor = "Rainbow Linear Flow (Rocking)";
         if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
         if (concept == CONCEPT_SCENE_PS_WATERFALL || concept == CONCEPT_SCENE_PS_WATERFALL_FACES) displayColor = "Ocean";
@@ -439,7 +439,6 @@ namespace {
                 case CONCEPT_SCENE_METEOR:         Streamers::animateMeteor(durationMs); break;
                 case CONCEPT_SCENE_PS_IMPACT:      Streamers::animatePSImpact(durationMs); break;
                 case CONCEPT_SCENE_PS_FIRE:        ParticleEffects::animateFire(durationMs); break;
-                case CONCEPT_SCENE_PS_VORTEX:      ParticleEffects::animateVortex(durationMs); break;
                 case CONCEPT_SCENE_PS_VOLCANO_WIDE_JET: {
                     ParticleEffects::VolcanoSettings settings;
                     settings.plumeWidthScale = 1.5f;
@@ -505,7 +504,9 @@ namespace {
                 case CONCEPT_SCENE_CHUNCHUN_LISSAJOUS: Streamers::animateChunchunVolumetric(durationMs, pal, SPEED_SCENE_CHUNCHUN, 128, CHUNCHUN_LISSAJOUS); break;
                 case CONCEPT_SCENE_BPM_CHECKERBOARD:   Streamers::animateBpmVolumetric(durationMs, pal, SPEED_SCENE_BPM_CHECKERBOARD, BPM_CHECKERBOARD); break;
                 case CONCEPT_SCENE_BOUNCING_BALLS:    Streamers::animateBouncingBalls(durationMs, pal); break;
-                case CONCEPT_SCENE_DRIFT3D:        Streamers::animateDrift3D(durationMs, RainbowColors_p, SPEED_SCENE_DRIFT); break;
+                case CONCEPT_SCENE_DRIFT3D:
+                    Streamers::animateDrift3D(max(durationMs, Streamers::drift3DCycleMs), SPEED_SCENE_DRIFT);
+                    break;
                 case CONCEPT_SCENE_BLACKHOLE:      Streamers::animateBlackHole(durationMs); break;
 
                 case CONCEPT_SCENE_LAVA_LAMP: {

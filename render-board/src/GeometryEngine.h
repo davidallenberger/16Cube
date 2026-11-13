@@ -137,6 +137,26 @@ namespace GeometryEngine {
         return {phase * (0.5f * speed), phase * (0.8f * speed), phase * (0.3f * speed)};
     }
 
+    struct TumbleRotation {
+        float cx, sx, cy, sy, cz, sz;
+
+        explicit TumbleRotation(Point3 angles) {
+            const float x = fmodf(angles.x, 360.0f) * (PI / 180.0f);
+            const float y = fmodf(angles.y, 360.0f) * (PI / 180.0f);
+            const float z = fmodf(angles.z, 360.0f) * (PI / 180.0f);
+            cx = cosf(x); sx = sinf(x);
+            cy = cosf(y); sy = sinf(y);
+            cz = cosf(z); sz = sinf(z);
+        }
+
+        Point3 apply(Point3 p) const {
+            const float yy = cx * p.y - sx * p.z;
+            const float zz = sx * p.y + cx * p.z;
+            const float xx = cy * p.x + sy * zz;
+            return {cz * xx - sz * yy, sz * xx + cz * yy, -sy * p.x + cy * zz};
+        }
+    };
+
     // Draw an ellipse centered at center. Orthogonal semi-axis vectors set
     // its radii and plane. The reveal fraction advances in parameter angle.
     inline void drawEllipse3D(Point3 center, Point3 u, Point3 v, float reveal,

@@ -2079,17 +2079,7 @@ class Streamers {
             const uint32_t elapsed = uint32_t(millis() - started);
             const uint32_t tumbleStart = rings * ringTraceMs + holdMs;
             const uint32_t movingMs = elapsed > tumbleStart ? elapsed - tumbleStart : 0;
-            const auto angle = GeometryEngine::tumbleAngles(movingMs * 0.2f, 0.4f);
-            const float x = fmodf(angle.x, 360.0f) * (PI / 180.0f);
-            const float y = fmodf(angle.y, 360.0f) * (PI / 180.0f);
-            const float z = fmodf(angle.z, 360.0f) * (PI / 180.0f);
-            const float cx = cosf(x), sx = sinf(x), cy = cosf(y), sy = sinf(y);
-            const float cz = cosf(z), sz = sinf(z);
-            const auto rotate = [&](Point3 p) -> Point3 {
-                const float yy = cx*p.y - sx*p.z, zz = sx*p.y + cx*p.z;
-                const float xx = cy*p.x + sy*zz;
-                return {cz*xx - sz*yy, sz*xx + cz*yy, -sy*p.x + cy*zz};
-            };
+            const GeometryEngine::TumbleRotation rotation(GeometryEngine::tumbleAngles(movingMs * 0.2f, 0.4f));
 
             clearAll();
             for (unsigned i = 0; i < rings; ++i) {
@@ -2098,7 +2088,7 @@ class Streamers {
                 const float a = radius * 0.70710678f, b = radius * 0.40824829f;
                 const Point3 u{a*n.y, -a*n.x, 0};
                 const Point3 v{b*n.z*n.x, b*n.z*n.y, -2.0f*b};
-                GeometryEngine::drawEllipse3D(center, rotate(u), rotate(v), reveal,
+                GeometryEngine::drawEllipse3D(center, rotation.apply(u), rotation.apply(v), reveal,
                                                rainbow, uint8_t(i * 64 + movingMs / 40));
             }
             nucleus.palette[0] = CHSV(uint8_t(elapsed / 48), 255, 255);
@@ -2562,139 +2552,131 @@ class Streamers {
     }
     
     
-    // ==========================================
-    // 3D DRIFT (Aerodynamic Drag & Golden Tumble)
-    // ==========================================
-    static void animateDrift3D(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
+    static constexpr uint32_t drift3DArmHoldMs = 7000;
+    static constexpr uint32_t drift3DCycleMs = 4 * drift3DArmHoldMs;
 
-        // 1. OCTANT VECTORS (The 8 baseline arms)
-        const int16_t INV_SQRT3 = 147;
-        const int16_t armX[8] = { INV_SQRT3,  INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
-        const int16_t armY[8] = { INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3,  INV_SQRT3,  INV_SQRT3, -INV_SQRT3, -INV_SQRT3};
-        const int16_t armZ[8] = { INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3,  INV_SQRT3, -INV_SQRT3};
-
-        float rx = RNDR_X / 2.0f;
-        float ry = RNDR_Y / 2.0f;
-        float rz = RNDR_Z / 2.0f;
-        float cornerDist = sqrtf(rx*rx + ry*ry + rz*rz);
-        
-        int16_t maxR_fp = (int16_t)(cornerDist * 256.0f); 
-        int16_t step_fp = 32; 
-
-        // State variables for continuous, non-reversing motion
-        static uint16_t angleX = 0, angleY = 0, angleZ = 0;
-        static uint32_t masterSpin = 0;
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            if (now - lastFrame < 15) { yield(); continue; }
+    static void animateDrift3D(uint32_t durationMs, uint8_t effectSpeed) {
+        using GeometryEngine::Point3;
+        constexpr float diagonal = 0.57735027f;
+        constexpr float ringRadius = 0.89442719f;
+        constexpr float ringHeight = 0.44721360f;
+        // Tetrahedron, octahedron, cube corners, then a pentagonal
+        // antiprism. Adjacent entries share a hue, pairing opposite arms
+        // whenever the layout has them.
+        const Point3 directions[4][10] = {
+            {{diagonal, diagonal, diagonal}, {-diagonal, -diagonal, diagonal},
+             {diagonal, -diagonal, -diagonal}, {-diagonal, diagonal, -diagonal}},
+            {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}},
+            {{diagonal, diagonal, diagonal}, {-diagonal, -diagonal, -diagonal},
+             {diagonal, diagonal, -diagonal}, {-diagonal, -diagonal, diagonal},
+             {diagonal, -diagonal, diagonal}, {-diagonal, diagonal, -diagonal},
+             {diagonal, -diagonal, -diagonal}, {-diagonal, diagonal, diagonal}},
+            {{ringRadius, 0, ringHeight}, {-ringRadius, 0, -ringHeight},
+             {0.27639320f, 0.85065081f, ringHeight}, {-0.27639320f, -0.85065081f, -ringHeight},
+             {-0.72360680f, 0.52573111f, ringHeight}, {0.72360680f, -0.52573111f, -ringHeight},
+             {-0.72360680f, -0.52573111f, ringHeight}, {0.72360680f, 0.52573111f, -ringHeight},
+             {0.27639320f, -0.85065081f, ringHeight}, {-0.27639320f, 0.85065081f, -ringHeight}}
+        };
+        constexpr uint32_t transitionMs = 1200;
+        // For each target layout, map its arms back to nearby directions in
+        // the preceding layout. -1 marks a new arm.
+        constexpr int8_t previousArm[4][10] = {
+            {2, 6, 5, 9},
+            {0, 1, 3, 2, -1, -1},
+            {0, 1, 2, 3, 4, 5, -1, -1},
+            {-1, -1, 0, 1, 7, 6, 3, 2, 4, 5},
+        };
+        const CRGBPalette16 palette(RainbowColors_p);
+        const float maxRadius = 0.5f * sqrtf(RNDR_X * RNDR_X + RNDR_Y * RNDR_Y + RNDR_Z * RNDR_Z);
+        const uint32_t start = millis();
+        uint32_t lastFrame = start;
+        uint16_t rotationPhase = 0, spin = 0;
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
+            const uint32_t now = millis();
+            const uint32_t deltaMs = now - lastFrame;
+            if (deltaMs < 15) { yield(); continue; }
             lastFrame = now;
+            const uint32_t elapsed = now - start;
+            const int layout = (elapsed % drift3DCycleMs) / drift3DArmHoldMs;
+            const int arms = 4 + 2 * layout;
+            const uint8_t hue = uint8_t(elapsed * uint64_t(21) / 1000); // 21 hue steps per second.
+            const auto armColor = [&](int arm, int count) {
+                return ColorFromPalette(palette, uint8_t(hue + (arm / 2) * 256 / (count / 2)));
+            };
+            Point3 frameDirections[10];
+            CRGB frameColors[10];
+            int frameArms = arms;
+            const uint32_t layoutAge = elapsed % drift3DArmHoldMs;
+            if (elapsed >= drift3DArmHoldMs && layoutAge < transitionMs) {
+                const int oldLayout = (layout + 3) % 4;
+                const int oldArms = 4 + 2 * oldLayout;
+                const float t = float(layoutAge) / transitionMs;
+                const float mix = t * t * (3.0f - 2.0f * t);
+                const uint8_t weight = uint8_t(lroundf(255.0f * mix));
+                uint16_t carried = 0;
+                for (int arm = 0; arm < arms; ++arm) {
+                    const Point3& to = directions[layout][arm];
+                    const int old = previousArm[layout][arm];
+                    frameDirections[arm] = to;
+                    frameColors[arm] = armColor(arm, arms);
+                    if (old < 0) {
+                        frameColors[arm].nscale8(weight);
+                        continue;
+                    }
+                    carried |= 1u << old;
+                    const Point3& from = directions[oldLayout][old];
+                    const Point3 direction{from.x + mix * (to.x - from.x),
+                                           from.y + mix * (to.y - from.y),
+                                           from.z + mix * (to.z - from.z)};
+                    // Keep the arm's reach while its direction changes.
+                    const float inverseLength = 1.0f / sqrtf(direction.x * direction.x +
+                                                              direction.y * direction.y +
+                                                              direction.z * direction.z);
+                    frameDirections[arm] = {direction.x * inverseLength, direction.y * inverseLength,
+                                            direction.z * inverseLength};
+                    frameColors[arm] = blend(armColor(old, oldArms), frameColors[arm], weight);
+                }
+                for (int old = 0; old < oldArms; ++old) {
+                    if (carried & (1u << old)) continue;
+                    frameDirections[frameArms] = directions[oldLayout][old];
+                    frameColors[frameArms] = armColor(old, oldArms);
+                    frameColors[frameArms++].nscale8(255 - weight);
+                }
+            } else {
+                for (int arm = 0; arm < arms; ++arm) {
+                    frameDirections[arm] = directions[layout][arm];
+                    frameColors[arm] = armColor(arm, arms);
+                }
+            }
+            const float pulse = (sin16(uint16_t(elapsed * effectSpeed / 24)) + 32768) / 65536.0f;
+            const uint32_t speed = uint32_t((20 + effectSpeed / 3) * (1.0f + 0.10f * pulse) * deltaMs / 15.0f);
+            rotationPhase += speed;
+            spin += 20 * speed;
+            constexpr float degreesPerStep = 360.0f / 65536.0f;
+            const float angle = rotationPhase * degreesPerStep;
+            const GeometryEngine::TumbleRotation tumble({angle, 2 * angle, 3 * angle});
+            const float bend = 1000.0f + 29000.0f * pulse * pulse;
 
             fadeAll(155);
-
-    
-            // --- 1. OSCILLATING SPEED ENGINE (Widened Dynamic Range) ---
-            static uint32_t physLastFrame = millis();
-            uint32_t deltaMs = now - physLastFrame;
-            physLastFrame = now;
-
-            uint16_t breathClock = (now * effectSpeed) / 24;
-            uint16_t normalizedSin = sin16(breathClock) + 32768; // 0 to 65535
-            
-            uint32_t baseSpeed = 20 + (effectSpeed / 3); 
-            uint32_t minSpeed = baseSpeed;
-            // NEW: Reduced max speed ceiling (160% instead of 240%). 
-            // Adjust this number (e.g., 140 to 180) to dial in the exact peak rotation speed you want.
-            uint32_t maxSpeed = (baseSpeed * 110) / 100;
-            uint32_t speedRange = maxSpeed - minSpeed;
-
-            uint32_t currentSpeed = minSpeed + ((normalizedSin * speedRange) >> 16); 
-            uint32_t timeScaledSpeed = (currentSpeed * deltaMs) / 15;
-
-            // --- 2. GOLDEN RATIO TUMBLE ---
-            angleX += timeScaledSpeed * 1; 
-            angleY += timeScaledSpeed * 2;  
-            angleZ += timeScaledSpeed * 3; 
-
-            float fsx = sin16(angleX) / 32768.0f, fcx = cos16(angleX) / 32768.0f;
-            float fsy = sin16(angleY) / 32768.0f, fcy = cos16(angleY) / 32768.0f;
-            float fsz = sin16(angleZ) / 32768.0f, fcz = cos16(angleZ) / 32768.0f;
-
-            int16_t UX_x = (fcy * fcz) * 32767;
-            int16_t UX_y = (fcy * fsz) * 32767;
-            int16_t UX_z = (-fsy) * 32767;
-
-            int16_t UY_x = (fsx * fsy * fcz - fcx * fsz) * 32767;
-            int16_t UY_y = (fsx * fsy * fsz + fcx * fcz) * 32767;
-            int16_t UY_z = (fsx * fcy) * 32767;
-
-            int16_t UZ_x = (fcx * fsy * fcz + fsx * fsz) * 32767;
-            int16_t UZ_y = (fcx * fsy * fsz - fsx * fcz) * 32767;
-            int16_t UZ_z = (fcx * fcy) * 32767;
-
-            // --- 3. THE AIR RESISTANCE BEND ---
-            masterSpin += timeScaledSpeed * 20; 
-            
-            // EXTREME BEND (TRUE AERODYNAMIC DRAG)
-            // In physics, drag scales with velocity squared (v^2).
-            // We square the normalized speed factor (0-65535) to create a true parabolic drag curve 
-            // entirely in fast 32-bit integer math.
-            uint32_t dragFactor = ((uint32_t)normalizedSin * (uint32_t)normalizedSin) >> 16; 
-            
-            int32_t minBend = 1000; 
-            int32_t maxBend = 30000;
-            
-            // Apply the v^2 drag factor to the bend limits
-            int32_t currentBend = minBend + ((dragFactor * (maxBend - minBend)) >> 16);
-
-            for (int16_t r_fp = 0; r_fp <= maxR_fp; r_fp += step_fp) {
-                
-                // Tips of the arms drag backward based on the current air resistance
-                int32_t drag = (currentBend * (int32_t)r_fp) / maxR_fp;
-                
-                // Subtract drag from master spin (arms trail behind the core)
-                uint16_t localAngle = (uint16_t)(masterSpin - drag);
-                
-                int16_t sTwist = sin16(localAngle);
-                int16_t cTwist = cos16(localAngle);
-
-                for (int i = 0; i < 8; i++) {
-                    // Step A: Scale the base vectors outward
-                    int32_t bx = (armX[i] * r_fp) >> 8;
-                    int32_t by = (armY[i] * r_fp) >> 8;
-                    int32_t bz = (armZ[i] * r_fp) >> 8;
-
-                    // Step B: Apply the Aerodynamic Drag
-                    int32_t tx = (bx * cTwist - by * sTwist) >> 15;
-                    int32_t ty = (bx * sTwist + by * cTwist) >> 15;
-                    int32_t tz = bz;
-
-                    // Step C: Apply the 3D Tumble (Project onto the tumbling axes)
-                    int32_t finalX = (tx * UX_x + ty * UY_x + tz * UZ_x) >> 15;
-                    int32_t finalY = (tx * UX_y + ty * UY_y + tz * UZ_y) >> 15;
-                    int32_t finalZ = (tx * UX_z + ty * UY_z + tz * UZ_z) >> 15;
-
-                    if (RNDR_Z > RNDR_X) {
-                       finalZ = (finalZ * (int32_t)RNDR_Z) / (int32_t)RNDR_X;
-                    }
-
-                    int32_t px_fp = (int32_t)(RNDR_CX * 256.0f) + finalX;
-                    int32_t py_fp = (int32_t)(RNDR_CY * 256.0f) + finalY;
-                    int32_t pz_fp = (int32_t)(RNDR_CZ * 256.0f) + finalZ;
-
-                    uint8_t armBrightness = min(255, 64 + ((r_fp >> 8) * 30));
-                    uint8_t colorIndex = (uint8_t)((r_fp >> 8) * 20 + (now / 20) + (i * 15));
-                    CRGB col = ColorFromPalette(pal, colorIndex, armBrightness, LINEARBLEND);
-                    
-                    GeometryEngine::drawWuVoxel(px_fp, py_fp, pz_fp, col);
+            for (float radius = 0; radius <= maxRadius; radius += 0.125f) {
+                const uint16_t twist = spin - uint16_t(bend * radius / maxRadius);
+                const float sine = sin16(twist) / 32768.0f, cosine = cos16(twist) / 32768.0f;
+                const uint8_t brightness = min(255, 64 + int(radius * 30));
+                for (int arm = 0; arm < frameArms; ++arm) {
+                    const auto& dir = frameDirections[arm];
+                    const auto p = tumble.apply({radius * (dir.x * cosine - dir.y * sine),
+                                                 radius * (dir.x * sine + dir.y * cosine), radius * dir.z});
+                    CRGB color = frameColors[arm];
+                    color.nscale8(brightness);
+                    GeometryEngine::drawWuVoxel(lroundf(256 * (RNDR_CX + p.x)),
+                                                lroundf(256 * (RNDR_CY + p.y)),
+                                                lroundf(256 * (RNDR_CZ + p.z)), color);
                 }
             }
             showCube();
         }
     }
-    
+
     // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
