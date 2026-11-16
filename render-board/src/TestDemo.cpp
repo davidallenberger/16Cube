@@ -103,10 +103,9 @@ namespace {
         CONCEPT_SCENE_TEXT_FYB, CONCEPT_SCENE_ICONS_CCW, CONCEPT_SCENE_ICONS_CW, CONCEPT_SCENE_TEXT_PIZZA,
         CONCEPT_SCENE_TEXT_CUBINA, CONCEPT_SCENE_TEXT_YES, CONCEPT_SCENE_TEXT_YEAH, CONCEPT_SCENE_TEXT_ISRAEL,
         CONCEPT_SCENE_RUBIKS, CONCEPT_SCENE_TETRIS, CONCEPT_SCENE_JULIA, CONCEPT_SCENE_ATOMIC_ORBITS,
-        CONCEPT_SCENE_OCTOPUS, CONCEPT_SCENE_PASSING_PLANES,
-        CONCEPT_SCENE_PLASMA_BALL, CONCEPT_SCENE_TARTAN,
+        CONCEPT_SCENE_PASSING_PLANES, CONCEPT_SCENE_TARTAN,
         CONCEPT_SCENE_SOAP_TEXTURE, CONCEPT_SCENE_WAVING_CELL,
-        CONCEPT_SCENE_POLAR_LIGHTS, CONCEPT_SCENE_FRIZZLES,
+        CONCEPT_SCENE_FRIZZLES,
         CONCEPT_SCENE_FRIZZLES_MATRIX,
         CONCEPT_SCENE_NOISE_CLOUDS, CONCEPT_SCENE_METEOR,
         // Descending playback auditions particle effects and their counterparts together.
@@ -127,6 +126,8 @@ namespace {
         CONCEPT_SCENE_BLACKHOLE,
         CONCEPT_SCENE_PS_GALAXY,
         CONCEPT_SCENE_BOUNCING_BALL,
+        CONCEPT_SCENE_PLASMA_BALL,
+        CONCEPT_SCENE_POLAR_LIGHTS,
         CONCEPT_COUNT
     };
 
@@ -163,11 +164,9 @@ namespace {
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
         /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }, /* Atomic Orbits */ { true, 1 },
-        /* Octopus (paused) */ { false, 1 },
-        /* Passing Planes */ { true, 1 },
-        /* Plasma Ball */ { true, 1 }, /* Tartan */ { true, 1 },
+        /* Passing Planes */ { true, 1 }, /* Tartan */ { true, 1 },
         /* Soap Texture */ { true, 1 }, /* Waving Cell 3D */ { true, 1 },
-        /* Polar Lights */ { false, 1 }, /* Frizzles */ { true, 1 },
+        /* Frizzles */ { true, 1 },
         /* Frizzles Matrix */ { true, 1 },
         /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
         /* Plane Split */ { true, 1 }, /* PS Impact */ { true, 1 },
@@ -184,7 +183,9 @@ namespace {
         /* Eye of Sauron */ { true, 1 },
         /* Black Hole */ { true, 1 },
         /* PS Galaxy */ { true, 1 },
-        /* Bouncing Ball */ { true, 1 }
+        /* Bouncing Ball */ { true, 1 },
+        /* Plasma Ball */ { true, 1 },
+        /* Polar Lights */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -194,9 +195,9 @@ namespace {
         "Flying Box", "Moving Boxes", "Rolling Ball", "DNA Spiral", "Drift Rose 3D",
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
-        "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
-        "Passing Planes", "Plasma Ball", "Tartan",
-        "Soap Texture", "Waving Cell 3D", "Polar Lights", "Frizzles", "Frizzles Matrix",
+        "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits",
+        "Passing Planes", "Tartan",
+        "Soap Texture", "Waving Cell 3D", "Frizzles", "Frizzles Matrix",
         "Noise Clouds", "Meteor 3D",
         "Plane Split", "PS Impact",
         "PS Ghost Rider", "PS Box",
@@ -206,7 +207,8 @@ namespace {
         "Matrix Rain 3D",
         "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall",
         "PS Volcano Wide Jet", "PS Fire", "Drift 3D",
-        "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball"
+        "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball",
+        "Plasma Ball", "Polar Lights"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -431,7 +433,6 @@ namespace {
         }
         else { 
             switch(concept) {
-                case CONCEPT_SCENE_OCTOPUS:   Surfaces::animateOctopus(durationMs); break;
                 case CONCEPT_SCENE_PASSING_PLANES:  Planes::animatePassingPlanes(durationMs); break;
                 case CONCEPT_SCENE_PLANE_SPLIT:      Planes::animatePlaneSplit(durationMs); break;
                 case CONCEPT_SCENE_PLASMA_BALL:     Streamers::animateWledPlasmaBall(durationMs); break;

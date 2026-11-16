@@ -212,121 +212,89 @@ private:
     }
 }
 public:
-    // WLED Polar Lights uses moving noise with a vertical falloff. On the
-    // cube the light is confined to a curtain that also bends through depth.
     static void animatePolarLights(uint32_t durationMs, uint32_t stepMs = 24) {
-        const CRGBPalette16 aurora(CRGB(0x291068), CRGB(0x5034C8),
-                                  CRGB(0x00C4DB), CRGB(0x39FF77));
-        constexpr float curtainWidth = RNDR_CY * 0.24f;
-        const uint32_t started = millis();
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t elapsed = millis() - started;
-            const float drift = TWO_PI * (elapsed % 7200) / 7200.0f;
-            const float ripple = TWO_PI * (elapsed % 11300) / 11300.0f;
-            const uint16_t noiseTime = uint16_t(elapsed / 8);
-            clearAll();
-            for (int x = 0; x < RNDR_X; ++x) {
-                const float along = float(x) / (RNDR_X - 1);
-                const float fold = sinf(TWO_PI * along - drift);
-                const float smallFold = sinf(2.0f * TWO_PI * along + ripple);
-                const float center = RNDR_CY * (1.0f + 0.52f * fold + 0.16f * smallFold);
-                const float lean = 0.16f * RNDR_CY * cosf(TWO_PI * along - drift);
-                for (int z = 0; z < RNDR_Z; ++z) {
-                    const float height = (z - RNDR_CZ) / RNDR_CZ;
-                    const float glow = max(0.0f, 1.0f - fabsf(height));
-                    if (glow <= 0.0f) continue;
-                    const uint8_t noise = inoise8(x * 920 / RNDR_X, z * 510 / RNDR_Z + noiseTime, noiseTime / 2);
-                    const uint8_t hue = uint8_t(constrain((int(noise) - 64) * 2, 0, 255));
-                    const float intensity = min(255.0f, max(0.0f, (noise - 40.0f) * 2.3f)) * glow;
-                    const float ridge = center + height * lean;
-                    const int first = max(0, int(ceilf(ridge - curtainWidth)));
-                    const int last = min(int(RNDR_Y) - 1, int(floorf(ridge + curtainWidth)));
-                    const CRGB color = ColorFromPalette(aurora, hue, 255, LINEARBLEND_NOWRAP);
-                    for (int y = first; y <= last; ++y) {
-                        const float coverage = max(0.0f, 1.0f - fabsf(y - ridge) / curtainWidth);
-                        CRGB light = color;
-                        light.nscale8(uint8_t(intensity * coverage));
-                        setVoxel(x, y, z, light);
-                    }
-                }
-            }
-            showCube();
-            delay(stepMs);
-        }
-    }
-
-    static void animateOctopus(uint32_t durationMs, uint32_t stepMs = 16) {
-        constexpr unsigned volume = unsigned(RNDR_X) * RNDR_Y * RNDR_Z;
-        constexpr unsigned scaledArms = (5u * volume + 2048u) / 4096u;
-        constexpr unsigned arms = scaledArms > 0 ? scaledArms : 1;
-        const CRGBPalette16 palette = RainbowColors_p;
-        const float span = min(RNDR_X, min(RNDR_Y, RNDR_Z)) - 1.0f;
-        // Nearly face-to-face travel; signed time also gives a continuous
-        // pre-start history for the trailing arms on the first frame.
-        const auto hubAt = [](float t, float &x, float &y, float &z) {
-            x = RNDR_CX * (1.0f + 0.98f * sinf(TWO_PI * t / 2.4f));
-            y = RNDR_CY * (1.0f + 0.98f * sinf(TWO_PI * t / 3.1f + 1.1f));
-            z = RNDR_CZ * (1.0f + 0.98f * sinf(TWO_PI * t / 2.7f + 2.2f));
+        struct Curtain {
+            bool acrossX;
+            float depth;
+            float foldPhase;
+            float strength;
+            uint16_t seed;
         };
+        // The quieter curtain crosses the first at an angle and is visible
+        // from the adjacent face when the main curtain is nearly edge-on.
+        constexpr Curtain curtains[] = {
+            {true, 0.38f, 0.3f, 1.0f, 947},
+            {false, 0.70f, 2.6f, 0.52f, 6197}
+        };
+        const CRGB green(18, 255, 53), teal(0, 222, 159);
+        const CRGB pink(246, 43, 139), violet(94, 90, 238);
+        const float top = RNDR_Z - 1.0f;
         const uint32_t started = millis();
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t elapsed = uint32_t(millis() - started);
-            const float t = elapsed * 0.001f;
-            const float spin = TWO_PI * (elapsed % 2000) / 2000.0f;
-            // Smoothly alternate a coordinated sweep with independent flailing.
-            const float activity = 0.5f + 0.5f * sinf(TWO_PI * t / 6.7f);
-            const float chaos = activity * activity;
-            float cx, cy, cz;
-            hubAt(t, cx, cy, cz);
+        while (true) {
+            const uint32_t now = millis();
+            const uint32_t elapsed = now - started;
+            if (!TestDemo::routineTimeRemaining(elapsed, durationMs)) break;
+            const float seconds = elapsed * 0.001f;
             clearAll();
-            for (unsigned arm = 0; arm < arms; ++arm) {
-                const float phase = TWO_PI * arm / arms;
-                const float heading = spin + phase + chaos * 0.7f * sinf(3.7f*t + phase*2.0f);
-                const float elevation = 0.65f * sinf(phase + t*1.3f);
-                const float ux = cosf(heading) * cosf(elevation);
-                const float uy = sinf(heading) * cosf(elevation);
-                const float uz = sinf(elevation);
-                // Near-wall arms really contract, rather than being stretched
-                // across the face. Unobstructed arms can span most of the cube.
-                float length = span * 0.95f;
-                const auto limitAtWall = [&length](float position, float direction, float extent) {
-                    if (fabsf(direction) > 0.001f) {
-                        const float distance = (direction > 0 ? extent-position : -position) / direction;
-                        length = min(length, max(0.0f, distance));
+
+            for (const auto &curtain : curtains) {
+                const int width = curtain.acrossX ? RNDR_X : RNDR_Y;
+                const float depthSpan = curtain.acrossX ? RNDR_Y - 1 : RNDR_X - 1;
+                const float drift = curtain.acrossX ? -0.62f : 0.48f;
+                const uint16_t wind = uint16_t(elapsed / 3);
+                const uint16_t evolution = uint16_t(elapsed / 13);
+                for (int column = 0; column < width; ++column) {
+                    const float along = float(column) / (width - 1);
+                    const float phase = TWO_PI * along + seconds * drift + curtain.foldPhase;
+                    const float fold = sinf(phase);
+                    const float ripple = sinf(phase * 2.0f + seconds * 1.1f);
+                    const float ridge = depthSpan * (curtain.depth + 0.19f * fold + 0.085f * ripple);
+                    const float lean = depthSpan * (0.045f * cosf(phase) + 0.05f * ripple);
+
+                    // Advect brightness along the sheet. Each sample drives a
+                    // whole ray so bright patches stretch vertically as they pass.
+                    const float ray = inoise8(uint16_t(curtain.seed + along * 1340.0f) - wind, evolution);
+                    const float swell = inoise8(uint16_t(curtain.seed + along * 440.0f) + wind / 2,
+                                                uint16_t(1234 + evolution));
+                    const float strength = constrain((ray - 65.0f) / 92.0f, 0.0f, 1.0f);
+                    const float surge = constrain((swell - 90.0f) / 65.0f, 0.0f, 1.0f);
+                    const float taper = min(1.0f, 0.25f + 6.0f * min(along, 1.0f - along));
+                    const float power = curtain.strength * taper * strength * (0.45f + 0.55f * surge);
+                    const float foot = top * (0.12f + 0.05f * fold + 0.04f * ripple);
+                    const float rayHeight = top * (0.38f + 0.28f * strength + 0.18f * surge);
+                    const float pinkAmount = constrain((swell - 132.0f) / 48.0f, 0.0f, 1.0f);
+
+                    const int first = max(0, int(floorf(foot)));
+                    const int last = min(RNDR_Z - 1, int(ceilf(foot + rayHeight)));
+                    for (int z = first; z <= last; ++z) {
+                        const float aboveFoot = z - foot;
+                        const float h = constrain(aboveFoot / rayHeight, 0.0f, 1.0f);
+                        const float lowerEdge = constrain(aboveFoot + 0.55f, 0.0f, 1.0f);
+                        const float fade = 1.0f - h;
+                        const uint8_t brightness = uint8_t(255.0f * power * lowerEdge * fade * fade);
+                        if (brightness == 0) continue;
+
+                        CRGB color = blend(green, teal, uint8_t(255.0f * h));
+                        color = blend(color, violet, uint8_t(255.0f * surge * h * h));
+                        const float fringe = max(0.0f, 1.0f - fabsf(aboveFoot) / 1.3f);
+                        color = blend(color, pink, uint8_t(255.0f * pinkAmount * fringe));
+                        color.nscale8(brightness);
+
+                        // One strand with fractional coverage across depth.
+                        // The upper tip leans farther than the bright foot.
+                        const int32_t depth = lroundf(256.0f * (ridge + h * lean));
+                        const int32_t horizontal = column * 256;
+                        GeometryEngine::drawWuVoxel(curtain.acrossX ? horizontal : depth,
+                                                    curtain.acrossX ? depth : horizontal,
+                                                    z * 256, color);
                     }
-                };
-                limitAtWall(cx, ux, RNDR_X-1.0f);
-                limitAtWall(cy, uy, RNDR_Y-1.0f);
-                limitAtWall(cz, uz, RNDR_Z-1.0f);
-                float px = cx, py = cy, pz = cz;
-                constexpr int segments = 24;
-                for (int sample = 1; sample <= segments; ++sample) {
-                    const float u = float(sample) / segments;
-                    const float bend = u*u;
-                    float hx, hy, hz;
-                    hubAt(t - (0.18f + 0.30f*chaos)*u, hx, hy, hz);
-                    // Different delays and traveling bends let tips flop while
-                    // roots remain attached. Short arms also lose their bend.
-                    const float curl = length * bend * (0.12f + 0.38f*chaos)
-                        * sinf(6.0f*u - (4.0f + arm*0.37f)*t + phase);
-                    const float lag = bend * min(1.0f, length / (span*0.4f));
-                    const float x = cx + ux*length*u - sinf(heading)*curl + (hx-cx)*lag;
-                    const float y = cy + uy*length*u + cosf(heading)*curl + (hy-cy)*lag;
-                    const float z = cz + uz*length*u + curl*sinf(phase+t*2.1f) + (hz-cz)*lag;
-                    const CRGB color = ColorFromPalette(palette,
-                        uint8_t(elapsed/10 - int(255.0f*u)), 255, LINEARBLEND);
-                    // Shared distance-based antialiasing; max blending keeps
-                    // adjoining segments from accumulating into white hotspots.
-                    const float radius = span * (0.018f + 0.035f*sinf(PI*u));
-                    GeometryEngine::drawSdfLine3D(px, py, pz, x, y, z, radius, color, false);
-                    px=x; py=y; pz=z;
                 }
             }
             showCube();
-            delay(stepMs);
+            const uint32_t spent = millis() - now;
+            if (spent < stepMs) delay(stepMs - spent);
         }
     }
-
 
     // Shared with Audio::animateJulia; normal animation retains timed c motion.
     static void animateJulia(uint32_t durationMs, uint32_t speedMs = 40,
