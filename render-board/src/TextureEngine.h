@@ -164,6 +164,10 @@ public:
             }
         }
         if (sMode == MODE_WAVING_CELL) {
+            if (random8(2)) {
+                strcpy(getPaletteNameBuffer(), "Party (Neon Mix)");
+                return PartyColors_p;
+            }
             strcpy(getPaletteNameBuffer(), "Rainbow");
             return RainbowColors_p;
         }

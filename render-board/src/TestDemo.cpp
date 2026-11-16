@@ -104,7 +104,6 @@ namespace {
         CONCEPT_SCENE_TEXT_CUBINA, CONCEPT_SCENE_TEXT_YES, CONCEPT_SCENE_TEXT_YEAH, CONCEPT_SCENE_TEXT_ISRAEL,
         CONCEPT_SCENE_RUBIKS, CONCEPT_SCENE_TETRIS, CONCEPT_SCENE_JULIA, CONCEPT_SCENE_ATOMIC_ORBITS,
         CONCEPT_SCENE_PASSING_PLANES, CONCEPT_SCENE_TARTAN,
-        CONCEPT_SCENE_SOAP_TEXTURE, CONCEPT_SCENE_WAVING_CELL,
         CONCEPT_SCENE_FRIZZLES,
         CONCEPT_SCENE_FRIZZLES_MATRIX,
         CONCEPT_SCENE_NOISE_CLOUDS, CONCEPT_SCENE_METEOR,
@@ -118,7 +117,6 @@ namespace {
         CONCEPT_SCENE_PS_SPRAY,
         CONCEPT_SCENE_MATRIX_RAIN,
         CONCEPT_SCENE_PS_ATTRACTOR, CONCEPT_SCENE_PS_WATERFALL_FACES,
-        CONCEPT_SCENE_PS_WATERFALL,
         CONCEPT_SCENE_PS_VOLCANO_WIDE_JET,
         CONCEPT_SCENE_PS_FIRE,
         CONCEPT_SCENE_DRIFT3D,
@@ -137,8 +135,14 @@ namespace {
     struct ShapeRule { bool enabled; uint8_t demoBoost; uint16_t allowedMotions; uint8_t allowedRenders; };
     struct SceneRule { bool enabled; uint8_t demoBoost; };
 
+    // One shuffled Box slot for each texture in its full-volume rotation.
+    constexpr ShaderMode boxShaders[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW,
+        MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC,
+        MODE_DISTORTION_WAVES, MODE_SOAP, MODE_WAVING_CELL};
+    constexpr uint8_t boxShaderCount = sizeof(boxShaders) / sizeof(boxShaders[0]);
+
     const ShapeRule SHAPE_RULES[] = {
-        /* BOX         */ { true,  7, MASK_STATIC, MASK_SOLID }, // Boosted to 7 for Distortion Waves Invocation
+        /* BOX         */ { true,  boxShaderCount, MASK_STATIC, MASK_SOLID },
         /* SPHERE      */ { true,  1, MASK_STATIC | MASK_EXPAND_COLLAPSE, MASK_SOLID  },
         /* OVOID       */ { false, 1, MASK_STATIC | MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID  },
         /* TETRAHEDRON */ { true, 1, MASK_EXPAND_COLLAPSE | MASK_TUMBLING, MASK_SOLID | MASK_WIREFRAME },
@@ -165,7 +169,6 @@ namespace {
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
         /* Tetris       */ { true,  1 }, /* Julia */ { true, 1 }, /* Atomic Orbits */ { true, 1 },
         /* Passing Planes */ { true, 1 }, /* Tartan */ { true, 1 },
-        /* Soap Texture */ { true, 1 }, /* Waving Cell 3D */ { true, 1 },
         /* Frizzles */ { true, 1 },
         /* Frizzles Matrix */ { true, 1 },
         /* Noise Clouds */ { false, 1 }, /* Meteor 3D */ { false, 1 },
@@ -177,7 +180,6 @@ namespace {
         /* PS Spray */ { true, 1 },
         /* Matrix Rain 3D */ { true, 1 },
         /* PS Attractor */ { true, 1 }, /* PS Waterfall Four Faces */ { true, 1 },
-        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 },
         /* PS Volcano Wide Jet */ { true, 1 }, /* PS Fire */ { true, 1 },
         /* Drift 3D */ { true, 1 },
         /* Eye of Sauron */ { true, 1 },
@@ -197,7 +199,7 @@ namespace {
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits",
         "Passing Planes", "Tartan",
-        "Soap Texture", "Waving Cell 3D", "Frizzles", "Frizzles Matrix",
+        "Frizzles", "Frizzles Matrix",
         "Noise Clouds", "Meteor 3D",
         "Plane Split", "PS Impact",
         "PS Ghost Rider", "PS Box",
@@ -205,7 +207,7 @@ namespace {
         "Lava Lamp",
         "PS Spray",
         "Matrix Rain 3D",
-        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall",
+        "PS Attractor", "PS Waterfall Four Faces",
         "PS Volcano Wide Jet", "PS Fire", "Drift 3D",
         "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball",
         "Plasma Ball", "Polar Lights"
@@ -236,7 +238,6 @@ namespace {
 
     struct ConceptDebugState {
         uint16_t motionMask = 0; 
-        uint8_t shaderTracker = 0; 
     };
 
     // --- Static Engine State Variables ---
@@ -256,6 +257,8 @@ namespace {
     
     int seqConcept = -1; // Initialized from the selected ordered direction.
     ConceptDebugState states[TOTAL_CONCEPTS]; 
+    uint8_t orderedBoxStep = 0;
+    uint8_t shuffledBoxStep = 0;
 
     // Only playback state lives here. Rendering, durations and weighted normal
     // deck membership below remain unchanged. Audio has a separate index bag.
@@ -304,7 +307,7 @@ namespace {
         if (concept == CONCEPT_SCENE_DRIFT3D) displayColor = "Cycling Rainbow Pairs";
         if (rockingSineWave) displayColor = "Rainbow Linear Flow (Rocking)";
         if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
-        if (concept == CONCEPT_SCENE_PS_WATERFALL || concept == CONCEPT_SCENE_PS_WATERFALL_FACES) displayColor = "Ocean";
+        if (concept == CONCEPT_SCENE_PS_WATERFALL_FACES) displayColor = "Ocean";
         if (concept == CONCEPT_SCENE_PS_GHOST_RIDER) displayColor = "Cycling Rainbow";
         if (concept == CONCEPT_SCENE_PS_GALAXY) displayColor = "Cycling Rainbow";
         if (concept == CONCEPT_SCENE_PS_SPRAY) displayColor = "Party";
@@ -437,8 +440,6 @@ namespace {
                 case CONCEPT_SCENE_PLANE_SPLIT:      Planes::animatePlaneSplit(durationMs); break;
                 case CONCEPT_SCENE_PLASMA_BALL:     Streamers::animateWledPlasmaBall(durationMs); break;
                 case CONCEPT_SCENE_TARTAN:          Planes::animateTartan(durationMs); break;
-                case CONCEPT_SCENE_SOAP_TEXTURE:    Planes::animateSoapTexture(durationMs); break;
-                case CONCEPT_SCENE_WAVING_CELL:     Planes::animateWavingCell(durationMs); break;
                 case CONCEPT_SCENE_POLAR_LIGHTS:    Surfaces::animatePolarLights(durationMs); break;
                 case CONCEPT_SCENE_FRIZZLES:        Streamers::animateFrizzles(durationMs); break;
                 case CONCEPT_SCENE_FRIZZLES_MATRIX: Streamers::animateFrizzlesMatrix(durationMs); break;
@@ -457,13 +458,7 @@ namespace {
                     break;
                 }
                 case CONCEPT_SCENE_PS_BOX:         ParticleEffects::animateBox(durationMs); break;
-                case CONCEPT_SCENE_PS_WATERFALL:   ParticleEffects::animateWaterfall(durationMs); break;
-                case CONCEPT_SCENE_PS_WATERFALL_FACES: {
-                    ParticleEffects::WaterfallSettings settings;
-                    settings.fourFaces = true;
-                    ParticleEffects::animateWaterfall(durationMs, settings);
-                    break;
-                }
+                case CONCEPT_SCENE_PS_WATERFALL_FACES: ParticleEffects::animateWaterfall(durationMs); break;
                 case CONCEPT_SCENE_PS_GHOST_RIDER: ParticleEffects::animateGhostRider(durationMs); break;
                 case CONCEPT_SCENE_PS_GALAXY: {
                     ParticleEffects::GalaxySettings settings;
@@ -593,6 +588,7 @@ namespace TestDemo {
             // Shuffled decks already moved their cursor BEFORE drawing.
             // Ordered tests move it AFTER returning, so an abandoned scene
             // must explicitly step over the current concept on a button.
+            if (seqConcept == CONCEPT_SHAPE_BOX && orderedBoxStep != 0) return;
             seqConcept += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
         }
     }
@@ -716,6 +712,7 @@ namespace TestDemo {
                     } else {
                         // Loop Art
                         artIndex = 0;
+                        shuffledBoxStep = 0;
                         Detail::shuffleDeck(artDeck, artDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE ART DECK (Play %d of %d)! \n=======================================\n", currentArtRep, ART_DECK_REPETITIONS);
                     }
@@ -728,6 +725,7 @@ namespace TestDemo {
                         playingArt = true; 
                         currentArtRep = 1; // Start cleanly at 1
                         artIndex = 0; 
+                        shuffledBoxStep = 0;
                         
                         Detail::shuffleDeck(artDeck, artDeckSize, pickNormalDeckIndex);
                         Serial.printf("\n=======================================\n   SHUFFLING THE ART DECK (Play %d of %d)! \n=======================================\n", currentArtRep, ART_DECK_REPETITIONS);
@@ -789,17 +787,13 @@ namespace TestDemo {
             static CRGBPalette16 boxPalettes[5] = {RainbowColors_p, LavaColors_p, ForestColors_p, OceanColors_p, PartyColors_p};
             static const char* boxPaletteNames[5] = {"Rainbow", "Lava", "Forest", "Ocean", "Party"};
             
-            static constexpr ShaderMode flow[] = {MODE_UNIFORM_CYCLE, MODE_LINEAR_FLOW,
-                MODE_NOISE_FIELD, MODE_SCATTER, MODE_DISTANCE_FIELD, MODE_HIPHOTIC,
-                MODE_DISTORTION_WAVES, MODE_SOAP, MODE_WAVING_CELL};
-            constexpr uint8_t flowCount = sizeof(flow) / sizeof(flow[0]);
+            uint8_t &boxStep = isTestMode ? orderedBoxStep : shuffledBoxStep;
             if (motion == MOTION_STATIC) {
                 if (shape == SHAPE_BOX) { 
-                    uint8_t step = states[concept].shaderTracker % flowCount;
-                    sModeTracker = flow[step]; 
+                    sModeTracker = boxShaders[boxStep];
                     
                     // Trigger a private shuffle at the start of every Box cycle
-                    if (step == 0) {
+                    if (boxStep == 0) {
                         for (int i = 4; i > 0; i--) {
                             int j = random8(i + 1);
                             CRGBPalette16 tempPal = boxPalettes[i]; boxPalettes[i] = boxPalettes[j]; boxPalettes[j] = tempPal;
@@ -807,7 +801,7 @@ namespace TestDemo {
                         }
                     }
                 } else {
-                    sModeTracker = flow[random8(flowCount)];
+                    sModeTracker = boxShaders[random8(boxShaderCount)];
                 }
             } else {
                 if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
@@ -822,8 +816,6 @@ namespace TestDemo {
             // THE BOX PALETTE ENFORCER
             // ==========================================
             if (shape == SHAPE_BOX) {
-                uint8_t step = states[concept].shaderTracker % flowCount;
-                
                 if (sModeTracker == MODE_UNIFORM_CYCLE) { 
                     pal = RainbowColors_p; 
                     strcpy(PaletteUtils::getPaletteNameBuffer(), "Rainbow"); 
@@ -837,13 +829,13 @@ namespace TestDemo {
                 }
                 else if (sModeTracker != MODE_SOAP && sModeTracker != MODE_WAVING_CELL) {
                     // The four original box brushes use the shuffled palettes.
-                    const int palIndex = step >= 1 && step <= 4 ? step - 1 : random8(5);
+                    const int palIndex = boxStep >= 1 && boxStep <= 4 ? boxStep - 1 : random8(5);
                     pal = boxPalettes[palIndex];
                     strcpy(PaletteUtils::getPaletteNameBuffer(), boxPaletteNames[palIndex]);
                 }
                 
                 // Increment tracker AFTER assignment is complete
-                states[concept].shaderTracker++; 
+                boxStep = (boxStep + 1) % boxShaderCount;
             } 
             else {
                 if (sModeTracker == MODE_UNIFORM_CYCLE) { pal = RainbowColors_p; strcpy(PaletteUtils::getPaletteNameBuffer(), "Rainbow"); }
@@ -902,8 +894,11 @@ namespace TestDemo {
         animationSceneActive = false;
 
         if (isTestMode) {
-            if (concept < NUM_SHAPES && states[concept].motionMask != 0) { /* Holding */ }
-            else seqConcept += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
+            const bool moreBoxTextures = concept == CONCEPT_SHAPE_BOX && orderedBoxStep != 0;
+            const bool moreMotions = concept < NUM_SHAPES && states[concept].motionMask != 0;
+            if (!moreBoxTextures && !moreMotions) {
+                seqConcept += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
+            }
         }
     }
 }

@@ -128,6 +128,11 @@ namespace {
         Audio::freqwave(random(2) == 0 ? Shape::WireframeBox : Shape::Sphere);
     }
 
+    void drawRandomAudioShape() {
+        if (random(2) == 0) Audio::animateCylinder();
+        else Audio::animateOctahedron();
+    }
+
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
         {true, "Waverly", &drawWaverly},
@@ -138,7 +143,6 @@ namespace {
         {false, "Attack Monitor", &Audio::animateAttackMonitor},
         {true, "Corner Burst", &drawRandomCornerBurst},
         {true, "Drift Rose Volume", &Audio::animateDriftRose},
-        {false, "Cylinder Attacks", &Audio::animateCylinder},
         {true, "Plasmoid Depth Mirror", &Audio::animatePlasmoidMirrored},
         {true, "Bouncing Balls Audio", &drawRandomBouncingBalls},
         {true, "Funky Plank", &Audio::animateFunkyPlank},
@@ -147,6 +151,7 @@ namespace {
         {true, "Freqwave", &drawRandomFreqwave},
         {true, "PS GEQ", &drawRandomParticleGeq},
         {true, "Frequency Cubes 8 Bands Corner", &Audio::frequencyCubes},
+        {true, "Audio Shapes", &drawRandomAudioShape},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

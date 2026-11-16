@@ -873,12 +873,13 @@ float frequencyShapeRelease(uint32_t &lastFrame, float releaseMs = 25.0f) {
     return expf(-float(elapsed) / releaseMs);
 }
 
-float trackFrequencySize(float previous, float target, float retained) {
+}
+
+float Audio::trackShapeSize(float previous, float target, float retained) {
     // Rise immediately. On a drop, smooth the size and redraw the boundary.
     if (target >= previous) return target;
     const float level = target + (previous - target) * retained;
     return level - target < 1.0f ? target : level;
-}
 }
 
 void Audio::animateFrequencyPlanes() {
@@ -906,7 +907,7 @@ void Audio::frequencyPlanes(bool discs) {
             for (int bin = 2 * band; bin < 2 * band + 2; ++bin) {
                 if (audio.fftResult[bin] > noiseFloor) levels[band] = max(levels[band], int(bins[bin]));
             }
-            visibleLevels[band] = trackFrequencySize(visibleLevels[band], min(levels[band], fullAreaLevel), retained);
+            visibleLevels[band] = trackShapeSize(visibleLevels[band], min(levels[band], fullAreaLevel), retained);
             if (visibleLevels[band] == 0.0f) continue;
             // Width and depth grow with the square root so lit area follows
             // the band level. Fractional edge coverage softens size changes.
@@ -941,7 +942,6 @@ void Audio::frequencyCubes() {
     constexpr int grid = 2;
     constexpr int bandCount = 8;
     constexpr int binsPerBand = 2;
-    constexpr float releaseMs = 45.0f;
     const int fullSize = max(noiseFloor + 1, int(controls().frequencyShapesLevelForFullSize));
     // Viewed from above with +Y toward the back: front-left, back-left,
     // back-right, front-right.
@@ -952,7 +952,7 @@ void Audio::frequencyCubes() {
         const auto audio = RemoteInputs::audio();
         uint8_t bins[16];
         const bool compensated = displaySpectrum(audio, bins);
-        const float retained = frequencyShapeRelease(lastFrame, releaseMs);
+        const float retained = frequencyShapeRelease(lastFrame, cubeSizeReleaseMs);
         int levels[bandCount] = {};
         int active = 0;
         for (int band = 0; band < bandCount; ++band) {
@@ -960,7 +960,7 @@ void Audio::frequencyCubes() {
                 const int bin = band * binsPerBand + offset;
                 if (audio.fftResult[bin] > noiseFloor) levels[band] = max(levels[band], int(bins[bin]));
             }
-            visibleLevels[band] = trackFrequencySize(visibleLevels[band], min(levels[band], fullSize), retained);
+            visibleLevels[band] = trackShapeSize(visibleLevels[band], min(levels[band], fullSize), retained);
             if (visibleLevels[band] > 0.0f) ++active;
         }
         clearAll();

@@ -28,6 +28,7 @@ namespace RemoteInputs {
         // remain unchanged for the entire rendered frame; reading twice does
         // not consume them. A broad sound may set several at the same time.
         bool bassKick = false;
+        bool dedicatedBassKick = false; // Kick detector alone, before general attacks are merged.
         bool midAttack = false;
         bool highAttack = false;
 

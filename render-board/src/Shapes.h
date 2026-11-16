@@ -24,6 +24,7 @@ public:
         float (*update)(TextureState &, uint32_t deltaMs, void *state);
         bool (*keepRunning)();
         void *state;
+        void (*drawOverlay)(void *state);
     };
 
 private:
@@ -33,7 +34,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
 
         // If it is a curved shape, forcibly override the wireframe request to Solid
         if (shape == SHAPE_SPHERE || shape == SHAPE_OVOID || 
-            shape == SHAPE_TORUS || shape == SHAPE_CYLINDER || 
+            shape == SHAPE_TORUS || shape == SHAPE_CYLINDER ||
             shape == SHAPE_HEMISPHERES || shape == SHAPE_HOURGLASS) { // <-- Added Hourglass
             return RENDER_SOLID; 
         }
@@ -96,6 +97,7 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
                                        tumbleSpeed == 0.0f ? customZ : geomPhase * customZ};
             drawFunc(RNDR_CX, RNDR_CY, RNDR_CZ, fixedRadius, rMode, tex,
                      angles.x, angles.y, angles.z, true, aspectZ);
+            if (frameControl && frameControl->drawOverlay) frameControl->drawOverlay(frameControl->state);
             showCube();
             
             tex.advance(deltaMs);
@@ -755,7 +757,7 @@ public:
     }
 
     // --- animateSpinning ---
-    static void animateSpinning(ShapeType shape, uint32_t durationMs, float speed, RenderMode rMode, CRGBPalette16 pal, ShaderMode sMode, bool stretch = true) {
+    static void animateSpinning(ShapeType shape, uint32_t durationMs, float speed, RenderMode rMode, CRGBPalette16 pal, ShaderMode sMode, bool stretch = true, const FrameControl *frameControl = nullptr) {
         pal = applyShapeColorHacks(shape, pal, sMode);
         rMode = applyShapeRenderHacks(shape, rMode);
         
@@ -763,12 +765,8 @@ public:
         if (shape != SHAPE_OCTAHEDRON && shape != SHAPE_TORUS && shape != SHAPE_MERKABA) return;
         
         ShapeConfig cfg = getShapeConfig(shape);
-        float sx = speed;
-        float sy = speed;
-        float sz = speed;
-        
         // Disables the 'rotate' flag and passes the explicit sz (Z-axis) speed
-        animateStaticShape(cfg.drawFunc, cfg.tumbleRadius, durationMs, rMode, sMode, pal, false, 1.0f, 0, 0, sz, stretch);
+        animateStaticShape(cfg.drawFunc, cfg.tumbleRadius, durationMs, rMode, sMode, pal, false, 1.0f, 0, 0, speed, stretch, frameControl);
     }
     //If you just pass an HTMLColorCode, it implies SOLID
     static void animateSpinning(ShapeType shape, uint32_t durationMs, float speed, RenderMode rMode, CRGB::HTMLColorCode colorCode, bool stretch = true) {

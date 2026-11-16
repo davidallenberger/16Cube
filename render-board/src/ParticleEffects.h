@@ -55,7 +55,6 @@ namespace ParticleEffects {
         uint8_t position = 16; // Left to right, 0–31.
         float spanFraction = 1.0f / 3.0f; // Fraction of the ceiling diagonal.
         float bulgeVoxels = 1.5f; // Peak outward offset per row on the 16³ cube.
-        bool fourFaces = false; // Render one simulation around all four side faces.
         float faceRecessFraction = 0.20f; // Three voxels behind a face on 16³.
         float faceWidthScale = 0.85f;
         float faceDepthScale = 0.65f;
@@ -679,11 +678,7 @@ namespace ParticleEffects {
                 if (falling) drawFallingDroplet(p, color, wrapX);
                 else drawSmooth(p, color, wrapX);
             };
-            if (!settings.fourFaces) {
-                draw(position);
-                return;
-            }
-            // Unfold the existing diagonal curtain into along/across coordinates.
+            // Unfold the simulation's diagonal coordinates for the face copies.
             // Copy only its rendering: all four falls share the same particle pool,
             // collisions, splash physics, nozzle variation, and ceiling profile.
             const float dx = position.x - centerX, dy = position.y - RNDR_CY;

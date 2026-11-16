@@ -83,6 +83,7 @@ namespace RemoteInputs {
                     return frame;
                 }
                 const float threshold = 32.0f / sensitivity;
+                frame.dedicatedBassKick = kick;
                 frame.bassKick = kick || (strength[0] > 0 && strength[0] >= threshold);
                 frame.midAttack = strength[1] > 0 && strength[1] >= threshold;
                 frame.highAttack = strength[2] > 0 && strength[2] >= threshold;

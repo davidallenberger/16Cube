@@ -28,7 +28,7 @@ const auto audio = RemoteInputs::audio();
 ```
 
 Public fields: volumeRaw, volumeSm, volumeAvg, fftResult[16], bpm,
-bassKick, midAttack, highAttack. Most visuals should use volumeSm. Optional
+bassKick, dedicatedBassKick, midAttack, highAttack. Most visuals should use volumeSm. Optional
 RemoteInputs::audio(sensitivity) admits weaker general events without changing
 volume/spectrum calibration. Dedicated bass kicks already have a binary decision.
 
@@ -721,3 +721,25 @@ Puddle Peak defaults to 2.5 event sensitivity and applies a 1.25 size gain
 to smoothed volume before rounding line lengths and cube edges to voxels.
 Sensitivity admits weaker shared attacks, while size gain affects the
 geometry of bursts that already fired.
+
+The command board's general attack detector looks for sudden rises in
+linear-spectrum power relative to recent sound. It requires fresh rises
+and spaces detections by at least 80 ms. Puddle Peak accepts dedicated
+kicks plus bass, midrange, or treble attacks whose transmitted strength
+meets `32 / peakAttackSensitivity` (13 or higher on the 0–255 scale at
+the default). Each accepted frame spawns one burst. `puddlePeakDensity`
+adjusts how many shapes the burst contains.
+
+The dedicated bass kick detector filters continuous PCM to roughly
+35–180 Hz and compares a 20 ms fast power average to a 350 ms reference.
+`uiKickSensitivity` in command-board/src/SignalAcquisition.cpp controls
+the required power ratio. At 1.0 the fast average must reach 1.7× the
+reference. Increasing sensitivity lowers that ratio. `uiKickMinRMS`
+(0.0003) sets the bass noise floor, and `KICK_MIN_INTERVAL_MS` (180)
+sets the detector lockout. The Audio Shapes card chooses Cylinder or
+Octahedron with equal probability. Either shape changes its body colors
+on every dedicated kick it receives, and its render-board log counts the
+kicks. BPM sets the rotation multiplier. Both looks use eight corner cubes
+whose size follows smoothed volume, up to 3×3×3 for Cylinder or 4×4×4 for
+Octahedron at the shared `shapeVolumeForFullCube` setting. The cubes share
+one ROYGBIV color and crossfade to a different one every six seconds.

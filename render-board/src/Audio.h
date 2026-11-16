@@ -30,7 +30,7 @@ class Audio {
     // tune these for artistic response without changing that calibration.
     struct Controls {
         float puddlesSensitivity = 1.0f;    // Volume-to-size response.
-        float peakAttackSensitivity = 2.5f; // Event admission for Puddle Peak and audio shapes.
+        float peakAttackSensitivity = 2.5f; // General event admission for Puddle Peak.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
         float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
@@ -44,6 +44,7 @@ class Audio {
         uint8_t plasmoidIntensity = 128;    // WLED's # of pixels setting. 128 gives a cutoff of 2 * VolumeSm.
         uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
         uint8_t bouncingBallsVolumeForFullHeight = 75; // VolumeSm where a hop reaches the ceiling.
+        uint8_t shapeVolumeForFullCube = 75; // VolumeSm where the corner cubes reach full size.
         bool midrangeBoostEnabled = true; // Shared by audio Julia, Waverly and Drift Rose.
         float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
         float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
@@ -100,6 +101,7 @@ class Audio {
     static void animateJulia();
     static void animateDriftRose();
     static void animateCylinder();
+    static void animateOctahedron();
     static void animatePlasmoidMirrored();
     static void animateSurroundGEQ();
     static void animateFunkyPlank();
@@ -139,5 +141,10 @@ class Audio {
                       uint32_t attackNumber = 0, const uint8_t* displayBins = nullptr);
 
 private:
+    struct VolumeCubes;
+    struct CylinderResponse;
+    struct OctahedronResponse;
+    static constexpr float cubeSizeReleaseMs = 45.0f;
+    static float trackShapeSize(float previous, float target, float retained);
     static void drawGeqBars(bool inward);
 };

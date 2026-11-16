@@ -33,7 +33,7 @@ namespace RemoteInputs {
     };
 
     // The only audio entry point for animations. The returned frame has flat
-    // volume/band fields, three event booleans, and musical timing helpers.
+    // Volume/band fields, attack and dedicated-kick flags, and timing helpers.
     // Read as often as needed: this never consumes an event or advances time.
     // Optional sensitivity admits weaker events; it does not rescale volume.
     AudioFrame audio(float sensitivity = 1.0f);

@@ -10,6 +10,7 @@
 
 // The host playback fixture isolates the effects it exercises from the shape and particle renderers.
 void Audio::animateCylinder() {}
+void Audio::animateOctahedron() {}
 void Audio::animateParticleGeqClusters() {}
 void Audio::animateParticleGeqTiles() {}
 void Audio::animateParticleGeqPairedBands() {}

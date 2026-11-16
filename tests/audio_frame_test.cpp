@@ -56,6 +56,7 @@ int main() {
         RemoteInputs::beginFrame();
         const auto frame = RemoteInputs::audio();
         assert(frame.bassKick == (band < 4));
+        assert(!frame.dedicatedBassKick);
         assert(frame.midAttack == (band >= 4 && band <= 10));
         assert(frame.highAttack == (band >= 11));
         const auto again = RemoteInputs::audio();
@@ -101,10 +102,11 @@ int main() {
     send();
     RemoteInputs::beginFrame();
     assert(RemoteInputs::audio().bassKick);
-    assert(RemoteInputs::audio().bassKick);
-    assert(!RemoteInputs::audio(0).bassKick);
+    assert(RemoteInputs::audio().dedicatedBassKick);
+    assert(RemoteInputs::audio(0.1f).dedicatedBassKick);
+    assert(!RemoteInputs::audio(0).hasAttack() && !RemoteInputs::audio(0).dedicatedBassKick);
     RemoteInputs::beginFrame();
-    assert(!RemoteInputs::audio().bassKick);
+    assert(!RemoteInputs::audio().bassKick && !RemoteInputs::audio().dedicatedBassKick);
 
     // No read advances the clock, even if wall time changes during the frame.
     const float frozenAngle = RemoteInputs::audio().beatAngle(10);

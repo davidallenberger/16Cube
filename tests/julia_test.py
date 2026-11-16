@@ -150,6 +150,8 @@ struct Rule { bool enabled; };
 Rule SHAPE_RULES[]={{true},{false}};
 Rule SCENE_RULES[]={{true},{false},{true}};
 int seqConcept=-1;
+constexpr int CONCEPT_SHAPE_BOX=0;
+uint8_t orderedBoxStep=0;
 int select() { __SELECT__ return seqConcept; }
 namespace TestDemo { __STOP__ __ADVANCE__ }
 int main() {
@@ -176,6 +178,13 @@ int main() {
     TestDemo::Detail::animationDurationHeld()=true;
     TestDemo::Detail::advanceAnimation();
     assert(seqConcept==3); // Next still moves once while held
+    seqConcept=CONCEPT_SHAPE_BOX;
+    orderedBoxStep=7;
+    TestDemo::Detail::advanceAnimation();
+    assert(seqConcept==CONCEPT_SHAPE_BOX); // Next auditions the remaining Box textures
+    orderedBoxStep=0;
+    TestDemo::Detail::advanceAnimation();
+    assert(seqConcept==-1); // The final Box texture advances the deck
     TestDemo::Detail::stopAnimation();
     assert(!TestDemo::Detail::animationDurationHeld());
     assert(!animationSceneActive);

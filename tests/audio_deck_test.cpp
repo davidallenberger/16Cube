@@ -118,6 +118,8 @@ static void reset(TestDemo::PlaybackOrder order = TestDemo::PlaybackOrder::Seque
     buttonAtDeadline = false;
 }
 
+static bool selectedOctahedron = false;
+
 static void play(unsigned count) {
     launchLimit = count;
     try {
@@ -131,6 +133,8 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
+    assert(std::strcmp(currentAudioRoutineName(), "Audio Shapes") == 0);
+    requestNext(Deck::Audio);
     assert(std::strcmp(currentAudioRoutineName(), "Frequency Cubes 8 Bands Corner") == 0);
     requestNext(Deck::Audio);
     assert(std::strcmp(currentAudioRoutineName(), "PS GEQ") == 0);
@@ -141,8 +145,15 @@ int main() {
     assert(std::strcmp(frequencyLook, "Frequency Planes") == 0 ||
            std::strcmp(frequencyLook, "Frequency Discs") == 0);
     reset(PlaybackOrder::Descending);
-    play(6);
-    assert(launches == std::vector<unsigned>({16, 15, 14, 13, 12, 11}));
+    play(7);
+    assert(launches == std::vector<unsigned>({16, 15, 14, 13, 12, 11, 10}));
+    bool seenShapes[2] = {};
+    for (unsigned trial = 0; trial < 32; ++trial) {
+        reset(PlaybackOrder::Descending);
+        play(1);
+        seenShapes[selectedOctahedron] = true;
+    }
+    assert(seenShapes[0] && seenShapes[1]);
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
     const unsigned rememberedLook = waverlyLook;
@@ -310,8 +321,8 @@ void Audio::waverly(ShaderMode, CRGBPalette16, bool, uint32_t) {
     draw(1);
 }
 
-void Audio::animateInwardGEQ() { draw(12); }
-void Audio::animateSurroundGEQ() { draw(12); }
+void Audio::animateInwardGEQ() { draw(11); }
+void Audio::animateSurroundGEQ() { draw(11); }
 
 void Audio::animateJulia() { draw(0); }
 
@@ -319,13 +330,14 @@ void Audio::animateCornerBurst() { draw(6); }
 void Audio::animateCornerBurstSphere() { draw(6); }
 void Audio::animateCornerBurstBox() { draw(6); }
 void Audio::animateDriftRose() { draw(7); }
-void Audio::animateCylinder() { draw(8); }
-void Audio::animatePlasmoidMirrored() { draw(9); }
-void Audio::animateParticleGeqClusters() { draw(15); }
-void Audio::animateParticleGeqTiles() { draw(15); }
-void Audio::animateParticleGeqPairedBands() { draw(15); }
-void Audio::animateFunkyPlank() { draw(11); }
-void Audio::freqwave(FreqwaveShape) { draw(14); }
-void Audio::frequencyPlanes(bool) { draw(13); }
-void Audio::frequencyCubes() { draw(16); }
-void Audio::bouncingBalls(BouncingBallsPattern) { draw(10); }
+void Audio::animateCylinder() { selectedOctahedron = false; draw(16); }
+void Audio::animateOctahedron() { selectedOctahedron = true; draw(16); }
+void Audio::animatePlasmoidMirrored() { draw(8); }
+void Audio::animateParticleGeqClusters() { draw(14); }
+void Audio::animateParticleGeqTiles() { draw(14); }
+void Audio::animateParticleGeqPairedBands() { draw(14); }
+void Audio::animateFunkyPlank() { draw(10); }
+void Audio::freqwave(FreqwaveShape) { draw(13); }
+void Audio::frequencyPlanes(bool) { draw(12); }
+void Audio::frequencyCubes() { draw(15); }
+void Audio::bouncingBalls(BouncingBallsPattern) { draw(9); }
