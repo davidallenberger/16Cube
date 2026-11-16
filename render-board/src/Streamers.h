@@ -108,7 +108,7 @@ class JuliaRenderer {
         const float yStep = 0.48f / max(1.0f, float(RNDR_Y - 1));
         const float zStep = 1.7f / max(1.0f, float(RNDR_Z - 1));
         const uint32_t started = millis();
-        uint32_t lastDebug = started - 1000;
+        // uint32_t lastDebug = started - 1000;
         uint32_t lastClosureMs = started;
         float smoothedClosure = 0.0f;
         bool closureStarted = false;
@@ -179,7 +179,7 @@ class JuliaRenderer {
                 0.05f * sinf(cTime * 0.65f) * detail;
             const float b = 0.42f * closure + 0.05f * sinf(cTime * 0.50f) * detail;
             const float d = 0.12f * sinf(cTime * 0.37f) * detail;
-            unsigned lit = 0;
+            // unsigned lit = 0;
             clearAll();
             for (uint8_t iz = 0; iz < RNDR_Z; ++iz) {
                 for (uint8_t iy = 0; iy < RNDR_Y; ++iy) {
@@ -207,11 +207,12 @@ class JuliaRenderer {
                         // retaining their separation. The cavern is unaffected.
                         const int band = max(0, int(iteration) - 2);
                         setVoxel(ix, iy, iz, frameColors[band % colorCount]);
-                        ++lit;
+                        // ++lit;
                     }
                 }
             }
             showCube();
+            /*
             if (uint32_t(frameStart - lastDebug) >= 1000) {
                 lastDebug = frameStart;
                 Serial.printf("Julia: c=(%.4f,%.4f,%.4f) closure=%.3f iterations=%u palette=Canonical-ROYGBIV cycle=%u cRate=%.1f lit=%u/%u frame=%lums\r\n",
@@ -219,6 +220,7 @@ class JuliaRenderer {
                     unsigned(RNDR_X * RNDR_Y * RNDR_Z),
                     (unsigned long)uint32_t(millis() - frameStart));
             }
+            */
             const uint32_t spent = uint32_t(millis() - frameStart);
             if (spent < speedMs) {
                 delay(speedMs - spent);
@@ -314,23 +316,13 @@ class Streamers {
 
                 drawColor.nscale8((uint8_t)(particle.life * 255.0f));
                 
-                // Additive blending for glowing cores
-                CRGB existing = getVoxel(ix, iy, iz);
-                setVoxel(ix, iy, iz, existing + drawColor);
+                ParticleEngine::drawParticlePoint(p, drawColor);
 
-                // 6. Optional Kinetic Tails
-                if (particle.flags & ParticleEngine::KineticTail) {
-                    if (currentSpeed > 5.0f) {
-                        int tailX = (int)lroundf(p.x - (v.x * dt * 2.0f));
-                        int tailY = (int)lroundf(p.y - (v.y * dt * 2.0f));
-                        int tailZ = (int)lroundf(p.z - (v.z * dt * 2.0f));
-                        
-                        if (tailX >= 0 && tailX < RNDR_X && tailY >= 0 && tailY < RNDR_Y && tailZ >= 0 && tailZ < RNDR_Z) {
-                            CRGB tailColor = drawColor;
-                            tailColor.nscale8(80); 
-                            setVoxel(tailX, tailY, tailZ, getVoxel(tailX, tailY, tailZ) + tailColor);
-                        }
-                    }
+                if ((particle.flags & ParticleEngine::KineticTail) && currentSpeed > 5.0f) {
+                    CRGB tailColor = drawColor;
+                    tailColor.nscale8(80);
+                    ParticleEngine::drawParticlePoint({p.x - (v.x * dt * 2.0f),
+                        p.y - (v.y * dt * 2.0f), p.z - (v.z * dt * 2.0f)}, tailColor);
                 }
             }
         }
@@ -2066,7 +2058,7 @@ class Streamers {
 
     static void animateAtomicOrbits(uint32_t durationMs, uint32_t stepMs = 20) {
         using GeometryEngine::Point3;
-        constexpr uint32_t ringTraceMs = 680, holdMs = 600;
+        constexpr uint32_t ringTraceMs = 340, holdMs = 600;
         constexpr unsigned rings = 4;
         const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
         const float radius = min(RNDR_CX, min(RNDR_CY, RNDR_CZ)) * 0.9f;

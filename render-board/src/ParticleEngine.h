@@ -211,6 +211,15 @@ namespace ParticleEngine {
         }
     }
 
+    inline void drawParticlePoint(Point3 p, CRGB color, bool wrapX = false) {
+        int x = lroundf(p.x);
+        if (wrapX && x == RNDR_X) x = 0;
+        const int y = lroundf(p.y), z = lroundf(p.z);
+        if (x >= 0 && x < RNDR_X && y >= 0 && y < RNDR_Y && z >= 0 && z < RNDR_Z) {
+            setVoxel(x, y, z, getVoxel(x, y, z) + color);
+        }
+    }
+
     inline void drawSmooth(Point3 position, CRGB color, bool wrapX) {
         const auto x = lroundf(position.x * 256.0f);
         const auto y = lroundf(position.y * 256.0f);
@@ -229,9 +238,8 @@ namespace ParticleEngine {
     // even when their centers fall between voxels.
     inline void drawBall(Point3 center, float radius, CRGB color, bool wrapX,
                          bool fullBrightnessCore = false, float horizontalScale = 1.0f,
-                         ParticleBlend blend = ParticleBlend::Add) {
+                         ParticleBlend blend = ParticleBlend::Add, uint8_t *frameCoverage = nullptr) {
         const float outer = fullBrightnessCore ? max(1.0f, radius + 0.5f) : radius + 0.5f;
-        const float horizontalOuter = outer * horizontalScale;
         const float inverseHorizontalScale = 1.0f / horizontalScale;
         const float inner = max(0.0f, radius - 0.5f);
         const float outerSq = outer * outer;
@@ -244,36 +252,28 @@ namespace ParticleEngine {
             innerSq = max(innerSq, dx * dx + dy * dy + dz * dz);
         }
         const float fadeScale = 255.0f / (outerSq - innerSq);
-        const int firstX = int(ceilf(center.x - horizontalOuter));
-        const int lastX = int(floorf(center.x + horizontalOuter));
-        const int firstY = max(0, int(ceilf(center.y - horizontalOuter)));
-        const int lastY = min(RNDR_Y - 1, int(floorf(center.y + horizontalOuter)));
-        const int firstZ = max(0, int(ceilf(center.z - outer)));
-        const int lastZ = min(RNDR_Z - 1, int(floorf(center.z + outer)));
-        for (int x = firstX; x <= lastX; ++x) {
-            if (!wrapX && (x < 0 || x >= RNDR_X)) continue;
-            const int voxelX = wrapX ? (x % RNDR_X + RNDR_X) % RNDR_X : x;
-            const float dx = (x - center.x) * inverseHorizontalScale;
-            for (int y = firstY; y <= lastY; ++y) {
-                const float dy = (y - center.y) * inverseHorizontalScale;
-                const float xySq = dx * dx + dy * dy;
-                for (int z = firstZ; z <= lastZ; ++z) {
-                    const float dz = z - center.z;
-                    const float coverage = (outerSq - xySq - dz * dz) * fadeScale;
-                    if (coverage <= 0.0f) continue;
-                    CRGB lit = color;
-                    if (!fullBrightnessCore || xySq + dz * dz > innerSq) {
-                        lit.nscale8(uint8_t(min(255.0f, coverage)));
-                    }
-                    const CRGB existing = getVoxel(voxelX, y, z);
-                    if (blend == ParticleBlend::Add) {
-                        setVoxel(voxelX, y, z, existing + lit);
-                    } else if (blend == ParticleBlend::EmptyOnly ? existing == CRGB::Black
-                               : max(lit.r, max(lit.g, lit.b)) > max(existing.r, max(existing.g, existing.b))) {
-                        setVoxel(voxelX, y, z, lit);
-                    }
-                }
+        GeometryEngine::rasterSphere(center, outer, [&](int x, int y, int z, float distanceSq) {
+            CRGB lit = color;
+            if (!fullBrightnessCore || distanceSq > innerSq) {
+                lit.nscale8(uint8_t(min(255.0f, (outerSq - distanceSq) * fadeScale)));
             }
-        }
+            CRGB existing = getVoxel(x, y, z);
+            if (frameCoverage) {
+                if (lit == CRGB::Black) return;
+                const unsigned index = (z * RNDR_Y + y) * RNDR_X + x;
+                auto &bits = frameCoverage[index >> 3];
+                const uint8_t bit = 1u << (index & 7);
+                // A live particle can replace an afterimage. The blend
+                // policy still applies between particles in this frame.
+                if (!(bits & bit)) existing = CRGB::Black;
+                bits |= bit;
+            }
+            if (blend == ParticleBlend::Add) {
+                setVoxel(x, y, z, existing + lit);
+            } else if (blend == ParticleBlend::EmptyOnly ? existing == CRGB::Black
+                       : max(lit.r, max(lit.g, lit.b)) > max(existing.r, max(existing.g, existing.b))) {
+                setVoxel(x, y, z, lit);
+            }
+        }, horizontalScale, wrapX);
     }
 }

@@ -445,7 +445,18 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
 public:
     static void animateBouncingBall(uint32_t durationMs, uint32_t speedMs = 15) {
         using namespace ParticleEngine;
-        constexpr float systemEnergy = 1.35f;
+        constexpr float initialSpeedScale = 1.35f;
+        constexpr float gravity = 38.0f * initialSpeedScale;
+        constexpr float verticalRestitution = 0.84f;
+        constexpr float wallRestitution = 0.9f;
+        constexpr float floorFriction = 0.08f;
+        // Measure total mechanical energy as an equivalent drop height.
+        constexpr float minKickThresholdHeight = 0.10f * (RNDR_Z - 1);
+        constexpr float maxKickThresholdHeight = 0.15f * (RNDR_Z - 1);
+        constexpr float sidewaysShare = 0.08f;
+        // The strongest request can reach the ceiling from the floor
+        // even with a sideways kick, if the shared energy budget allows it.
+        constexpr float maxKickTravel = 1.15f;
         constexpr float maxRadius = 2.5f;
         constexpr float minRadius = maxRadius * 0.5f;
         constexpr float maxBallVolume = maxRadius * maxRadius * maxRadius;
@@ -473,6 +484,14 @@ public:
         const auto sample = [](float low, float high) {
             return low + (high - low) * (random16() / 65536.0f);
         };
+        const auto mechanicalEnergy = [gravity](const Ball& ball) {
+            const auto& v = ball.motion.velocity;
+            const float height = ball.motion.position.z - ball.radius;
+            return (0.5f * (v.x * v.x + v.y * v.y + v.z * v.z) + gravity * height)
+                / ball.inverseMass;
+        };
+        float totalMass = 0.0f;
+        float initialEnergy = 0.0f;
 
         for (int i = 0; i < count; ++i) {
             const int remainingBalls = count - i - 1;
@@ -483,7 +502,9 @@ public:
 
             auto& ball = balls[i];
             const float r = ball.radius = constrain(cbrtf(volume), minRadius, maxRadius);
-            ball.inverseMass = 1.0f / (r * r * r);
+            const float mass = r * r * r;
+            ball.inverseMass = 1.0f / mass;
+            totalMass += mass;
             // Start near the ceiling. If the top is crowded, try lower positions.
             for (int attempt = 0; attempt < 32; ++attempt) {
                 ball.motion.position = {sample(r, RNDR_X - 1.0f - r), sample(r, RNDR_Y - 1.0f - r),
@@ -502,10 +523,11 @@ public:
                 if (!overlaps) break;
             }
             ball.motion.velocity = {
-                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * systemEnergy,
-                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * systemEnergy,
+                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * initialSpeedScale,
+                (random16(20, 50) / 10.0f) * (random8(2) == 0 ? 1.0f : -1.0f) * initialSpeedScale,
                 0.0f
             };
+            initialEnergy += mechanicalEnergy(ball);
 
             if (i < solidCount) {
                 const uint8_t hue = solidHue + (256 * i / solidCount);
@@ -519,11 +541,10 @@ public:
             ball.mode = random8(100) < 30 ? RENDER_SHELL : RENDER_SOLID;
         }
 
-        const float bounceMultiplier = 1.0f + 0.015f * (durationMs / 15000.0f - 1.0f);
-        constexpr float gravity = 38.0f * systemEnergy;
-        constexpr float maxLateralSpeed = 8.0f * systemEnergy;
-        // Keep a low-energy ball bouncing after repeated caroms.
-        const float minimumRebound = sqrtf(2.0f * gravity * (RNDR_Z - 1) * 0.20f);
+        const auto nextKickThreshold = [&] {
+            return totalMass * gravity * sample(minKickThresholdHeight, maxKickThresholdHeight);
+        };
+        float kickThreshold = nextKickThreshold();
         const uint32_t start = millis();
         uint32_t lastFrame = start;
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
@@ -537,9 +558,22 @@ public:
             const float step = dt / substeps;
             for (int tick = 0; tick < substeps; ++tick) {
                 for (int i = 0; i < count; ++i) {
-                    auto& motion = balls[i].motion;
-                    motion.velocity.z -= gravity * step;
-                    advance(motion, step, {}, 1.0f);
+                    auto& ball = balls[i];
+                    auto& motion = ball.motion;
+                    auto& v = motion.velocity;
+                    if (motion.position.z <= ball.radius && v.z == 0.0f) {
+                        // A supported ball loses horizontal speed to the floor.
+                        const float speed = sqrtf(v.x * v.x + v.y * v.y);
+                        const float retained = speed > 0.0f
+                            ? max(0.0f, 1.0f - floorFriction * gravity * step / speed) : 0.0f;
+                        advance(motion, step, {}, retained);
+                    } else {
+                        // Use midpoint vertical speed to integrate constant gravity.
+                        const float halfKick = 0.5f * gravity * step;
+                        v.z -= halfKick;
+                        advance(motion, step, {}, 1.0f);
+                        v.z -= halfKick;
+                    }
                 }
                 for (int i = 0; i < count; ++i) {
                     for (int j = i + 1; j < count; ++j) {
@@ -554,22 +588,57 @@ public:
                     auto& p = ball.motion.position;
                     auto& v = ball.motion.velocity;
                     const float r = ball.radius;
-                    resolveSide(p.x, v.x, RNDR_X, Side::Bounce, 1.0f, r);
-                    resolveSide(p.y, v.y, RNDR_Y, Side::Bounce, 1.0f, r);
-                    if (p.z < r) {
-                        p.z = r;
-                        if (v.z < 0.0f) {
-                            v.z = max(minimumRebound, -v.z * bounceMultiplier);
-                            v.x = constrain(v.x + ((random8(15) / 10.0f) - 0.7f) * systemEnergy,
-                                            -maxLateralSpeed, maxLateralSpeed);
-                            v.y = constrain(v.y + ((random8(15) / 10.0f) - 0.7f) * systemEnergy,
-                                            -maxLateralSpeed, maxLateralSpeed);
-                        }
-                    } else if (p.z > RNDR_Z - 1.0f - r) {
-                        p.z = RNDR_Z - 1.0f - r;
-                        if (v.z > 0.0f) v.z *= -bounceMultiplier;
+                    resolveSide(p.x, v.x, RNDR_X, Side::Bounce, wallRestitution, r);
+                    resolveSide(p.y, v.y, RNDR_Y, Side::Bounce, wallRestitution, r);
+                    const float ceiling = RNDR_Z - 1.0f - r;
+                    // Recover the speed at the contact plane before applying
+                    // restitution. The portion below the floor adds no energy.
+                    if (p.z < r && v.z < 0.0f) {
+                        v.z = -sqrtf(max(0.0f, v.z * v.z - 2.0f * gravity * (r - p.z)));
+                    } else if (p.z > ceiling && v.z > 0.0f) {
+                        v.z = sqrtf(v.z * v.z + 2.0f * gravity * (p.z - ceiling));
                     }
+                    resolveSide(p.z, v.z, RNDR_Z, Side::Bounce, verticalRestitution, r);
+                    if (p.z == r && v.z < 1.0f) v.z = 0.0f;
                 }
+            }
+
+            float energy = 0.0f;
+            for (int i = 0; i < count; ++i) {
+                energy += mechanicalEnergy(balls[i]);
+            }
+            const float availableEnergy = initialEnergy - energy;
+            if (energy < kickThreshold && availableEnergy > 0.0f) {
+                // Every ball gets a kick. Scale the whole batch if the
+                // combined requests exceed the remaining energy budget.
+                float kickEnergy[maxBalls];
+                float requestedEnergy = 0.0f;
+                for (int i = 0; i < count; ++i) {
+                    const auto& ball = balls[i];
+                    const float travel = RNDR_Z - 1.0f - 2.0f * ball.radius;
+                    kickEnergy[i] = gravity * travel * sample(0.35f, maxKickTravel) / ball.inverseMass;
+                    requestedEnergy += kickEnergy[i];
+                }
+                const float scale = min(1.0f, availableEnergy / requestedEnergy);
+                for (int i = 0; i < count; ++i) {
+                    auto& ball = balls[i];
+                    auto& v = ball.motion.velocity;
+                    const float addedSpeedSq = 2.0f * kickEnergy[i] * scale * ball.inverseMass;
+                    const float addedSideSpeedSq = sidewaysShare * addedSpeedSq;
+                    const uint16_t angle = random16();
+                    const float dx = cos16(angle), dy = sin16(angle);
+                    const float inverseLength = 1.0f / sqrtf(dx * dx + dy * dy);
+                    const float along = (v.x * dx + v.y * dy) * inverseLength;
+                    // Account for current motion so the impulse adds only
+                    // its assigned kinetic energy, even to a moving ball.
+                    const float impulse = addedSideSpeedSq /
+                        (sqrtf(along * along + addedSideSpeedSq) + fabsf(along));
+                    const float signedScale = along < 0.0f ? -impulse * inverseLength : impulse * inverseLength;
+                    v.x += dx * signedScale;
+                    v.y += dy * signedScale;
+                    v.z = sqrtf(v.z * v.z + (1.0f - sidewaysShare) * addedSpeedSq);
+                }
+                kickThreshold = nextKickThreshold();
             }
 
             clearAll();

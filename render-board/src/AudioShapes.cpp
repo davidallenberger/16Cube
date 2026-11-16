@@ -1,4 +1,5 @@
 #include "Audio.h"
+#include "GeometryEngine.h"
 #include "Shapes.h"
 
 namespace {

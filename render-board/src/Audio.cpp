@@ -2,6 +2,7 @@
 #include "MidrangeBoost.h"
 #include "TestDemo.h"
 #include "AppMemory.h"
+#include "GeometryEngine.h"
 #include <math.h>
 #include <cmath>
 
@@ -49,15 +50,18 @@ namespace {
         const float gamma = std::isfinite(settings.juliaVolumeGamma) ?
             min(4.0f, max(0.25f, settings.juliaVolumeGamma)) : 1.0f;
         uint8_t bins[16];
-        const bool compensated = Audio::displaySpectrum(audio, bins);
+        Audio::displaySpectrum(audio, bins);
         juliaBoost.update(audio, millis(), settings.midrangeBoostEnabled, bins);
         const float lift = juliaBoost.lift * midrangeBoostGain();
         const float volume = min(1.0f, float(audio.volumeSm) * gain / 255.0f + lift);
         const float closure = gamma == 1.0f ? volume : powf(volume, gamma);
+        /*
         char detail[96];
         snprintf(detail, sizeof(detail), "Julia curve=%s volume=%u target=%.3f gain=%.2f gamma=%.2f fft=%.3f",
-            compensated ? "comp" : "raw", unsigned(audio.volumeSm), double(closure), double(gain), double(gamma), double(lift));
+            settings.spectrumCompensationEnabled ? "comp" : "raw", unsigned(audio.volumeSm),
+            double(closure), double(gain), double(gamma), double(lift));
         Audio::debug(audio, detail, 0, bins);
+        */
         return closure;
     }
 
@@ -426,26 +430,20 @@ void Audio::puddles(bool peakDetect, PuddleShape shape, float sensitivity, uint8
                     const uint8_t x0 = random(RNDR_X - edge + 1);
                     const uint8_t y0 = random(RNDR_Y - edge + 1);
                     const uint8_t z0 = random(RNDR_Z - edge + 1);
-                    for (uint8_t z = z0; z < z0 + edge; ++z) {
-                        for (uint8_t y = y0; y < y0 + edge; ++y) {
-                            for (uint8_t x = x0; x < x0 + edge; ++x) {
-                                setVoxel(x, y, z, color);
-                            }
-                        }
-                    }
+                    GeometryEngine::rasterFastBox(x0, y0, z0, x0 + edge - 1, y0 + edge - 1, z0 + edge - 1,
+                                                  RENDER_SOLID, [&](uint8_t x, uint8_t y, uint8_t z) {
+                        setVoxel(x, y, z, color);
+                    });
                 } else {
                     // Z is vertical; X is the existing horizontal line.
-                    uint8_t x = random(vertical ? RNDR_X : RNDR_X - length + 1);
+                    const uint8_t x = random(vertical ? RNDR_X : RNDR_X - length + 1);
                     const uint8_t y = random(RNDR_Y);
-                    uint8_t z = random(vertical ? RNDR_Z - length + 1 : RNDR_Z);
-                    for (uint8_t i = 0; i < length; ++i) {
-                        setVoxel(x, y, z, color);
-                        if (vertical) {
-                            ++z;
-                        } else {
-                            ++x;
-                        }
-                    }
+                    const uint8_t z = random(vertical ? RNDR_Z - length + 1 : RNDR_Z);
+                    GeometryEngine::rasterFastBox(x, y, z, x + (vertical ? 0 : length - 1), y,
+                                                  z + (vertical ? length - 1 : 0),
+                                                  RENDER_SOLID, [&](uint8_t ix, uint8_t iy, uint8_t iz) {
+                        setVoxel(ix, iy, iz, color);
+                    });
                 }
             }
         }
@@ -867,6 +865,239 @@ void Audio::animateFunkyPlank() {
     }
 }
 
+namespace {
+float frequencyShapeRelease(uint32_t &lastFrame, float releaseMs = 25.0f) {
+    const uint32_t now = millis();
+    const uint32_t elapsed = now - lastFrame;
+    lastFrame = now;
+    return expf(-float(elapsed) / releaseMs);
+}
+
+float trackFrequencySize(float previous, float target, float retained) {
+    // Rise immediately. On a drop, smooth the size and redraw the boundary.
+    if (target >= previous) return target;
+    const float level = target + (previous - target) * retained;
+    return level - target < 1.0f ? target : level;
+}
+}
+
+void Audio::animateFrequencyPlanes() {
+    frequencyPlanes(false);
+}
+
+void Audio::frequencyPlanes(bool discs) {
+    constexpr int bands = 8;
+    constexpr int noiseFloor = 6;
+    const CRGB colors[bands] = {
+        CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
+        CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3), CRGB::White
+    };
+    const int fullAreaLevel = max(1, int(controls().frequencyPlanesLevelForFullArea));
+    float visibleLevels[bands] = {};
+    uint32_t lastFrame = millis();
+    while (TestDemo::audioRoutineRunning()) {
+        const auto audio = RemoteInputs::audio();
+        uint8_t bins[16];
+        const bool compensated = displaySpectrum(audio, bins);
+        int levels[bands] = {};
+        const float retained = frequencyShapeRelease(lastFrame);
+        clearAll();
+        for (int band = 0; band < bands; ++band) {
+            for (int bin = 2 * band; bin < 2 * band + 2; ++bin) {
+                if (audio.fftResult[bin] > noiseFloor) levels[band] = max(levels[band], int(bins[bin]));
+            }
+            visibleLevels[band] = trackFrequencySize(visibleLevels[band], min(levels[band], fullAreaLevel), retained);
+            if (visibleLevels[band] == 0.0f) continue;
+            // Width and depth grow with the square root so lit area follows
+            // the band level. Fractional edge coverage softens size changes.
+            const float extent = sqrtf(visibleLevels[band] / fullAreaLevel);
+            const float halfWidth = RNDR_X * 0.5f * extent;
+            const float halfDepth = RNDR_Y * 0.5f * extent;
+            const int upper = RNDR_Z / 2 + band;
+            const int lower = RNDR_Z - 1 - upper;
+            GeometryEngine::rasterHorizontalPatch(halfWidth, halfDepth, discs,
+                                                   [&](int x, int y, uint8_t coverage) {
+                CRGB color = colors[band];
+                color.nscale8(coverage);
+                setVoxel(x, y, upper, color);
+                setVoxel(x, y, lower, color);
+            });
+        }
+        char detail[120];
+        snprintf(detail, sizeof(detail), "Frequency Planes curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
+                 compensated ? "comp" : "raw", levels[0], levels[1], levels[2], levels[3],
+                 levels[4], levels[5], levels[6], levels[7], fullAreaLevel);
+        debug(audio, detail, 0, bins);
+        showCube();
+    }
+}
+
+void Audio::frequencyCubes() {
+    constexpr int noiseFloor = 6;
+    constexpr uint32_t rainbowEight[] = {
+        0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00,
+        0x0000FF, 0x4B0082, 0x9400D3, 0xFFFFFF
+    };
+    constexpr int grid = 2;
+    constexpr int bandCount = 8;
+    constexpr int binsPerBand = 2;
+    constexpr float releaseMs = 45.0f;
+    const int fullSize = max(noiseFloor + 1, int(controls().frequencyShapesLevelForFullSize));
+    // Viewed from above with +Y toward the back: front-left, back-left,
+    // back-right, front-right.
+    constexpr int quadrantOrder[grid][grid] = {{0, 3}, {1, 2}};
+    float visibleLevels[bandCount] = {};
+    uint32_t lastFrame = millis();
+    while (TestDemo::audioRoutineRunning()) {
+        const auto audio = RemoteInputs::audio();
+        uint8_t bins[16];
+        const bool compensated = displaySpectrum(audio, bins);
+        const float retained = frequencyShapeRelease(lastFrame, releaseMs);
+        int levels[bandCount] = {};
+        int active = 0;
+        for (int band = 0; band < bandCount; ++band) {
+            for (int offset = 0; offset < binsPerBand; ++offset) {
+                const int bin = band * binsPerBand + offset;
+                if (audio.fftResult[bin] > noiseFloor) levels[band] = max(levels[band], int(bins[bin]));
+            }
+            visibleLevels[band] = trackFrequencySize(visibleLevels[band], min(levels[band], fullSize), retained);
+            if (visibleLevels[band] > 0.0f) ++active;
+        }
+        clearAll();
+        for (int gz = 0; gz < grid; ++gz) {
+            const int z0 = gz * RNDR_Z / grid, z1 = (gz + 1) * RNDR_Z / grid;
+            for (int gy = 0; gy < grid; ++gy) {
+                const int y0 = gy * RNDR_Y / grid, y1 = (gy + 1) * RNDR_Y / grid;
+                for (int gx = 0; gx < grid; ++gx) {
+                    const int x0 = gx * RNDR_X / grid, x1 = (gx + 1) * RNDR_X / grid;
+                    const int band = 4 * gz + quadrantOrder[gy][gx];
+                    const int maxEdge = min(x1 - x0, min(y1 - y0, z1 - z0));
+                    const CRGB color(rainbowEight[band]);
+                    const float level = max(0.0f, visibleLevels[band] - 1.0f) / (fullSize - 1);
+                    const float edge = 1.0f + (maxEdge - 1) * level;
+                    // Anchor the cube at the corner closest to the display center.
+                    GeometryEngine::drawCornerCube(gx == 0 ? x1 - 1 : x0, gy == 0 ? y1 - 1 : y0,
+                                                   gz == 0 ? z1 - 1 : z0,
+                                                   gx == 0, gy == 0, gz == 0, edge, color);
+                }
+            }
+        }
+        char detail[100];
+        snprintf(detail, sizeof(detail), "Frequency Shapes curve=%s bands=%d active=%d bass=%d highs=%d full=%d",
+                 compensated ? "comp" : "raw", bandCount, active, levels[0], levels[bandCount - 1], fullSize);
+        debug(audio, detail, 0, bins);
+        showCube();
+    }
+}
+
+void Audio::freqwave(FreqwaveShape shape) {
+    // Launch on the beat. Fronts advance with elapsed
+    // time so beat phase corrections cannot move a front already in flight.
+    constexpr int quietVolume = 2;
+    const float halfSpan = min(RNDR_CX, min(RNDR_CY, RNDR_CZ));
+    const float smoothVoxelsPerMs = 0.008f * halfSpan / 7.5f;
+    constexpr float edgeWidth = 0.95f;
+    const float sphereExit = 8.0f * halfSpan / 7.5f;
+    constexpr int historySize = 16;
+    constexpr float radiansPerBeat = 6.283185307f / historySize;
+    CRGB history[historySize] = {};
+    uint32_t emittedAt[historySize] = {};
+    const bool wireframe = shape == FreqwaveShape::WireframeBox;
+    // On the narrower canvas both horizontal bounds clip together. Beyond
+    // them there are no visible edges, even while the vertical bounds fit.
+    const float exitRadius = wireframe ? halfSpan + 0.5f : sphereExit;
+    int lastBeat = -1;
+    unsigned newest = 0;
+    clearAll();
+    while (TestDemo::audioRoutineRunning()) {
+        const uint32_t now = millis();
+        const auto audio = RemoteInputs::audio();
+        const float beatPosition = audio.beatAngle(historySize) / radiansPerBeat;
+        const int beat = min(historySize - 1, int(beatPosition));
+        if (lastBeat < 0) lastBeat = beat;
+        const int steps = (beat - lastBeat + historySize) % historySize;
+        // A phase correction can briefly cross a beat backwards. Hold the
+        // last frame's beat boundary until the clock catches up.
+        if (steps > 0 && steps < historySize / 2) {
+            lastBeat = beat;
+            newest = (newest + steps) % historySize;
+            for (int age = 1; age < steps; ++age) {
+                history[(newest + historySize - age) % historySize] = CRGB::Black;
+            }
+            uint8_t bins[16];
+            const bool compensated = displaySpectrum(audio, bins);
+            int band = -1;
+            for (int i = 0; i < 16; ++i) {
+                // Compensation should never promote the quiet ADC noise floor.
+                if (audio.fftResult[i] > 6 && bins[i] > 0 && (band < 0 || bins[i] > bins[band])) band = i;
+            }
+            const uint8_t brightness = band >= 0 && audio.volumeSm > quietVolume ? 255 : 0;
+            history[newest] = band < 0 ? CRGB::Black : CRGB(CHSV(uint8_t(band * 208 / 15), 255, brightness));
+            emittedAt[newest] = now;
+            char detail[88];
+            snprintf(detail, sizeof(detail), "Freqwave curve=%s band=%d level=%u brightness=%u beat=%d",
+                     compensated ? "comp" : "raw", band, band < 0 ? 0u : unsigned(bins[band]),
+                     unsigned(brightness), beat);
+            debug(audio, detail, 0, bins);
+        }
+
+        struct Front {
+            float radius;
+            CRGB color;
+        };
+        Front fronts[historySize] = {};
+        int frontCount = 0;
+        for (int age = 0; age < historySize; ++age) {
+            const unsigned index = (newest + historySize - age) % historySize;
+            CRGB color = history[index];
+            if (!(color.r || color.g || color.b)) continue;
+            const float radius = (now - emittedAt[index]) * smoothVoxelsPerMs;
+            if (radius >= exitRadius) {
+                history[index] = CRGB::Black;
+                continue;
+            }
+            // On the even-sized canvases, centered voxel layers are half
+            // integers. Pick one layer so each edge has a single strand.
+            const float drawRadius = wireframe ? floorf(radius) + 0.5f : radius;
+            if (!wireframe) color.nscale8(uint8_t(255.0f * min(1.0f, (sphereExit - radius) / edgeWidth)));
+            fronts[frontCount++] = {drawRadius, color};
+        }
+        clearAll();
+        if (wireframe) {
+            for (int i = 0; i < frontCount; ++i) {
+                const auto &front = fronts[i];
+                const float r = front.radius;
+                GeometryEngine::rasterFastBox(RNDR_CX - r, RNDR_CY - r, RNDR_CZ - r,
+                                              RNDR_CX + r, RNDR_CY + r, RNDR_CZ + r,
+                                              RENDER_WIREFRAME, [&](uint8_t x, uint8_t y, uint8_t z) {
+                    CRGB color = getVoxel(x, y, z);
+                    color += front.color;
+                    setVoxel(x, y, z, color);
+                });
+            }
+            showCube();
+            continue;
+        }
+        if (frontCount > 0) {
+            const float outer = fronts[frontCount - 1].radius + 1.0f;
+            GeometryEngine::rasterSphere({RNDR_CX, RNDR_CY, RNDR_CZ}, outer,
+                                         [&](int x, int y, int z, float distanceSq) {
+                const float distance = sqrtf(distanceSq);
+                CRGB result = CRGB::Black;
+                for (int i = 0; i < frontCount; ++i) {
+                    const float coverage = 1.0f - fabsf(distance - fronts[i].radius);
+                    if (coverage <= 0.0f) continue;
+                    CRGB color = fronts[i].color;
+                    color.nscale8(uint8_t(255.0f * coverage));
+                    result += color;
+                }
+                if (result.r || result.g || result.b) setVoxel(x, y, z, result);
+            });
+        }
+        showCube();
+    }
+}
+
 void Audio::animateSurroundGEQ() {
     drawGeqBars(false);
 }
@@ -968,36 +1199,22 @@ void Audio::drawGeqBars(bool inward) {
             const float fade = 255.0f * elapsedMs / recessionMs;
             int outerShell = -1;
             for (int shell = 0; shell < shellCount; ++shell) {
-                // Match the solid sphere's half-voxel radius and edge coverage.
-                const int edge = shell - radiusSteps + 2;
-                const int target = radius > 0.0f ? 255 - min(4, max(0, edge)) * 255 / 4 : 0;
+                const uint8_t target = GeometryEngine::getCoverage(shell - radiusSteps, 0, RENDER_SOLID);
                 sphereCoverage[shell] = max(float(target), sphereCoverage[shell] - fade);
                 if (sphereCoverage[shell] >= 1.0f) {
                     outerShell = shell;
                 }
             }
             if (outerShell >= 0) {
-                const int distanceLimit = (outerShell + 1) * (outerShell + 1);
-                for (int x = 0; x < RNDR_X; ++x) {
-                    const int dx = 2 * x - int(2 * RNDR_CX);
-                    for (int y = 0; y < RNDR_Y; ++y) {
-                        const int dy = 2 * y - int(2 * RNDR_CY);
-                        const int xySquared = dx * dx + dy * dy;
-                        if (xySquared >= distanceLimit) continue;
-                        for (int z = 0; z < RNDR_Z; ++z) {
-                            const int dz = 2 * z - int(2 * RNDR_CZ);
-                            const int distanceSquared = xySquared + dz * dz;
-                            if (distanceSquared >= distanceLimit) continue;
-                            const int shell = int(sqrtf(float(distanceSquared)));
-                            const uint8_t coverage = uint8_t(sphereCoverage[shell]);
-                            if (coverage > 0) {
-                                CRGB color = texture.getColor(x, y, z);
-                                color.nscale8(coverage);
-                                setVoxel(x, y, z, color);
-                            }
-                        }
-                    }
-                }
+                GeometryEngine::rasterSphere({RNDR_CX, RNDR_CY, RNDR_CZ}, (outerShell + 1) * 0.5f,
+                                             [&](int x, int y, int z, float distanceSq) {
+                    const int shell = GeometryEngine::sphereShell(distanceSq);
+                    const uint8_t coverage = uint8_t(sphereCoverage[shell]);
+                    if (coverage == 0) return;
+                    CRGB color = texture.getColor(x, y, z);
+                    color.nscale8(coverage);
+                    setVoxel(x, y, z, color);
+                });
             }
         }
         const auto drawBar = [&](int x, int y, int group) {

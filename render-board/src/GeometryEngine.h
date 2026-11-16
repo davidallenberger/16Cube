@@ -80,6 +80,22 @@ namespace GeometryEngine {
         }
     }
 
+    // Blend along a strand while keeping its horizontal address fixed.
+    inline void drawStrandVoxel(int x, int y, float z, CRGB color) {
+        if (x < 0 || x >= RNDR_X || y < 0 || y >= RNDR_Y || z <= -1.0f || z >= RNDR_Z) return;
+        const int lower = int(floorf(z));
+        const uint8_t upperWeight = uint8_t((z - lower) * 255.0f);
+        if (lower >= 0) {
+            CRGB bottom = color;
+            bottom.nscale8(255 - upperWeight);
+            setVoxel(x, y, lower, getVoxel(x, y, lower) + bottom);
+        }
+        if (upperWeight > 0 && lower + 1 < RNDR_Z) {
+            color.nscale8(upperWeight);
+            setVoxel(x, y, lower + 1, getVoxel(x, y, lower + 1) + color);
+        }
+    }
+
     // ==========================================
     // 3D WU VOXEL (Sub-Voxel Anti-Aliasing)
     // ==========================================
@@ -172,7 +188,7 @@ namespace GeometryEngine {
             const uint16_t phase = uint16_t((uint32_t(i) * 65536u) / steps);
             const float c = cos16(phase) / 32768.0f;
             const float s = sin16(phase) / 32768.0f;
-            const uint8_t brightness = uint8_t(180.0f * min(1.0f, visible - i));
+            const uint8_t brightness = uint8_t(255.0f * min(1.0f, visible - i));
             const CRGB color = ColorFromPalette(palette, uint8_t((phase >> 8) + hueOffset),
                                                brightness, LINEARBLEND);
             drawWuVoxel(lroundf(256.0f * (center.x + u.x*c + v.x*s)),
@@ -353,32 +369,72 @@ namespace GeometryEngine {
     // ==========================================
     // SPHERE
     // ==========================================
-    inline void drawSphere(float cx, float cy, float cz, float radius, RenderMode mode, const TextureState &tex, float rotX, float rotY, float rotZ, bool eraseBackground = true) {
-        if (radius < 0) return;
-        int icx = (cx * 2.0f), icy = (cy * 2.0f), icz = (cz * 2.0f), ir = (radius * 2.0f);
-
-        for (int x = 0; x < RNDR_X; x++) {
-            for (int y = 0; y < RNDR_Y; y++) {
-                for (int z = 0; z < RNDR_Z; z++) {
-                    int dx = (x * 2) - icx, dy = (y * 2) - icy, dz = (z * 2) - icz;
-                    if (abs(dx) > ir + 4 || abs(dy) > ir + 4 || abs(dz) > ir + 4) {
-                        if (eraseBackground) setVoxel(x, y, z, CRGB::Black);
-                        continue;
-                    }
-                    int dist = sqrt16(dx * dx + dy * dy + dz * dz);
-                    int d_surface = dist - ir;
-                    uint8_t coverage = getCoverage(d_surface, 0, mode == RENDER_WIREFRAME ? RENDER_SHELL : mode, 2);
-
-                    if (coverage > 0) {
-                        CRGB color = tex.getColor(x, y, z);
-                        if (coverage < 255) color.nscale8(coverage); 
-                        setVoxel(x, y, z, color);
-                    } else if (eraseBackground) {
-                        setVoxel(x, y, z, CRGB::Black);
-                    }
+    // Visit the bounded volume of a sphere or a horizontally scaled sphere.
+    // A coverage sampler can turn the squared distance into a shell, solid,
+    // or soft particle without owning another voxel traversal.
+    template <typename Plot>
+    inline void rasterSphere(Point3 center, float outer, Plot plot,
+                             float horizontalScale = 1.0f, bool wrapX = false) {
+        const float horizontalOuter = outer * horizontalScale;
+        const float inverseScale = 1.0f / horizontalScale;
+        const float outerSq = outer * outer;
+        const int firstX = int(ceilf(center.x - horizontalOuter));
+        const int lastX = int(floorf(center.x + horizontalOuter));
+        const int firstY = max(0, int(ceilf(center.y - horizontalOuter)));
+        const int lastY = min(RNDR_Y - 1, int(floorf(center.y + horizontalOuter)));
+        const int firstZ = max(0, int(ceilf(center.z - outer)));
+        const int lastZ = min(RNDR_Z - 1, int(floorf(center.z + outer)));
+        for (int x = firstX; x <= lastX; ++x) {
+            if (!wrapX && (x < 0 || x >= RNDR_X)) continue;
+            const int voxelX = wrapX ? (x % RNDR_X + RNDR_X) % RNDR_X : x;
+            const float dx = (x - center.x) * inverseScale;
+            for (int y = firstY; y <= lastY; ++y) {
+                const float dy = (y - center.y) * inverseScale;
+                const float xySq = dx * dx + dy * dy;
+                for (int z = firstZ; z <= lastZ; ++z) {
+                    const float dz = z - center.z;
+                    const float distanceSq = xySq + dz * dz;
+                    if (distanceSq < outerSq) plot(voxelX, y, z, distanceSq);
                 }
             }
         }
+    }
+
+    // Project along Y, feathering each strand at the two surface crossings.
+    // This preserves the lateral silhouette of a front-facing sphere mask.
+    template <typename VisitColumn>
+    inline void rasterDepthFeatheredSphere(float radius, VisitColumn visitColumn) {
+        for (int z = 0; z < RNDR_Z; ++z) {
+            const float dz = z - RNDR_CZ;
+            for (int x = 0; x < RNDR_X; ++x) {
+                const float dx = x - RNDR_CX;
+                const float spanSq = radius * radius - dx * dx - dz * dz;
+                if (spanSq > 0.0f) visitColumn(x, z, sqrtf(spanSq));
+            }
+        }
+    }
+
+    inline float depthFeatheredCoverage(float span, float depth) {
+        return constrain(span - fabsf(depth) + 0.5f, 0.0f, 1.0f);
+    }
+
+    inline int sphereShell(float distanceSq) {
+        return sqrt16(uint16_t(4.0f * distanceSq));
+    }
+
+    inline void drawSphere(float cx, float cy, float cz, float radius, RenderMode mode, const TextureState &tex, float rotX, float rotY, float rotZ, bool eraseBackground = true) {
+        if (radius < 0) return;
+        const Point3 center{int(cx * 2.0f) * 0.5f, int(cy * 2.0f) * 0.5f, int(cz * 2.0f) * 0.5f};
+        const int ir = int(radius * 2.0f);
+        if (eraseBackground) clearAll();
+        rasterSphere(center, ir * 0.5f + 1.0f, [&](int x, int y, int z, float distanceSq) {
+            const auto coverage = getCoverage(sphereShell(distanceSq) - ir, 0,
+                                              mode == RENDER_WIREFRAME ? RENDER_SHELL : mode);
+            if (coverage == 0) return;
+            CRGB color = tex.getColor(x, y, z);
+            if (coverage < 255) color.nscale8(coverage);
+            setVoxel(x, y, z, color);
+        });
     }
 
     // ==========================================
@@ -501,18 +557,86 @@ namespace GeometryEngine {
     }
 
 
-    inline void drawFastBox(uint8_t x0, uint8_t y0, uint8_t z0, uint8_t x1, uint8_t y1, uint8_t z1, RenderMode mode, const TextureState &tex) {
-        for (uint8_t x = x0; x <= x1; x++) {
-            for (uint8_t y = y0; y <= y1; y++) {
-                for (uint8_t z = z0; z <= z1; z++) {
-                    uint8_t boundaryHits = (x == x0 || x == x1) + (y == y0 || y == y1) + (z == z0 || z == z1);
-                    bool draw = false;
-                    if (mode == RENDER_SOLID) draw = true;
-                    else if (mode == RENDER_SHELL && boundaryHits >= 1) draw = true;
-                    else if (mode == RENDER_WIREFRAME && boundaryHits >= 2) draw = true;
-
-                    if (draw) setVoxel(x, y, z, tex.getColor(x, y, z));
+    // Rasterize a voxel-aligned box. Callers choose how to shade and
+    // composite the covered voxels.
+    template <typename Plot>
+    inline void rasterFastBox(uint8_t x0, uint8_t y0, uint8_t z0,
+                              uint8_t x1, uint8_t y1, uint8_t z1,
+                              RenderMode mode, Plot plot) {
+        for (uint8_t x = x0; x <= x1; ++x) {
+            for (uint8_t y = y0; y <= y1; ++y) {
+                for (uint8_t z = z0; z <= z1; ++z) {
+                    const uint8_t boundaryHits =
+                        (x == x0 || x == x1) + (y == y0 || y == y1) + (z == z0 || z == z1);
+                    if (mode == RENDER_SOLID ||
+                        (mode == RENDER_SHELL && boundaryHits >= 1) ||
+                        (mode == RENDER_WIREFRAME && boundaryHits >= 2)) {
+                        plot(x, y, z);
+                    }
                 }
+            }
+        }
+    }
+
+    inline void drawFastBox(uint8_t x0, uint8_t y0, uint8_t z0, uint8_t x1, uint8_t y1, uint8_t z1, RenderMode mode, const TextureState &tex) {
+        rasterFastBox(x0, y0, z0, x1, y1, z1, mode, [&](uint8_t x, uint8_t y, uint8_t z) {
+            setVoxel(x, y, z, tex.getColor(x, y, z));
+        });
+    }
+
+    // A solid cube grows away from its anchor. Coverage multiplies where
+    // two or three partially filled faces meet.
+    inline void drawCornerCube(int x, int y, int z, bool towardLowX, bool towardLowY,
+                               bool towardLowZ, float edge, CRGB color) {
+        const int span = int(ceilf(edge)) - 1;
+        const int outerX = x + (towardLowX ? -span : span);
+        const int outerY = y + (towardLowY ? -span : span);
+        const int outerZ = z + (towardLowZ ? -span : span);
+        const float partial = edge - span;
+        const uint8_t coverage[] = {255, uint8_t(255.0f * partial),
+            uint8_t(255.0f * partial * partial), uint8_t(255.0f * partial * partial * partial)};
+        rasterFastBox(min(x, outerX), min(y, outerY), min(z, outerZ),
+                      max(x, outerX), max(y, outerY), max(z, outerZ), RENDER_SOLID,
+                      [&](uint8_t vx, uint8_t vy, uint8_t vz) {
+            const uint8_t light = coverage[(vx == outerX) + (vy == outerY) + (vz == outerZ)];
+            if (light == 0) return;
+            CRGB voxel = color;
+            if (light < 255) voxel.nscale8(light);
+            setVoxel(vx, vy, vz, voxel);
+        });
+    }
+
+    template <typename ColorAt>
+    inline void paintPlane(uint8_t axis, uint8_t layer, ColorAt colorAt) {
+        const uint8_t dimensions[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        if (axis >= 3 || layer >= dimensions[axis]) return;
+        const uint8_t uAxis = axis == 0 ? 1 : 0;
+        const uint8_t vAxis = axis == 2 ? 1 : 2;
+        uint8_t position[3];
+        position[axis] = layer;
+        for (uint8_t u = 0; u < dimensions[uAxis]; ++u) {
+            position[uAxis] = u;
+            for (uint8_t v = 0; v < dimensions[vAxis]; ++v) {
+                position[vAxis] = v;
+                setVoxel(position[0], position[1], position[2], colorAt(position[0], position[1], position[2]));
+            }
+        }
+    }
+
+    // Fill a centered horizontal patch with a one-voxel soft boundary.
+    // The same coverage can be copied to multiple heights by the caller.
+    template <typename Plot>
+    inline void rasterHorizontalPatch(float halfWidth, float halfDepth, bool disc, Plot plot) {
+        const float radius = min(halfWidth, halfDepth);
+        for (int y = 0; y < RNDR_Y; ++y) {
+            const float dy = fabsf(y - RNDR_CY);
+            const float row = min(1.0f, halfDepth - dy + 0.5f);
+            if (row <= 0.0f) continue;
+            for (int x = 0; x < RNDR_X; ++x) {
+                const float dx = fabsf(x - RNDR_CX);
+                const float coverage = disc ? min(1.0f, radius - sqrtf(dx * dx + dy * dy) + 0.5f)
+                    : row * min(1.0f, halfWidth - dx + 0.5f);
+                if (coverage > 0.0f) plot(x, y, uint8_t(255.0f * coverage));
             }
         }
     }

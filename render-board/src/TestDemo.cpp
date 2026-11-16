@@ -99,7 +99,6 @@ namespace {
         CONCEPT_SCENE_DNA_SPIRAL, CONCEPT_SCENE_DRIFT_ROSE, CONCEPT_SCENE_COLOR_TWINKLES,
         CONCEPT_SCENE_COLORED_BURSTS, CONCEPT_SCENE_CHUNCHUN_SERP, CONCEPT_SCENE_CHUNCHUN_LISSAJOUS,
         CONCEPT_SCENE_BPM_CHECKERBOARD, CONCEPT_SCENE_BOUNCING_BALLS,
-        CONCEPT_SCENE_BLACKHOLE,
         // Text & Icons
         CONCEPT_SCENE_TEXT_FYB, CONCEPT_SCENE_ICONS_CCW, CONCEPT_SCENE_ICONS_CW, CONCEPT_SCENE_TEXT_PIZZA,
         CONCEPT_SCENE_TEXT_CUBINA, CONCEPT_SCENE_TEXT_YES, CONCEPT_SCENE_TEXT_YEAH, CONCEPT_SCENE_TEXT_ISRAEL,
@@ -115,16 +114,19 @@ namespace {
         CONCEPT_SCENE_PS_IMPACT,
         CONCEPT_SCENE_PS_GHOST_RIDER,
         CONCEPT_SCENE_PS_BOX,
-        CONCEPT_SCENE_BOUNCING_BALL,
         CONCEPT_SCENE_ATOM_SMASHER, CONCEPT_SCENE_FIREWORKS,
         CONCEPT_SCENE_LAVA_LAMP,
         CONCEPT_SCENE_PS_SPRAY,
         CONCEPT_SCENE_MATRIX_RAIN,
         CONCEPT_SCENE_PS_ATTRACTOR, CONCEPT_SCENE_PS_WATERFALL_FACES,
-        CONCEPT_SCENE_PS_WATERFALL, CONCEPT_SCENE_PS_GALAXY,
+        CONCEPT_SCENE_PS_WATERFALL,
         CONCEPT_SCENE_PS_VOLCANO_WIDE_JET,
         CONCEPT_SCENE_PS_FIRE,
         CONCEPT_SCENE_DRIFT3D,
+        CONCEPT_SCENE_EYE_OF_SAURON,
+        CONCEPT_SCENE_BLACKHOLE,
+        CONCEPT_SCENE_PS_GALAXY,
+        CONCEPT_SCENE_BOUNCING_BALL,
         CONCEPT_COUNT
     };
 
@@ -157,7 +159,6 @@ namespace {
         /* Moving Boxes */ { true,  2 }, /* Rolling Ball */ { true,  1 },
         /* DNA Spiral   */ { true,  1 }, /* Drift Rose   */ { true,  1 }, /* Twinkles */     { true,  1 }, /* Col Bursts   */ { true,  1 },
         /* Chunchun S   */ { true,  1 }, /* Chunchun L   */ { true,  1 }, /* BPM Checker  */ { true,  1 }, /* Bounce Ballsz*/ { true,  1 },
-        /* Blackhole    */ { true,  1 },
         /* Text FYB     */ { true,  1 }, /* Icons CCW    */ { false,  1 }, /* Icons CW     */ { true,  2},
         /* Text Pizza   */ { true,  1 }, /* Text Cubina  */ { true,  1 }, /* Text Just Y. */ { true,  1 },
         /* Text F Yeah  */ { true,  1 }, /* Text Israel  */ { false, 1 }, /* Rubiks       */ { true,  1 },
@@ -172,15 +173,18 @@ namespace {
         /* Plane Split */ { true, 1 }, /* PS Impact */ { true, 1 },
         /* PS Ghost Rider */ { true, 1 },
         /* PS Box */ { true, 1 },
-        /* Bouncing Ball */ { true, 1 },
         /* Atom Smasher */ { true, 1 }, /* Fireworks */ { true, 1 },
         /* Lava Lamp */ { true, 2 },
         /* PS Spray */ { true, 1 },
         /* Matrix Rain 3D */ { true, 1 },
         /* PS Attractor */ { true, 1 }, /* PS Waterfall Four Faces */ { true, 1 },
-        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 }, /* PS Galaxy */ { true, 1 },
+        /* PS Waterfall (paused: diagonal curtain is buried inside the cube) */ { false, 1 },
         /* PS Volcano Wide Jet */ { true, 1 }, /* PS Fire */ { true, 1 },
-        /* Drift 3D */ { true, 1 }
+        /* Drift 3D */ { true, 1 },
+        /* Eye of Sauron */ { true, 1 },
+        /* Black Hole */ { true, 1 },
+        /* PS Galaxy */ { true, 1 },
+        /* Bouncing Ball */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -189,7 +193,6 @@ namespace {
         "Random Fall", "Pipes", "Wild Mouse", "Wobbling Dish", "What The Helix",
         "Flying Box", "Moving Boxes", "Rolling Ball", "DNA Spiral", "Drift Rose 3D",
         "Color Twinkles", "Colored Bursts", "Chunchun (Serp)", "Chunchun (Liss)", "BPM Volumetric", "Bouncing Balls",
-        "Blackhole",
         "Text: FYB", "Icons: CCW", "Icons: CW", "Text: Pizza", "Text: Cubina", "Text: Just Yes", "Text: F Yeah", "Text: Israel", 
         "Rubiks Cube", "Tetris", "Julia 3D", "Atomic Orbits", "Octopus",
         "Passing Planes", "Plasma Ball", "Tartan",
@@ -197,13 +200,13 @@ namespace {
         "Noise Clouds", "Meteor 3D",
         "Plane Split", "PS Impact",
         "PS Ghost Rider", "PS Box",
-        "Bouncing Ball",
         "Atom Smasher", "Fireworks",
         "Lava Lamp",
         "PS Spray",
         "Matrix Rain 3D",
-        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall", "PS Galaxy",
-        "PS Volcano Wide Jet", "PS Fire", "Drift 3D"
+        "PS Attractor", "PS Waterfall Four Faces", "PS Waterfall",
+        "PS Volcano Wide Jet", "PS Fire", "Drift 3D",
+        "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -270,13 +273,13 @@ namespace {
                (concept >= CONCEPT_SCENE_RANDOM_FALL && concept <= CONCEPT_SCENE_HELIX) ||
                concept == CONCEPT_SCENE_FLYING_BOX || concept == CONCEPT_SCENE_MOVING_BOXES ||
                (concept >= CONCEPT_SCENE_DNA_SPIRAL && concept <= CONCEPT_SCENE_COLORED_BURSTS) ||
-               concept == CONCEPT_SCENE_BLACKHOLE ||
                (concept >= CONCEPT_SCENE_TEXT_FYB && concept < TOTAL_CONCEPTS);
     }
 
     // --- The Dispatcher ---
     void renderScene(uint8_t concept, ShapeType shape, uint8_t motionIdx, RenderMode rMode, ShaderMode sModeTracker, CRGBPalette16 pal, bool stretch, uint32_t durationMs, bool isTestMode, int currentStep, int totalSteps) {
         MotionType motion = (MotionType)motionIdx;
+        const float spinSpeed = shape == SHAPE_OCTAHEDRON ? SPEED_MOTION_SPINNING * 0.5f : SPEED_MOTION_SPINNING;
 
         if (concept < NUM_SHAPES) {
             if (motion == MOTION_TUMBLING && (shape == SHAPE_OVOID || shape == SHAPE_CYLINDER || shape == SHAPE_TETRAHEDRON)) rMode = RENDER_SOLID;
@@ -292,6 +295,10 @@ namespace {
         if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
         if (concept == CONCEPT_SCENE_PS_VOLCANO_WIDE_JET) displayColor = "Fire by age";
         if (concept == CONCEPT_SCENE_PS_FIRE) displayColor = "Fire by heat";
+        if (concept == CONCEPT_SCENE_EYE_OF_SAURON) {
+            displayShader = "Radial Fire";
+            displayColor = "Fire palette";
+        }
         if (concept == CONCEPT_SCENE_DRIFT3D) displayColor = "Cycling Rainbow Pairs";
         if (rockingSineWave) displayColor = "Rainbow Linear Flow (Rocking)";
         if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
@@ -308,7 +315,7 @@ namespace {
             else if (motion == MOTION_EXPAND_COLLAPSE) sprintf(speedBuf, "%u ms", SPEED_MOTION_EXPAND_COLLAPSE);
             else if (motion == MOTION_SPRING) sprintf(speedBuf, "%u ms", SPEED_MOTION_SPRING);
             else if (motion == MOTION_TUMBLING) sprintf(speedBuf, "%.2f RPS", SPEED_MOTION_TUMBLING);
-            else if (motion == MOTION_SPINNING) sprintf(speedBuf, "%.2f RPS", SPEED_MOTION_SPINNING);
+            else if (motion == MOTION_SPINNING) sprintf(speedBuf, "%.2f RPS", spinSpeed);
 
             const char* displayStretch = (shape == SHAPE_BOX || shape == SHAPE_TETRAHEDRON || shape == SHAPE_OCTAHEDRON) ? (stretch ? "Yes" : "No") : "N/A";
             Serial.printf("[%02d/%02d] Concept: %02d | Shape: %-12s | Render: %-9s | Shader: %-16s | Color: %-22s | Motion: %-10s | Stretch: %-3s | Speed: %s\n", 
@@ -402,7 +409,7 @@ namespace {
                 case MOTION_EXPAND_COLLAPSE: Shapes::animateExpandingCollapsing(shape, durationMs, rMode, pal, sModeTracker, SPEED_MOTION_EXPAND_COLLAPSE, stretch); break;
                 case MOTION_SPRING:          Shapes::animateSpring(shape, durationMs, rMode, pal, sModeTracker, SPEED_MOTION_SPRING, stretch); break;
                 case MOTION_TUMBLING:        Shapes::animateTumbling(shape, durationMs, rMode, pal, sModeTracker, SPEED_MOTION_TUMBLING, stretch); break;
-                case MOTION_SPINNING:        Shapes::animateSpinning(shape, durationMs, SPEED_MOTION_SPINNING, rMode, pal, sModeTracker, stretch); break;
+                case MOTION_SPINNING:        Shapes::animateSpinning(shape, durationMs, spinSpeed, rMode, pal, sModeTracker, stretch); break;
             }
         } 
         else if (concept >= CONCEPT_SCENE_HINGE_DANCE && concept <= CONCEPT_SCENE_BOUNCE) { 
@@ -439,6 +446,9 @@ namespace {
                 case CONCEPT_SCENE_METEOR:         Streamers::animateMeteor(durationMs); break;
                 case CONCEPT_SCENE_PS_IMPACT:      Streamers::animatePSImpact(durationMs); break;
                 case CONCEPT_SCENE_PS_FIRE:        ParticleEffects::animateFire(durationMs); break;
+                case CONCEPT_SCENE_EYE_OF_SAURON:
+                    ParticleEffects::animateEyeOfSauron(durationMs);
+                    break;
                 case CONCEPT_SCENE_PS_VOLCANO_WIDE_JET: {
                     ParticleEffects::VolcanoSettings settings;
                     settings.plumeWidthScale = 1.5f;
@@ -456,7 +466,7 @@ namespace {
                 case CONCEPT_SCENE_PS_GHOST_RIDER: ParticleEffects::animateGhostRider(durationMs); break;
                 case CONCEPT_SCENE_PS_GALAXY: {
                     ParticleEffects::GalaxySettings settings;
-                    settings.arms = random8(2, 4); // Choose two or three once per card visit.
+                    settings.arms = random8(2, 4);
                     ParticleEffects::animateGalaxy(durationMs, settings);
                     break;
                 }

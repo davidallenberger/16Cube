@@ -361,6 +361,23 @@ int main() {
     // footprint needs fewer lines on 10x10x16 than on the full 16^3 cube.
     const unsigned defaultLines = RNDR_X == 16 ? 6 : 4;
 
+    // Admit one beat so every lit frame must contain exactly one wireframe.
+    // A fractional layer crossfade used to light additional parallel strands.
+    makeStream(145);
+    for (unsigned i = 0; i < input.size(); ++i) {
+        input[i].values.tempoBpm100 = 12000;
+        input[i].values.tempoFlags = CubinaWire::AUDIO_ACTIVE | CubinaWire::TEMPO_LOCKED;
+        input[i].values.tempoPhase = (i * 16 % 500) * 65536 / 500;
+        input[i].values.volumeSm = i < 55 ? 3 : 0;
+    }
+    render([] { Audio::freqwave(Audio::FreqwaveShape::WireframeBox); });
+    for (uint8_t brightness : brightnessFrames) assert(brightness == 0 || brightness == 255);
+    std::vector<unsigned> wireframeSizes = {0};
+    for (unsigned side = 2; side <= RNDR_X; side += 2) wireframeSizes.push_back(12 * side - 16);
+    wireframeSizes.push_back(0);
+    assert(std::vector<unsigned>(writeCounts.begin(), std::unique(writeCounts.begin(), writeCounts.end())) ==
+           wireframeSizes);
+
     // Exercise a full clockwise lap and wrap using the real shared beat clock.
     makeStream(295);
     for (unsigned i = 0; i < input.size(); ++i) {
@@ -670,6 +687,78 @@ int main() {
     const auto orange = getVoxel((RNDR_X + 7) / 8, 0, RNDR_Z - 1);
     assert(orange.r == 255 && orange.g == 128 && orange.b == 0);
     assert(getVoxel(1, 1, RNDR_Z - 2).r == 0);
+
+    // One mirrored pair at partial area, a second pair at full area, and
+    // a high bin at the raw noise floor that stays dark after compensation.
+    makeStream(1);
+    for (auto &bin : input[0].values.fftResult) bin = 0;
+    input[0].values.fftResult[1] = 21;
+    input[0].values.fftResult[3] = 85;
+    input[0].values.fftResult[15] = 6;
+    render(&Audio::animateFrequencyPlanes);
+    const int middle = RNDR_Z / 2;
+    for (int y = 0; y < RNDR_Y; ++y) {
+        for (int x = 0; x < RNDR_X; ++x) {
+            const CRGB bass = getVoxel(x, y, middle);
+            assert(bass.r == getVoxel(x, y, middle - 1).r);
+            assert(bass.g == 0 && bass.b == 0);
+            for (int z : {middle + 1, middle - 2}) {
+                const CRGB second = getVoxel(x, y, z);
+                assert(second.r == 255 && second.g == 128 && second.b == 0);
+            }
+            assert(getVoxel(x, y, RNDR_Z - 1).r == 0 && getVoxel(x, y, 0).r == 0);
+        }
+    }
+    assert(getVoxel(0, 0, middle).r == 0);
+    assert(getVoxel(RNDR_X / 2, RNDR_Y / 2, middle).r == 255);
+
+    render(+[] { Audio::frequencyPlanes(true); });
+    assert(getVoxel(0, 0, middle + 1).r == 0);
+    assert(getVoxel(RNDR_X / 2, RNDR_Y / 2, middle + 1).r == 255);
+    assert(getVoxel(RNDR_X / 2, RNDR_Y / 2, middle - 2).r == 255);
+
+    for (const auto drawPlanes : {&Audio::animateFrequencyPlanes, +[] { Audio::frequencyPlanes(true); }}) {
+        makeStream(12);
+        for (auto &sample : input) {
+            for (auto &bin : sample.values.fftResult) bin = 0;
+        }
+        input[0].values.fftResult[0] = 85;
+        render(drawPlanes);
+        assert(writeCounts[0] > writeCounts[1]);
+        assert(writeCounts[1] > 0);
+        assert(writeCounts.back() == 0);
+    }
+
+    // Silence leaves one fully lit anchor in each tile. An active band
+    // feathers its outer layer and reaches full coverage at the size limit.
+    const int anchorX = RNDR_X / 2 - 1;
+    const int anchorY = RNDR_Y / 2 - 1;
+    const int anchorZ = middle - 1;
+    const int cubeEdge = min(RNDR_X / 2, min(RNDR_Y / 2, middle));
+    for (int level : {0, 7, 75, 85}) {
+        makeStream(1);
+        for (auto &bin : input[0].values.fftResult) bin = 0;
+        input[0].values.fftResult[0] = level;
+        render(&Audio::frequencyCubes);
+        for (int z : {anchorZ, middle})
+            for (int y : {anchorY, RNDR_Y / 2})
+                for (int x : {anchorX, RNDR_X / 2}) {
+                    const CRGB anchor = getVoxel(x, y, z);
+                    assert(anchor.r || anchor.g || anchor.b);
+                }
+        assert(getVoxel(anchorX, anchorY, anchorZ).r == 255);
+        if (level == 0) assert(writeCounts[0] == 8);
+        if (level == 7) {
+            const auto face = getVoxel(anchorX - 1, anchorY, anchorZ).r;
+            const auto edge = getVoxel(anchorX - 1, anchorY - 1, anchorZ).r;
+            assert(face > edge && edge > 0 && face < 255);
+        }
+        if (level >= 75) {
+            const auto tip = getVoxel(anchorX - cubeEdge + 1, anchorY, anchorZ).r;
+            if (level == 75) assert(tip > 0 && tip < 255);
+            else assert(tip == 255 && writeCounts[0] == unsigned(cubeEdge * cubeEdge * cubeEdge + 7));
+        }
+    }
 
     // Separate bass, volume and frequency inputs on both canvases.
     makeStream(1);

@@ -174,15 +174,6 @@ namespace ParticleEffects {
             }
         }
 
-        inline void drawParticlePoint(Point3 p, CRGB color, bool wrapX = false) {
-            int x = lroundf(p.x);
-            if (wrapX && x == RNDR_X) x = 0;
-            const int y = lroundf(p.y), z = lroundf(p.z);
-            if (x >= 0 && x < RNDR_X && y >= 0 && y < RNDR_Y && z >= 0 && z < RNDR_Z) {
-                setVoxel(x, y, z, getVoxel(x, y, z) + color);
-            }
-        }
-
         inline void resolveSprayTop(Pool& pool, Side side, float bounce) {
             for (int i = 0; i < pool.size(); ++i) {
                 auto& p = pool[i];
@@ -236,36 +227,76 @@ namespace ParticleEffects {
         inline void drawFallingDroplet(Point3 p, CRGB color, bool wrapX) {
             int x = lroundf(p.x);
             if (wrapX && x == RNDR_X) x = 0;
-            const int y = lroundf(p.y);
-            if (x < 0 || x >= RNDR_X || y < 0 || y >= RNDR_Y ||
-                p.z <= -1.0f || p.z >= RNDR_Z) return;
+            GeometryEngine::drawStrandVoxel(x, lroundf(p.y), p.z, color);
+        }
+    }
 
-            // Keep the light in one column. Share it vertically for smooth
-            // descent, then use full 3D blending once the droplet hits.
-            const int z = int(floorf(p.z));
-            const uint8_t upper = uint8_t((p.z - z) * 255.0f);
-            if (z >= 0) {
-                CRGB lowerColor = color;
-                lowerColor.nscale8(255 - upper);
-                setVoxel(x, y, z, getVoxel(x, y, z) + lowerColor);
-            }
-            if (z + 1 < RNDR_Z) {
-                color.nscale8(upper);
-                setVoxel(x, y, z + 1, getVoxel(x, y, z + 1) + color);
-            }
+    inline void animateEyeOfSauron(uint32_t durationMs) {
+        const CRGBPalette16 palette = PaletteUtils::firePalette();
+        const float sphereRadius = min(RNDR_X, min(RNDR_Y, RNDR_Z)) * 0.5f;
+        const float pupilHalfHeight = sphereRadius * 0.64f;
+        const float pupilHalfWidth = max(1.05f, sphereRadius * 0.18f);
+        constexpr uint32_t gazeCycleMs = 6000;
+        struct Gaze { uint16_t ms; float degrees; float height; };
+        constexpr Gaze gaze[] = {
+            {0, 0, 0}, {700, 3, 0.1f}, {1050, -65, 0.55f}, {1600, -72, 0.4f},
+            {2100, -90, 0.2f}, {2600, -87, 0.15f}, {3150, 27, -0.5f},
+            {3650, 34, -0.4f}, {4090, 90, 0.35f}, {4820, 86, 0.2f},
+            {5440, 0, 0}, {gazeCycleMs, 0, 0}
+        };
+        const uint32_t started = millis();
+        uint32_t lastFrame = started - 24;
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t now = millis();
+            const uint32_t deltaMs = now - lastFrame;
+            if (deltaMs < 24) { yield(); continue; }
+            lastFrame = now;
+            const uint32_t elapsed = now - started;
+            const uint16_t time = uint16_t(elapsed * 4 / 5);
+
+            const uint32_t gazeTime = elapsed % gazeCycleMs;
+            unsigned next = 1;
+            while (gazeTime >= gaze[next].ms) ++next;
+            const Gaze& from = gaze[next - 1];
+            const Gaze& to = gaze[next];
+            const float t = float(gazeTime - from.ms) / (to.ms - from.ms);
+            const float eased = t * t * (3.0f - 2.0f * t);
+            const float angle = (from.degrees + (to.degrees - from.degrees) * eased) * (PI / 180.0f);
+            const float gazeX = sinf(angle), gazeY = cosf(angle);
+            const float pupilZ = (from.height + (to.height - from.height) * eased) * (sphereRadius / 8.0f);
+
+            clearAll();
+            GeometryEngine::rasterDepthFeatheredSphere(sphereRadius, [&](int x, int z, float span) {
+                const float width = x - RNDR_CX;
+                const float height = z - RNDR_CZ;
+                const TextureDetail::RadialFireColumn fire(x, z, width / sphereRadius, height / sphereRadius, time);
+
+                for (int y = 0; y < RNDR_Y; ++y) {
+                    const float depth = y - RNDR_CY;
+                    const float coverage = GeometryEngine::depthFeatheredCoverage(span, depth);
+                    if (coverage <= 0.0f) continue;
+
+                    const float acrossGaze = width * gazeY - depth * gazeX;
+                    const float slitHeight = height - pupilZ;
+                    const float slitZ = slitHeight / pupilHalfHeight;
+                    const float slitWidth = pupilHalfWidth * sqrtf(max(0.0f, 1.0f - slitZ * slitZ));
+                    const float slitEdge = max(fabsf(acrossGaze) - slitWidth, fabsf(slitHeight) - pupilHalfHeight);
+                    const uint8_t pupilBlend = uint8_t(255.0f * constrain(0.5f - slitEdge, 0.0f, 1.0f));
+                    if (pupilBlend == 255) continue;
+
+                    CRGB color = blend(fire.colorAt(y, palette), CRGB::Black, pupilBlend);
+                    color.nscale8(uint8_t(255.0f * coverage));
+                    setVoxel(x, y, z, color);
+                }
+            });
+            showCube();
         }
     }
 
     inline void animateFire(uint32_t durationMs, const FireSettings& settings = {}) {
         using namespace Detail;
-        // PS Fire by DedeHai, adapted from WLED 16.0.1 with its Fire palette.
-        static const uint8_t fireGradient[] PROGMEM = {
-            0, 0, 0, 0, 46, 77, 0, 0, 96, 177, 0, 0, 108, 196, 38, 9,
-            119, 215, 76, 19, 146, 235, 115, 29, 174, 255, 153, 41,
-            188, 255, 178, 41, 202, 255, 204, 41, 218, 255, 230, 41,
-            234, 255, 255, 41, 244, 255, 255, 143, 255, 255, 255, 255
-        };
-        const CRGBPalette16 palette(fireGradient);
+        const CRGBPalette16 palette = PaletteUtils::firePalette();
         // WLED's units are 1/64 voxel and velocity is per simulation update.
         // Compact records leave room for independent trajectories in the shared arena.
         constexpr int subpixels = 64;
@@ -1173,6 +1204,8 @@ namespace ParticleEffects {
         const float brightnessGain = std::isfinite(settings.brightnessGain) ? constrain(settings.brightnessGain, 0.0f, 8.0f) : 1.0f;
         constexpr float geqStep = 1.0f / 42.0f;
         constexpr unsigned batchInterval = 6; // Simultaneous launches every ~143 ms.
+        constexpr uint8_t afterimageRetention = 48; // Under 4% after two display frames.
+        static uint8_t frameCoverage[(RNDR_X * RNDR_Y * RNDR_Z + 7) / 8];
         unsigned geqFrame = 0;
         int gravityRemainder = 0;
         const auto speedSpread = [](int speed) { return speed * 15 / 100; };
@@ -1240,7 +1273,7 @@ namespace ParticleEffects {
         } peaks{};
         char detail[192] = "PS GEQ measuring first 500 ms";
         uint32_t lastReport = millis();
-        run(durationMs, 0, [&](uint32_t tick) {
+        run(durationMs, afterimageRetention, [&](uint32_t tick) {
             if (!wledFrameDue(tick)) return;
             const bool launchFrame = geqFrame % batchInterval == 0;
             audio = RemoteInputs::audio();
@@ -1321,7 +1354,7 @@ namespace ParticleEffects {
                 if (brightness == 0) return;
                 const CRGB color = ColorFromPalette(palette, hue, brightness);
                 drawBall(p, 0.55f, color, xSide == Side::Wrap, true, 1.0f,
-                         falling ? ParticleBlend::EmptyOnly : ParticleBlend::Brightest);
+                         falling ? ParticleBlend::EmptyOnly : ParticleBlend::Brightest, frameCoverage);
                 measure(p, falling);
             };
             const auto drawParticles = [&](bool fallingPass) {
@@ -1363,6 +1396,7 @@ namespace ParticleEffects {
                 }
             };
             // Falling spray can only fill voxels the rising pass left empty.
+            for (auto& bits : frameCoverage) bits = 0;
             drawParticles(false);
             drawParticles(true);
             for (int y = 0; y < RNDR_Y; ++y) {

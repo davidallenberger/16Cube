@@ -131,9 +131,18 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
-    assert(std::strcmp(currentAudioRoutineName(), "PS GEQ 4") == 0);
-    play(7);
-    assert(launches == std::vector<unsigned>({15, 14, 13, 12, 11, 10, 9}));
+    assert(std::strcmp(currentAudioRoutineName(), "Frequency Cubes 8 Bands Corner") == 0);
+    requestNext(Deck::Audio);
+    assert(std::strcmp(currentAudioRoutineName(), "PS GEQ") == 0);
+    requestNext(Deck::Audio);
+    assert(std::strcmp(currentAudioRoutineName(), "Freqwave") == 0);
+    requestNext(Deck::Audio);
+    const char *frequencyLook = currentAudioRoutineName();
+    assert(std::strcmp(frequencyLook, "Frequency Planes") == 0 ||
+           std::strcmp(frequencyLook, "Frequency Discs") == 0);
+    reset(PlaybackOrder::Descending);
+    play(6);
+    assert(launches == std::vector<unsigned>({16, 15, 14, 13, 12, 11}));
     reset();
     assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
     const unsigned rememberedLook = waverlyLook;
@@ -313,7 +322,10 @@ void Audio::animateDriftRose() { draw(7); }
 void Audio::animateCylinder() { draw(8); }
 void Audio::animatePlasmoidMirrored() { draw(9); }
 void Audio::animateParticleGeqClusters() { draw(15); }
-void Audio::animateParticleGeqTiles() { draw(14); }
-void Audio::animateParticleGeqPairedBands() { draw(13); }
+void Audio::animateParticleGeqTiles() { draw(15); }
+void Audio::animateParticleGeqPairedBands() { draw(15); }
 void Audio::animateFunkyPlank() { draw(11); }
+void Audio::freqwave(FreqwaveShape) { draw(14); }
+void Audio::frequencyPlanes(bool) { draw(13); }
+void Audio::frequencyCubes() { draw(16); }
 void Audio::bouncingBalls(BouncingBallsPattern) { draw(10); }

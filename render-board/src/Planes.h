@@ -2,6 +2,7 @@
 #include "AppMemory.h"
 #include "TestDemo.h"
 #include "CubeCore.h"
+#include "GeometryEngine.h"
 #include "Streamers.h"
 #include "TextureEngine.h"
 
@@ -15,21 +16,8 @@ private:
     }
 
     
-    template <typename ColorAt>
-    static void paintPlane(uint8_t axis, uint8_t idx, ColorAt colorAt) {
-        if (idx >= getDimSize(axis)) return;
-        uint8_t max_u = (axis == 0) ? RNDR_Y : RNDR_X; uint8_t max_v = (axis == 2) ? RNDR_Y : RNDR_Z;
-        for (uint8_t u = 0; u < max_u; u++) {
-            for (uint8_t v = 0; v < max_v; v++) {
-                if (axis == 0) setVoxel(idx, u, v, colorAt(idx, u, v));
-                else if (axis == 1) setVoxel(u, idx, v, colorAt(u, idx, v));
-                else setVoxel(u, v, idx, colorAt(u, v, idx));
-            }
-        }
-    }
-
     static void drawPlane(uint8_t axis, uint8_t idx, const TextureState& tex) {
-        paintPlane(axis, idx, [&tex](uint8_t x, uint8_t y, uint8_t z) {
+        GeometryEngine::paintPlane(axis, idx, [&tex](uint8_t x, uint8_t y, uint8_t z) {
             return tex.getColor(x, y, z);
         });
     }
@@ -101,7 +89,7 @@ public:
                     const uint8_t brightness = uint8_t(255.0f * strength);
                     const uint8_t overlap = elapsed >= splitMs + travelMs / 2
                         ? uint8_t(255.0f * min(a, b) / strength) : 0;
-                    paintPlane(axis, layer, [&](uint8_t x, uint8_t y, uint8_t z) {
+                    GeometryEngine::paintPlane(axis, layer, [&](uint8_t x, uint8_t y, uint8_t z) {
                         CRGB color;
                         if (b == 0.0f) {
                             color = firstTexture.getColor(x, y, z);
@@ -269,7 +257,7 @@ public:
             const auto colorAt = [&soap](uint8_t x, uint8_t y, uint8_t z) {
                 return soap.getColor(x, y, z);
             };
-            for (uint8_t y = 0; y < RNDR_Y; ++y) paintPlane(1, y, colorAt);
+            for (uint8_t y = 0; y < RNDR_Y; ++y) GeometryEngine::paintPlane(1, y, colorAt);
             showCube();
             delay(stepMs);
         }

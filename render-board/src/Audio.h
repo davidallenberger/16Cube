@@ -38,7 +38,9 @@ class Audio {
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
         float particleGeqGain = 3.0f;      // FFT gain for PS GEQ's launch speed and rate.
         float particleGeqBrightness = 2.5f; // Boost particle light before the spatial blend.
-        bool spectrumCompensationEnabled = true; // Display compensation for GEQs, Waverly and Julia.
+        bool spectrumCompensationEnabled = true; // Display compensation for spectrum-driven effects.
+        uint8_t frequencyPlanesLevelForFullArea = 85;
+        uint8_t frequencyShapesLevelForFullSize = 85;
         uint8_t plasmoidIntensity = 128;    // WLED's # of pixels setting. 128 gives a cutoff of 2 * VolumeSm.
         uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
         uint8_t bouncingBallsVolumeForFullHeight = 75; // VolumeSm where a hop reaches the ceiling.
@@ -101,6 +103,11 @@ class Audio {
     static void animatePlasmoidMirrored();
     static void animateSurroundGEQ();
     static void animateFunkyPlank();
+    static void animateFrequencyPlanes();
+    static void frequencyPlanes(bool discs);
+    static void frequencyCubes();
+    enum class FreqwaveShape { WireframeBox, Sphere };
+    static void freqwave(FreqwaveShape shape);
     static void animateInwardGEQ();
     enum class BouncingBallsPattern { Clockwise, OrbitInward };
     static void bouncingBalls(BouncingBallsPattern pattern);

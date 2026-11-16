@@ -20,6 +20,31 @@ enum ShaderMode {
 };
 
 namespace TextureDetail {
+    // The eye's radial flame is a material tied to its front-facing disk.
+    // Cache the coordinates shared by each strand through the sphere.
+    struct RadialFireColumn {
+        uint16_t flameX, flameZ;
+        int phase, rimHeat;
+
+        RadialFireColumn(int x, int z, float u, float v, uint16_t time) {
+            const float radius = sqrtf(u * u + v * v);
+            const uint8_t roll = inoise8(x * 64, z * 64, time);
+            const float radialScale = 1.0f / max(0.36f, radius);
+            flameX = uint16_t(4096 + u * radialScale * 420 + roll);
+            flameZ = uint16_t(4096 + v * radialScale * 420 - roll);
+            phase = int(radius * 490) - int(time);
+            rimHeat = int(42.0f * constrain((radius - 0.55f) / 0.35f, 0.0f, 1.0f));
+        }
+
+        CRGB colorAt(int y, const CRGBPalette16 &palette) const {
+            const uint8_t flame = inoise8(flameX, flameZ, uint16_t(phase + y * 42));
+            const int heat = constrain(int(flame) + rimHeat - 20, 55, 218);
+            CRGB color = ColorFromPalette(palette, heat, 255, LINEARBLEND_NOWRAP);
+            color.b = 0;
+            return color;
+        }
+    };
+
     inline uint8_t soapNoise(uint32_t seed, uint32_t phase, int32_t x, int32_t y, int32_t z) {
         return inoise16(seed + phase + uint32_t(x), seed + 0x2356B1u + phase + uint32_t(y),
                         seed + 0x61798Du + phase + uint32_t(z)) >> 8;
@@ -76,6 +101,17 @@ struct TexturePlan {
 };
 class PaletteUtils {
 public:
+    static CRGBPalette16 firePalette() {
+        // PS Fire by DedeHai, adapted from WLED 16.0.1 with its Fire palette.
+        static const uint8_t fireGradient[] PROGMEM = {
+            0, 0, 0, 0, 46, 77, 0, 0, 96, 177, 0, 0, 108, 196, 38, 9,
+            119, 215, 76, 19, 146, 235, 115, 29, 174, 255, 153, 41,
+            188, 255, 178, 41, 202, 255, 204, 41, 218, 255, 230, 41,
+            234, 255, 255, 41, 244, 255, 255, 143, 255, 255, 255, 255
+        };
+        return CRGBPalette16(fireGradient);
+    }
+
     // Header-safe static buffer for debugging
     static char* getPaletteNameBuffer() {
         static char buffer[64] = "Unknown";

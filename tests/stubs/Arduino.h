@@ -6,6 +6,11 @@
 #include <algorithm>
 #include <string>
 using std::min; using std::max; using std::isnan; using std::isinf;
+constexpr double PI = 3.141592653589793;
+constexpr double TWO_PI = 2 * PI;
+template <typename T> inline T constrain(T value, T lower, T upper) {
+    return std::min(upper, std::max(lower, value));
+}
 #define INPUT_PULLUP 2
 #define LOW 0
 #define SERIAL_8N1 0

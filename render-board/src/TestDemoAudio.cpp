@@ -103,6 +103,31 @@ namespace {
         else Audio::animateInwardGEQ();
     }
 
+    void drawRandomParticleGeq() {
+        void (*const layouts[])() = {
+            &Audio::animateParticleGeqClusters,
+            &Audio::animateParticleGeqTiles,
+            &Audio::animateParticleGeqPairedBands
+        };
+        layouts[random(sizeof(layouts) / sizeof(layouts[0]))]();
+    }
+
+    int frequencyPlaneLook = -1;
+
+    bool useFrequencyDiscs() {
+        if (frequencyPlaneLook < 0) frequencyPlaneLook = int(random(2));
+        return frequencyPlaneLook == 1;
+    }
+
+    void drawFrequencyPlanes() {
+        Audio::frequencyPlanes(useFrequencyDiscs());
+    }
+
+    void drawRandomFreqwave() {
+        using Shape = Audio::FreqwaveShape;
+        Audio::freqwave(random(2) == 0 ? Shape::WireframeBox : Shape::Sphere);
+    }
+
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
         {true, "Waverly", &drawWaverly},
@@ -118,9 +143,10 @@ namespace {
         {true, "Bouncing Balls Audio", &drawRandomBouncingBalls},
         {true, "Funky Plank", &Audio::animateFunkyPlank},
         {true, "GEQ", &drawRandomGeq},
-        {true, "PS GEQ 32", &Audio::animateParticleGeqPairedBands},
-        {true, "PS GEQ 16", &Audio::animateParticleGeqTiles},
-        {true, "PS GEQ 4", &Audio::animateParticleGeqClusters},
+        {true, "Frequency Planes / Discs", &drawFrequencyPlanes},
+        {true, "Freqwave", &drawRandomFreqwave},
+        {true, "PS GEQ", &drawRandomParticleGeq},
+        {true, "Frequency Cubes 8 Bands Corner", &Audio::frequencyCubes},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;
@@ -162,6 +188,7 @@ namespace {
         const auto previous = audioRoutines[audioDeck.current()].draw;
         if (previous == &drawWaverly) waverlyLookSelected = false;
         if (previous == &drawBreathe) breathePatternSelected = false;
+        if (previous == &drawFrequencyPlanes) frequencyPlaneLook = -1;
         audioDeck.advance(appliedOrder == TestDemo::PlaybackOrder::Shuffled, pickAudioIndex);
     }
 }
@@ -182,6 +209,9 @@ const char *TestDemo::currentAudioRoutineName() {
     if (audioRoutines[audioDeck.current()].draw == &drawBreathe) {
         ensureBreathePattern();
         return breathePatterns[breathePattern].name;
+    }
+    if (audioRoutines[audioDeck.current()].draw == &drawFrequencyPlanes) {
+        return useFrequencyDiscs() ? "Frequency Discs" : "Frequency Planes";
     }
     return audioRoutines[audioDeck.current()].draw == &drawWaverly ?
         waverlyLooks[waverlyLook].name : audioRoutines[audioDeck.current()].name;
