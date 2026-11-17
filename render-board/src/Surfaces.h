@@ -4,7 +4,7 @@
 #include "TextureEngine.h"
 #include "GeometryEngine.h"
 #include "Shapes.h"
-#include "Streamers.h"
+#include "JuliaRenderer.h"
 
 class Surfaces {
 private:
@@ -212,23 +212,30 @@ private:
     }
 }
 public:
-    static void animatePolarLights(uint32_t durationMs, uint32_t stepMs = 24) {
+    static void animateAurora(uint32_t durationMs, uint32_t stepMs = 24) {
         struct Curtain {
-            bool acrossX;
             float depth;
+            float depthSweep;
+            float slope;
+            float folds;
+            float foldWidth;
+            float drift;
             float foldPhase;
-            float strength;
             uint16_t seed;
         };
-        // The quieter curtain crosses the first at an angle and is visible
-        // from the adjacent face when the main curtain is nearly edge-on.
+        // Two folds at separate depths and a diagonal curtain that crosses both.
         constexpr Curtain curtains[] = {
-            {true, 0.38f, 0.3f, 1.0f, 947},
-            {false, 0.70f, 2.6f, 0.52f, 6197}
+            {0.27f, -0.15f, 0.00f, 1.00f, 0.14f, -0.62f, 0.3f, 947},
+            {0.73f,  0.15f, 0.00f, 1.65f, 0.11f,  0.48f, 2.6f, 6197},
+            {0.50f,  0.00f, 0.76f, 1.20f, 0.06f, -0.39f, 4.5f, 10321}
         };
+        constexpr float rippleWeight = 0.30f;
+        constexpr float foldLean = 0.022f;
+        constexpr float rippleLean = 0.018f;
         const CRGB green(18, 255, 53), teal(0, 222, 159);
-        const CRGB pink(246, 43, 139), violet(94, 90, 238);
-        const float top = RNDR_Z - 1.0f;
+        const CRGB pink(255, 32, 170), violet(94, 90, 238);
+        constexpr int baseZ = 2;
+        constexpr int verticalSpan = RNDR_Z - 1 - baseZ;
         const uint32_t started = millis();
         while (true) {
             const uint32_t now = millis();
@@ -238,18 +245,25 @@ public:
             clearAll();
 
             for (const auto &curtain : curtains) {
-                const int width = curtain.acrossX ? RNDR_X : RNDR_Y;
-                const float depthSpan = curtain.acrossX ? RNDR_Y - 1 : RNDR_X - 1;
-                const float drift = curtain.acrossX ? -0.62f : 0.48f;
+                const float depthSpan = RNDR_Y - 1.0f;
+                const float depthPhase = seconds * curtain.drift * 0.75f + curtain.foldPhase;
+                const float meanDepth = curtain.depth + curtain.depthSweep * (0.5f + 0.5f * sinf(depthPhase));
+                // Narrow the folds near a face so the curtain keeps moving smoothly within the cube.
+                const float depthRoom = min(meanDepth, 1.0f - meanDepth) - 0.5f * fabsf(curtain.slope);
+                const float foldWidth = min(curtain.foldWidth,
+                                            (depthRoom - foldLean - rippleLean) / (1.0f + rippleWeight));
                 const uint16_t wind = uint16_t(elapsed / 3);
                 const uint16_t evolution = uint16_t(elapsed / 13);
-                for (int column = 0; column < width; ++column) {
-                    const float along = float(column) / (width - 1);
-                    const float phase = TWO_PI * along + seconds * drift + curtain.foldPhase;
+                const uint16_t heightWind = uint16_t(elapsed / 12);
+                const uint16_t heightEvolution = uint16_t(elapsed / 52);
+                for (int x = 0; x < RNDR_X; ++x) {
+                    const float along = float(x) / (RNDR_X - 1);
+                    const float phase = TWO_PI * along * curtain.folds + seconds * curtain.drift + curtain.foldPhase;
                     const float fold = sinf(phase);
                     const float ripple = sinf(phase * 2.0f + seconds * 1.1f);
-                    const float ridge = depthSpan * (curtain.depth + 0.19f * fold + 0.085f * ripple);
-                    const float lean = depthSpan * (0.045f * cosf(phase) + 0.05f * ripple);
+                    const float ridge = depthSpan * (meanDepth + curtain.slope * (along - 0.5f) +
+                                                     foldWidth * (fold + rippleWeight * ripple));
+                    const float lean = depthSpan * (foldLean * cosf(phase) + rippleLean * ripple);
 
                     // Advect brightness along the sheet. Each sample drives a
                     // whole ray so bright patches stretch vertically as they pass.
@@ -258,35 +272,42 @@ public:
                                                 uint16_t(1234 + evolution));
                     const float strength = constrain((ray - 65.0f) / 92.0f, 0.0f, 1.0f);
                     const float surge = constrain((swell - 90.0f) / 65.0f, 0.0f, 1.0f);
-                    const float taper = min(1.0f, 0.25f + 6.0f * min(along, 1.0f - along));
-                    const float power = curtain.strength * taper * strength * (0.45f + 0.55f * surge);
-                    const float foot = top * (0.12f + 0.05f * fold + 0.04f * ripple);
-                    const float rayHeight = top * (0.38f + 0.28f * strength + 0.18f * surge);
-                    const float pinkAmount = constrain((swell - 132.0f) / 48.0f, 0.0f, 1.0f);
+                    const float rayPower = 0.28f + 0.72f * strength * (0.45f + 0.55f * surge);
+                    // Run tip height at quarter speed while light keeps traveling along the curtain.
+                    const float heightRay = inoise8(uint16_t(curtain.seed + along * 1340.0f) - heightWind,
+                                                    heightEvolution);
+                    const float heightSwell = inoise8(uint16_t(curtain.seed + along * 440.0f) + heightWind / 2,
+                                                      uint16_t(1234 + heightEvolution));
+                    const float heightStrength = constrain((heightRay - 65.0f) / 92.0f, 0.0f, 1.0f);
+                    const float heightSurge = constrain((heightSwell - 90.0f) / 65.0f, 0.0f, 1.0f);
+                    const float tipPower = 0.28f + 0.72f * heightStrength * (0.45f + 0.55f * heightSurge);
+                    const float rayHeight = verticalSpan * (0.66f + 0.26f * heightStrength + 0.28f * heightSurge);
+                    const float pinkAmount = 0.08f + 0.76f * constrain((swell - 104.0f) / 63.0f, 0.0f, 1.0f);
 
-                    const int first = max(0, int(floorf(foot)));
-                    const int last = min(RNDR_Z - 1, int(ceilf(foot + rayHeight)));
-                    for (int z = first; z <= last; ++z) {
-                        const float aboveFoot = z - foot;
-                        const float h = constrain(aboveFoot / rayHeight, 0.0f, 1.0f);
-                        const float lowerEdge = constrain(aboveFoot + 0.55f, 0.0f, 1.0f);
+                    const int last = min(verticalSpan, int(ceilf(rayHeight)));
+                    for (int height = 0; height <= last; ++height) {
+                        const float h = min(1.0f, height / rayHeight);
                         const float fade = 1.0f - h;
-                        const uint8_t brightness = uint8_t(255.0f * power * lowerEdge * fade * fade);
+                        // The visible tips follow the same slow field as their height.
+                        const float tipMix = constrain((h - 0.40f) / 0.45f, 0.0f, 1.0f);
+                        const float rayLight = rayPower + tipMix * (tipPower - rayPower);
+                        // Noise fades in above the full-bright curtain base.
+                        const float noiseMix = min(1.0f, 4.0f * height / verticalSpan);
+                        const float power = 1.0f - noiseMix * (1.0f - rayLight);
+                        const uint8_t brightness = uint8_t(255.0f * power * fade * (0.35f + 0.65f * fade));
                         if (brightness == 0) continue;
 
                         CRGB color = blend(green, teal, uint8_t(255.0f * h));
-                        color = blend(color, violet, uint8_t(255.0f * surge * h * h));
-                        const float fringe = max(0.0f, 1.0f - fabsf(aboveFoot) / 1.3f);
+                        const float violetMix = surge + tipMix * (heightSurge - surge);
+                        color = blend(color, violet, uint8_t(255.0f * violetMix * h * h));
+                        const float fringe = max(0.0f, 1.0f - height / (0.24f * verticalSpan));
                         color = blend(color, pink, uint8_t(255.0f * pinkAmount * fringe));
                         color.nscale8(brightness);
 
                         // One strand with fractional coverage across depth.
                         // The upper tip leans farther than the bright foot.
                         const int32_t depth = lroundf(256.0f * (ridge + h * lean));
-                        const int32_t horizontal = column * 256;
-                        GeometryEngine::drawWuVoxel(curtain.acrossX ? horizontal : depth,
-                                                    curtain.acrossX ? depth : horizontal,
-                                                    z * 256, color);
+                        GeometryEngine::drawWuVoxel(x * 256, depth, (baseZ + height) * 256, color);
                     }
                 }
             }

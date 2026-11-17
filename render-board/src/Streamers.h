@@ -1,813 +1,166 @@
 #pragma once
-#include "TestDemo.h"
-#include "CubeCore.h"
-#include "TextureEngine.h"
 #include "AppMemory.h"
+#include "CubeCore.h"
+#include "GeometryEngine.h"
+#include "ParticleEffectSupport.h"
+#include "StreamerGeometry.h"
+#include "TestDemo.h"
+#include "TextureEngine.h"
 
 #include <math.h>
 
-// Shared geometry/drawing for timed Streamers and the audio-controlled wrapper.
-// These modes describe spatial arrangement, independently of musical timing.
-enum BpmSpatialMode { BPM_CHECKERBOARD = 0, BPM_SPHERE = 1, BPM_DIAGONAL = 2, BPM_HELIX = 3 };
-
-class BpmRenderer {
-  public:
-    // Caller owns a scratch byte per rendered voxel. Prepare once on entry,
-    // then retain the map for every frame. No allocation or task is created.
-    static void prepare(uint8_t *phaseMap, BpmSpatialMode mode) {
-        const float maxDist =
-            fmaxf(1.0f, sqrtf(RNDR_CX * RNDR_CX + RNDR_CY * RNDR_CY + RNDR_CZ * RNDR_CZ));
-        const uint8_t zStep = 256 / RNDR_Z;
-        const uint8_t diagStep = 256 / (RNDR_X + RNDR_Y + RNDR_Z);
-        size_t index = 0;
-
-        for (uint8_t z = 0; z < RNDR_Z; ++z) {
-            for (uint8_t y = 0; y < RNDR_Y; ++y) {
-                for (uint8_t x = 0; x < RNDR_X; ++x) {
-                    uint8_t spatial = 0;
-                    switch (mode) {
-                    case BPM_CHECKERBOARD:
-                        spatial = (x + y) % 2 == 0 ? z * zStep : 256 - z * zStep;
-                        break;
-                    case BPM_SPHERE: {
-                        const float dx = x - RNDR_CX;
-                        const float dy = y - RNDR_CY;
-                        const float dz = z - RNDR_CZ;
-                        spatial = uint8_t(sqrtf(dx * dx + dy * dy + dz * dz) / maxDist * 255.0f);
-                        break;
-                    }
-                    case BPM_DIAGONAL:
-                        spatial = (x + y + z) * diagStep;
-                        break;
-                    case BPM_HELIX: {
-                        const float angle = atan2f(y - RNDR_CY, x - RNDR_CX);
-                        spatial = uint8_t((angle + 3.14159f) * 40.74f) + z * zStep;
-                        break;
-                    }
-                    }
-                    phaseMap[index++] = spatial;
-                }
-            }
-        }
-    }
-
-    // brightnessOffset moves the density pattern; colorPhase moves the palette.
-    // Timed Streamers passes its legacy offsets. Audio supplies a phase driven
-    // by the musical clock, plus a slowly changing decorative palette phase.
-    static void draw(const uint8_t *phaseMap, const CRGBPalette16 &palette,
-                     uint8_t brightnessOffset, uint8_t colorPhase, uint8_t level = 255) {
-        size_t index = 0;
-        for (uint8_t z = 0; z < RNDR_Z; ++z) {
-            for (uint8_t y = 0; y < RNDR_Y; ++y) {
-                for (uint8_t x = 0; x < RNDR_X; ++x) {
-                    const uint8_t spatial = phaseMap[index++];
-                    uint8_t brightness = brightnessOffset + spatial;
-                    brightness = qsub8(brightness, 32);
-                    brightness = qadd8(brightness, brightness);
-                    brightness = uint8_t(uint16_t(brightness) * level / 255);
-                    const uint8_t colorIndex = colorPhase + (spatial >> 1);
-                    setVoxel(x, y, z,
-                             ColorFromPalette(palette, colorIndex, brightness, LINEARBLEND));
-                }
-            }
-        }
-    }
+enum ChunchunMode {
+    CHUNCHUN_SERPENTINE = 0, // Literal 1D raster sweep extruded to 3D columns
+    CHUNCHUN_LISSAJOUS = 1   // Continuous multi-axis figure-8 weave
 };
-
-// One Julia evaluator/color cycle for normal and volume-driven playback.
-// Optional plain callbacks keep audio acquisition and playback out of geometry.
-class JuliaRenderer {
-  public:
-    // Direct three-coordinate Julia recurrence. Each physical voxel supplies
-    // its initial (x,y,z); c is shared by the whole frame. This is not a stack
-    // of independent 2D images. No heap or scratch arena is needed.
-    static void animateJulia(uint32_t durationMs, uint32_t speedMs = 40,
-                             bool cycleColors = true, bool varyC = true,
-                             float (*closureInput)() = nullptr,
-                             bool (*keepRunning)() = nullptr,
-                             uint32_t attackMs = 0, uint32_t releaseMs = 0) {
-        const uint8_t iterationSetting = 18; // WLED slider units; actual limit is half.
-        const uint8_t maxIterations = iterationSetting / 2;
-        // Canonical ROYGBIV holds, with short saturated hue transitions.
-        // Each escape band advances one swatch per tick, preserving contours.
-        const CRGB colors[] = {
-            CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
-            CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3)
-        };
-        // Spectrum hue angles match the canonical RGB swatches above.
-        const float hues[] = {0.0f, 30.117647f, 60.0f, 120.0f, 240.0f, 274.615385f, 282.085308f};
-        const float values[] = {255.0f, 255.0f, 255.0f, 255.0f, 255.0f, 130.0f, 211.0f};
-        const uint8_t colorCount = sizeof(colors) / sizeof(colors[0]);
-        const float cRate = 2.0f; // Twice the previous parameter-motion rate.
-        const uint32_t colorStepMs = 6000; // Total per color: 4s hold + 2s transition; full cycle 42s.
-        const uint32_t colorHoldMs = 4000; // First 4s hold; remaining 2000ms travels through hues.
-        // Fixed viewing window: physical Z is the familiar imaginary/vertical
-        // axis. Physical Y explores a narrow, genuinely varying depth range,
-        // keeping the black opening visible through the front and back.
-        const float xStep = 1.8f / max(1.0f, float(RNDR_X - 1));
-        const float yStep = 0.48f / max(1.0f, float(RNDR_Y - 1));
-        const float zStep = 1.7f / max(1.0f, float(RNDR_Z - 1));
-        const uint32_t started = millis();
-        // uint32_t lastDebug = started - 1000;
-        uint32_t lastClosureMs = started;
-        float smoothedClosure = 0.0f;
-        bool closureStarted = false;
-
-        while (keepRunning ? keepRunning() :
-               TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t frameStart = millis();
-            const float seconds = float(uint32_t(frameStart - started)) * 0.001f;
-            const float cTime = varyC ? seconds * cRate : 0.0f;
-            const uint8_t colorOffset = cycleColors ?
-                uint8_t((uint32_t(frameStart - started) / colorStepMs) % colorCount) : 0;
-            CRGB frameColors[7];
-            const uint32_t colorAge = uint32_t(frameStart - started) % colorStepMs;
-            float transition = cycleColors && colorAge > colorHoldMs ?
-                float(colorAge - colorHoldMs) / float(colorStepMs - colorHoldMs) : 0.0f;
-            transition = transition * transition * (3.0f - 2.0f * transition);
-            // Do color math seven times per frame, outside the voxel loop.
-            for (uint8_t i = 0; i < colorCount; ++i) {
-                const uint8_t current = (i + colorOffset) % colorCount;
-                const uint8_t next = (current + 1) % colorCount;
-                frameColors[i] = colors[current];
-                if (transition > 0.0f) {
-                    const float nextHue = next == 0 ? 360.0f : hues[next];
-                    const float hue = hues[current] + (nextHue - hues[current]) * transition;
-                    const float value = values[current] + (values[next] - values[current]) * transition;
-                    const float sector = hue / 60.0f;
-                    const uint8_t part = uint8_t(sector);
-                    const float fraction = sector - part;
-                    const uint8_t high = uint8_t(value + 0.5f);
-                    const uint8_t rising = uint8_t(value * fraction + 0.5f);
-                    const uint8_t falling = uint8_t(value * (1.0f - fraction) + 0.5f);
-                    uint8_t red = 0, green = 0, blue = 0;
-                    switch (part % 6) {
-                        case 0: red = high; green = rising; break;
-                        case 1: red = falling; green = high; break;
-                        case 2: green = high; blue = rising; break;
-                        case 3: green = falling; blue = high; break;
-                        case 4: red = rising; blue = high; break;
-                        case 5: red = high; blue = falling; break;
-                    }
-                    frameColors[i] = CRGB((uint32_t(red) << 16) | (uint32_t(green) << 8) | blue);
-                }
-            }
-            // Interpolate between a broad opening and near closure. Endpoints
-            // are fixed so the open state can reach a one-pixel ceiling/floor
-            // on central strands throughout the depth. The closed endpoint
-            // retains at least about 20% dark volume on supported canvases.
-            float closure = 0.5f - 0.5f * cosf(cTime * 0.50f);
-            if (closureInput) {
-                const float target = fminf(1.0f, fmaxf(0.0f, closureInput()));
-                const uint32_t deltaMs = uint32_t(frameStart - lastClosureMs);
-                const uint32_t responseMs = target > smoothedClosure ? attackMs : releaseMs;
-                // Smooth geometry position, not global audio. Exponential
-                // response is frame-rate independent and never overshoots the
-                // calibrated path. Initialize from input on each invocation.
-                if (!closureStarted || responseMs == 0) {
-                    smoothedClosure = target;
-                } else {
-                    const float amount = 1.0f - expf(-float(deltaMs) / float(responseMs));
-                    smoothedClosure += amount * (target - smoothedClosure);
-                }
-                lastClosureMs = frameStart;
-                closureStarted = true;
-                closure = smoothedClosure;
-            }
-            const float detail = closure * (1.0f - closure);
-            const float a = -0.66f + (-0.94299f + 0.66f) * closure +
-                0.05f * sinf(cTime * 0.65f) * detail;
-            const float b = 0.42f * closure + 0.05f * sinf(cTime * 0.50f) * detail;
-            const float d = 0.12f * sinf(cTime * 0.37f) * detail;
-            // unsigned lit = 0;
-            clearAll();
-            for (uint8_t iz = 0; iz < RNDR_Z; ++iz) {
-                for (uint8_t iy = 0; iy < RNDR_Y; ++iy) {
-                    for (uint8_t ix = 0; ix < RNDR_X; ++ix) {
-                        float x = (float(ix) - RNDR_CX) * xStep;
-                        float y = -0.85f + float(iz) * zStep;
-                        float z = (float(iy) - RNDR_CY) * yStep;
-                        float radiusSquared = x * x + y * y + z * z;
-                        uint8_t iteration = 0;
-                        while (iteration < maxIterations && radiusSquared <= 16.0f) {
-                            // All right-hand sides use the OLD coordinates.
-                            const float nextX = x * x - y * y - z * z + a;
-                            const float nextY = 2.0f * x * y + b;
-                            z = 2.0f * x * z + d;
-                            x = nextX;
-                            y = nextY;
-                            radiusSquared = x * x + y * y + z * z;
-                            ++iteration;
-                        }
-                        if (iteration == maxIterations) {
-                            continue;
-                        }
-                        // Useful escape counts (2..8) span seven fixed colors.
-                        // All bands share the hold/transition timing while
-                        // retaining their separation. The cavern is unaffected.
-                        const int band = max(0, int(iteration) - 2);
-                        setVoxel(ix, iy, iz, frameColors[band % colorCount]);
-                        // ++lit;
-                    }
-                }
-            }
-            showCube();
-            /*
-            if (uint32_t(frameStart - lastDebug) >= 1000) {
-                lastDebug = frameStart;
-                Serial.printf("Julia: c=(%.4f,%.4f,%.4f) closure=%.3f iterations=%u palette=Canonical-ROYGBIV cycle=%u cRate=%.1f lit=%u/%u frame=%lums\r\n",
-                    double(a), double(b), double(d), double(closure), unsigned(maxIterations), unsigned(cycleColors), double(varyC ? cRate : 0.0f), lit,
-                    unsigned(RNDR_X * RNDR_Y * RNDR_Z),
-                    (unsigned long)uint32_t(millis() - frameStart));
-            }
-            */
-            const uint32_t spent = uint32_t(millis() - frameStart);
-            if (spent < speedMs) {
-                delay(speedMs - spent);
-            } else {
-                yield();
-            }
-        }
-    }
-
-};
-
-#include "GeometryEngine.h"
-#include "ParticleEngine.h"
-
-// Particle counts and radius use the 16³ cube as their reference. The
-// tail length follows display height, and drift follows horizontal size.
-struct PSImpactSettings {
-    uint16_t minLaunchMs = 400;
-    uint16_t maxLaunchMs = 700;
-    float meteorRadiusAtReferenceVolume = .25f; // Used by every spark in the meteor.
-    float tailHeightFraction = 0.90f;
-    // At 1.0 sparks fade from full brightness over their entire life.
-    // Values below 1.0 add a bright hold. Above 1.0 they also dim at birth.
-    float tailFade = 2.0f;
-    float tailSidewaysDrift = 1.5f; // Random speed in either direction per axis on the 16³ cube.
-    uint8_t minSplashAtReferenceVolume = 24; // Reference is a 16³ cube.
-    uint8_t maxSplashAtReferenceVolume = 36;
-    float splashForce = 1.0f;
-    float splashSpread = 1.5f; // Horizontal speed multiplier.
-    float maxSplashRiseSpeed = 31.0f; // Voxels per second on the reference cube.
-    float hardness = 0.55f;
-    uint8_t blurRetention = 0; // The moving sparks make the trail.
-    bool cylinder = false;
-    bool walls = false;
-};
-
-enum BlackHoleOrbit {
-    ORBIT_SYNC = 0,    // One majestic Saturn ring (All stars share the exact same 3D plane)
-    ORBIT_SPLIT = 1,   // Dual-axis gyroscope (Inner ring and Outer ring tumble independently)
-    ORBIT_CHAOTIC = 2  // Quantum swarm (Every single star gets a unique, randomized trajectory)
-};
-    // ==========================================
-    // 3D BPM ENGINE (Volumetric Density Waves)
-    // ==========================================
-
-    // ==========================================
-    // 3D CHUNCHUN (Volumetric Swarms)
-    // ==========================================
-    enum ChunchunMode {
-        CHUNCHUN_SERPENTINE = 0, // Literal 1D raster sweep extruded to 3D columns
-        CHUNCHUN_LISSAJOUS = 1   // Continuous multi-axis figure-8 weave
-    };
 
 class Streamers {
-  private:
-  static float getThicknessFromVolume(float volPercent) {
-        float planeArea = (float)(RNDR_X * RNDR_Y);
-        float targetArea = planeArea * volPercent;
-        return sqrtf(targetArea) / 2.0f; 
-    }   
-    // ==========================================
-    // THE BRUSH-ENABLED ANIMATORS
-    // ==========================================
-
-    // Keep the established sparkle, brightness and tails for the original bursts.
-    static void drawKineticParticles(ParticleEngine::Pool& pool, float dt) {
+    static void drawSpray(ParticleEngine::Pool& pool, const CRGBPalette16& palette, bool wrapX) {
         for (int i = 0; i < pool.size(); ++i) {
-            auto& particle = pool[i];
-            if (!particle.active) continue;
-
-            ParticleEngine::advance(particle, dt);
-            const auto& p = particle.motion.position;
-            const auto& v = particle.motion.velocity;
-            int ix = (int)lroundf(p.x);
-            int iy = (int)lroundf(p.y);
-            int iz = (int)lroundf(p.z);
-
-            // 4. Kill Logic (Faded out, fell through floor, or hit the glass)
-            if (!particle.active || iz < 0 || ix < 0 || ix >= RNDR_X || iy < 0 || iy >= RNDR_Y) {
-                particle.active = false;
-                continue;
-            }
-
-           // 5. Draw the Particle
-            if (iz < RNDR_Z) {
-                CRGB drawColor = particle.color;
-                
-                // RESTORED: High-velocity particles burn white-hot
-                float currentSpeed = abs(v.x) + abs(v.y) + abs(v.z);
-                if (currentSpeed > 15.0f) {
-                    drawColor |= CRGB(180, 180, 180); // Inject pure white light into the base color
-                }
-
-                drawColor.nscale8((uint8_t)(particle.life * 255.0f));
-                
-                ParticleEngine::drawParticlePoint(p, drawColor);
-
-                if ((particle.flags & ParticleEngine::KineticTail) && currentSpeed > 5.0f) {
-                    CRGB tailColor = drawColor;
-                    tailColor.nscale8(80);
-                    ParticleEngine::drawParticlePoint({p.x - (v.x * dt * 2.0f),
-                        p.y - (v.y * dt * 2.0f), p.z - (v.z * dt * 2.0f)}, tailColor);
-                }
-            }
+            const auto& p = pool[i];
+            if (!p.active) continue;
+            const uint8_t brightness = uint8_t(255.0f * min(1.0f, 2.0f * p.life));
+            ParticleEngine::drawSmooth(p.motion.position, ColorFromPalette(palette, p.type, brightness), wrapX);
         }
     }
 
-    public:
-    // ==========================================
-    // GEOMETRY LOOPS (Untouched)
-    // ==========================================
-    static void animateRandomFall(uint32_t durationMs, float fallSpeed = 0.4f, float returnSpeed = 0.8f) {
-        uint32_t startTime = millis();
-        float zPos[16][16]; uint8_t state[16][16]; 
-        for(int x = 0; x < RNDR_X; x++) { for(int y = 0; y < RNDR_Y; y++) { zPos[x][y] = RNDR_Z - 1.0f; state[x][y] = 0; } }
-        bool returnPhase = false; int totalVoxels = RNDR_X * RNDR_Y;
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            clearAll(); int atBottom = 0, atTop = 0, triggersPerFrame = max(1, totalVoxels / 30); 
-            for(int i = 0; i < triggersPerFrame; i++) {
-                int rx = random8(RNDR_X), ry = random8(RNDR_Y);
-                if (!returnPhase && state[rx][ry] == 0) state[rx][ry] = 1; 
-                if (returnPhase && state[rx][ry] == 2) state[rx][ry] = 3;  
-            }
-
-            for(int x = 0; x < RNDR_X; x++) {
-                for(int y = 0; y < RNDR_Y; y++) {
-                    if (state[x][y] == 1) { zPos[x][y] -= fallSpeed; if (zPos[x][y] <= 0.0f) { zPos[x][y] = 0.0f; state[x][y] = 2; } } 
-                    else if (state[x][y] == 3) { zPos[x][y] += returnSpeed; if (zPos[x][y] >= RNDR_Z - 1.0f) { zPos[x][y] = RNDR_Z - 1.0f; state[x][y] = 0; } }
-                    if (state[x][y] == 0) atTop++; if (state[x][y] == 2) atBottom++;
-                    float zRatio = zPos[x][y] / (RNDR_Z - 1.0f);
-                    CRGB color = blend(CRGB::Blue, CRGB::Red, (uint8_t)(zRatio * 255.0f));
-                    int zInt = (int)roundf(zPos[x][y]); setVoxel(x, y, zInt, color);
-                    if (state[x][y] == 1 && zInt + 1 < RNDR_Z) { CRGB tail = color; tail.nscale8(80); setVoxel(x, y, zInt + 1, tail); } 
-                    else if (state[x][y] == 3 && zInt - 1 >= 0) { CRGB tail = color; tail.nscale8(80); setVoxel(x, y, zInt - 1, tail); }
-                }
-            }
-            if (!returnPhase && atBottom == totalVoxels) { showCube(); delay(600); returnPhase = true; } 
-            else if (returnPhase && atTop == totalVoxels) { showCube(); delay(600); returnPhase = false; }
-            showCube(); yield();
+    static void resolveSprayTop(ParticleEngine::Pool& pool, ParticleEngine::Side side, float bounce) {
+        for (int i = 0; i < pool.size(); ++i) {
+            auto& p = pool[i];
+            if (!p.active || p.motion.position.z <= RNDR_Z - 1.0f) continue;
+            p.active = ParticleEngine::resolveSide(p.motion.position.z, p.motion.velocity.z, RNDR_Z, side, bounce);
         }
     }
 
-    // WLED PS Impact, adapted to a volumetric floor splash. The sources
-    // are invisible, and their newest sparks form the meteor heads.
-    static void animatePSImpact(uint32_t durationMs, const PSImpactSettings& settings = {}) {
-        using namespace ParticleEngine;
-        constexpr uint32_t stepUs = 8333;
-        constexpr float dt = stepUs * 0.000001f;
-        constexpr float floorRoughness = 0.18f;
-        const Side xSide = settings.walls ? Side::Bounce : (settings.cylinder ? Side::Wrap : Side::Open);
-        const Side ySide = settings.walls ? Side::Bounce : Side::Open;
-        const bool wrapX = xSide == Side::Wrap;
-        const float horizontalScale = min(RNDR_X, RNDR_Y) / 16.0f;
-        constexpr float verticalScale = RNDR_Z / 16.0f;
-        constexpr float gravity = 30.0f * verticalScale;
-        constexpr int volume = RNDR_X * RNDR_Y * RNDR_Z;
-        constexpr float volumeScale = volume / 4096.0f;
-        const float meteorRadius = settings.meteorRadiusAtReferenceVolume * cbrtf(volumeScale);
-        const float tailHeight = settings.tailHeightFraction * RNDR_Z;
-        const float launchHeight = RNDR_Z - 0.5f + meteorRadius;
-        constexpr float trailGravity = gravity * 0.25f;
-        constexpr int splashOverlap = 4; // Budget for overlapping floor bursts.
-        const int maxSplash = constrain(int(lroundf(settings.maxSplashAtReferenceVolume * volumeScale)),
-                                        1, maxParticles / splashOverlap);
-        const int minSplash = constrain(int(lroundf(settings.minSplashAtReferenceVolume * volumeScale)),
-                                        1, maxSplash);
+public:
+    struct GhostRiderSettings {
+        uint8_t speed = 70;
+        uint8_t spiral = 130;
+        uint8_t blur = 220;
+        uint8_t colorCycle = 30;
+        uint8_t spread = 35; // The cube can exceed WLED's 0–31 range.
+        bool ageColor = true;
+        bool walls = false;
+    };
 
-        struct Meteor {
-            Motion motion;
-            CRGB color;
-            bool active;
-        };
-        enum SparkType : uint8_t { Splash, Trail };
-        Meteor meteors[2]{};
-        Pool sparks(splashOverlap * maxSplash + 4 * RNDR_Z);
-        uint16_t launchTicks = 0;
-        uint8_t lastHue = random8();
-        bool emitTrail = false;
+    struct SpraySettings {
+        uint8_t speed = 150, intensity = 150, leftRight = 220, upDown = 30, angle = 21;
+        bool gravity = false, cylinder = false, collide = false;
+    };
 
-        auto sample = [](float low, float high) {
-            return low + (high - low) * (random16() / 65536.0f);
-        };
-        auto emit = [&](const Particle& spark) {
-            int slot = sparks.firstFree();
-            if (slot == sparks.size()) {
-                // A crowded pool can give up its faintest trail spark.
-                float leastLife = 2.0f;
-                for (int i = 0; i < sparks.size(); ++i) {
-                    if (sparks[i].type == Trail && sparks[i].life < leastLife) {
-                        leastLife = sparks[i].life;
-                        slot = i;
-                    }
-                }
-            }
-            if (slot < sparks.size()) sparks[slot] = spark;
-        };
-        auto splash = [&](Point3 origin, CRGB color) {
-            const int count = random16(minSplash, maxSplash + 1);
-            const uint16_t phase = random16();
-            const float maxRise = max(0.0f, settings.maxSplashRiseSpeed);
-            const float baseRise = min(21.0f, maxRise);
-            for (int i = 0; i < count; ++i) {
-                // Spread directions around the floor, with different speeds
-                // and heights so the splash breaks up as it expands.
-                const uint16_t angle = phase + (uint32_t(i) * 65536u / count);
-                const bool tall = i % 6 == 0;
-                const float rise = tall ? sample(0.93f * maxRise, maxRise)
-                                        : sample(min(8.0f, baseRise), baseRise);
-                // Steeper sparks have more time to reach the apex before
-                // drifting out of an open side of the cube.
-                const float spread = tall ? 0.3f : 1.0f;
-                const float radial = sample(6.0f, 15.0f) * settings.splashForce
-                                     * settings.splashSpread * horizontalScale * spread;
-                const Point3 velocity{radial * cos16(angle) / 32768.0f,
-                                      radial * sin16(angle) / 32768.0f,
-                                      rise * settings.splashForce * verticalScale};
-                CRGB sparkColor = color;
-                sparkColor.nscale8(random8(170, 255));
-                const float lifetime = tall ? sample(1.16f, 1.25f) : sample(0.72f, 1.25f);
-                emit({true, Splash, {origin, velocity}, 0.997f, gravity,
-                      1.0f, 1.0f / lifetime, sparkColor, false});
-            }
-        };
-
-        const uint32_t started = millis();
-        uint32_t lastFrame = micros();
-        uint32_t accumulated = stepUs;
-        clearAll();
-        while (true) {
-            const bool launching = TestDemo::routineTimeRemaining(millis() - started, durationMs);
-            if (!launching && !meteors[0].active && !meteors[1].active && !sparks.anyAlive()) break;
-
-            const uint32_t now = micros();
-            // Limit catch-up after a stalled frame so a splash remains visible.
-            accumulated += min(uint32_t(now - lastFrame), 6 * stepUs);
-            lastFrame = now;
-            while (accumulated >= stepUs) {
-                accumulated -= stepUs;
-                emitTrail = !emitTrail; // One emission opportunity per 60 Hz update.
-                for (int i = 0; i < sparks.size(); ++i) {
-                    auto& spark = sparks[i];
-                    if (!spark.active) continue;
-                    advance(spark, dt);
-                    if (!spark.active) continue;
-                    auto& p = spark.motion.position;
-                    auto& v = spark.motion.velocity;
-                    if (!resolveSide(p.x, v.x, RNDR_X, xSide, settings.hardness) ||
-                        !resolveSide(p.y, v.y, RNDR_Y, ySide, settings.hardness)) {
-                        spark.active = false;
-                    } else if (spark.type == Splash) {
-                        bounceFloor(spark.motion, settings.hardness, floorRoughness);
-                    } else if (p.z < -meteorRadius - 0.5f) {
-                        spark.active = false;
-                    }
-                }
-
-                for (auto& meteor : meteors) {
-                    if (!meteor.active) continue;
-                    auto& p = meteor.motion.position;
-                    const Point3 previous = p;
-                    advance(meteor.motion, dt, {0.0f, 0.0f, -gravity}, 1.0f);
-                    if (p.z <= 0.0f) {
-                        // Burst at the floor crossing between simulation steps.
-                        const float fraction = previous.z / (previous.z - p.z);
-                        splash({previous.x + (p.x - previous.x) * fraction,
-                                previous.y + (p.y - previous.y) * fraction, 0.0f}, meteor.color);
-                        meteor.active = false;
-                    } else if (emitTrail) {
-                        const auto& v = meteor.motion.velocity;
-                        const float spread = settings.tailSidewaysDrift;
-                        const Point3 drift{0.15f * v.x + sample(-spread, spread) * horizontalScale,
-                                           0.15f * v.y + sample(-spread, spread) * horizontalScale,
-                                           0.15f * v.z};
-                        // Set lifetime from the distance the falling source
-                        // will gain on the spark. Fade still follows spark age.
-                        const float relativeSpeed = drift.z - v.z;
-                        const float relativeGravity = gravity - trailGravity;
-                        const float lifetime = 2.0f * tailHeight /
-                            (relativeSpeed + sqrtf(relativeSpeed * relativeSpeed +
-                                                   2.0f * relativeGravity * tailHeight));
-                        if (lifetime > 0.0f) {
-                            emit({true, Trail, {p, drift}, 1.0f, trailGravity,
-                                  1.0f, 1.0f / (lifetime * sample(0.90f, 1.0f)), meteor.color, false});
-                        }
-                    }
-                }
-
-                if (launchTicks > 0) --launchTicks;
-                if (launching && launchTicks == 0) {
-                    for (auto& meteor : meteors) {
-                        if (meteor.active) continue;
-                        const float edgeX = RNDR_X - 1.0f;
-                        const float edgeY = RNDR_Y - 1.0f;
-                        const float targetX = sample(0.08f, 0.92f) * edgeX;
-                        const float targetY = sample(0.08f, 0.92f) * edgeY;
-                        const float x = constrain(targetX + sample(-0.5f, 0.5f) * edgeX, 0.0f, edgeX);
-                        const float y = constrain(targetY + sample(-0.5f, 0.5f) * edgeY, 0.0f, edgeY);
-                        const float fallTime = sample(0.63f, 0.85f);
-                        meteor.motion = {{x, y, launchHeight},
-                                         {(targetX - x) / fallTime, (targetY - y) / fallTime,
-                                          -launchHeight / fallTime + gravity * fallTime * 0.5f}};
-                        lastHue += random8(96, 161);
-                        meteor.color = CHSV(lastHue, 255, 255);
-                        meteor.active = true;
-                        launchTicks = random16(settings.minLaunchMs, settings.maxLaunchMs + 1) * 1000UL / stepUs;
-                        break;
-                    }
-                }
-            }
-
-            if (settings.blurRetention) fadeAll(255 - settings.blurRetention);
-            else clearAll();
-            for (int i = 0; i < sparks.size(); ++i) {
-                const auto& spark = sparks[i];
-                if (!spark.active) continue;
-                CRGB color = spark.color;
-                const bool trail = spark.type == Trail;
-                const float fadePart = trail ? max(0.01f, settings.tailFade) : 0.5f;
-                color.nscale8(uint8_t(255.0f * min(1.0f, spark.life / fadePart)));
-                if (trail) drawBall(spark.motion.position, meteorRadius, color, wrapX);
-                else drawSmooth(spark.motion.position, color, wrapX);
-            }
-            showCube();
-        }
-        clearAll();
+    static void animateGhostRider(uint32_t durationMs) {
+        animateGhostRider(durationMs, GhostRiderSettings{});
     }
 
-   // ==========================================
-    // THE FIREWORKS (Powered by Kinetic Engine)
-    // ==========================================
-    static void animateFireworks(uint32_t durationMs) {
-        uint32_t startTime = millis(), lastFrame = millis();
-        enum ParticleType : uint8_t { Spark, ClassicShell, LooseShell, LayeredShell };
-        constexpr int volume = RNDR_X * RNDR_Y * RNDR_Z;
-        constexpr float volumeScale = volume / 4096.0f;
-        const float burstScale = (42.0f / 64.0f) * cbrtf(volumeScale);
-        constexpr float launchScale = RNDR_Z / 16.0f;
-        
-        // Define the Safe Launch Zone (prevents clipping glass walls)
-        float minX = RNDR_X * 0.25f, maxX = RNDR_X * 0.75f;
-        float minY = RNDR_Y * 0.25f, maxY = RNDR_Y * 0.75f;
-
-        ParticleEngine::Pool pool(min(volume / 7, 170));
-
-        bool keepRunning = true;
-
-        while (keepRunning) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; 
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrame = now; float dt = deltaMs / 1000.0f;
-            
-            // Check the clock once per frame
-            bool timeIsUp = !TestDemo::routineTimeRemaining(uint32_t(now - startTime), durationMs);
-            
-            fadeAll(75);
-
-            // 1. RANDOM LAUNCHER (Only allow launches if time is NOT up)
-            if (!timeIsUp && random8(100) < 2) { 
-                const int index = pool.firstFree();
-                if (index < pool.size()) {
-                    const uint8_t shell = random8(ClassicShell, LayeredShell + 1);
-                    // The slower shells burst nearer the middle, leaving room for tilted layers.
-                    const float launchSpeed = (shell == ClassicShell ? random16(180, 220) : random16(140, 174))
-                                              * (launchScale / 10.0f);
-                    pool[index] = {
-                        true, shell,
-                        {{random16(int(minX * 10), int(maxX * 10)) / 10.0f,
-                          random16(int(minY * 10), int(maxY * 10)) / 10.0f, 0.0f},
-                         {0.0f, 0.0f, launchSpeed}},
-                        1.0f, 15.0f * launchScale,
-                        1.0f, 0.0f, // Shells keep their brightness until the apex.
-                        CRGB::White, true
-                    };
-                }
+    static void animateGhostRider(uint32_t durationMs, const GhostRiderSettings& settings,
+                                   const CRGBPalette16& palette = RainbowColors_p) {
+        using namespace ParticleEffectSupport;
+        const Side side = settings.walls ? Side::Bounce : Side::Wrap;
+        const float speed = (5.0f + settings.speed * 0.09f) * cbrtf(volumeScale);
+        const float spread = settings.spread * 0.095f * cbrtf(volumeScale);
+        const float maxTurn = settings.spiral * 0.0024f;
+        float yaw = sample(0, TWO_PI);
+        float turn = 0.0f;
+        float curlDirection = 1.0f;
+        float elevationPhase = sample(0, TWO_PI);
+        float verticalDirection = 1.0f;
+        uint8_t hue = random8();
+        float emission = 0.0f;
+        Pool pool(population(150));
+        Motion head{{sample(0, RNDR_X - 1), sample(0, RNDR_Y - 1), sample(0, RNDR_Z - 1)}, {}};
+        run(durationMs, settings.blur, [&](uint32_t tick) {
+            // As in WLED, the head steers by varying the turn rate. A second
+            // phase tilts the heading through depth instead of drawing a
+            // fixed helix. The already emitted trail keeps its own velocity.
+            turn += curlDirection * settings.spiral * 0.000015f;
+            if (fabsf(turn) >= maxTurn) curlDirection = -curlDirection;
+            yaw += turn;
+            // Let pitch evolve more slowly than the horizontal curl so
+            // the head travels through the height as it spirals.
+            elevationPhase += 0.012f + 0.025f * fabsf(turn);
+            if (elevationPhase >= TWO_PI) elevationPhase -= TWO_PI;
+            const float elevation = sinf(elevationPhase) * 0.68f * verticalDirection;
+            head.velocity = GeometryEngine::helixPoint({0, 0, 0}, cosf(elevation) * speed,
+                                                       yaw, sinf(elevation) * speed);
+            advance(head, dt, {0, 0, 0}, 1.0f);
+            const Point3 incoming = head.velocity;
+            resolveSide(head.position.x, head.velocity.x, RNDR_X, side, 1.0f);
+            resolveSide(head.position.y, head.velocity.y, RNDR_Y, side, 1.0f);
+            resolveSide(head.position.z, head.velocity.z, RNDR_Z, side, 1.0f);
+            if (incoming.x != head.velocity.x || incoming.y != head.velocity.y) {
+                yaw = atan2f(head.velocity.y, head.velocity.x);
             }
+            if (incoming.z != head.velocity.z) verticalDirection = -verticalDirection;
+            if (tick % (11 - settings.colorCycle / 25) == 0) ++hue;
+            if (settings.colorCycle > 190) hue += (settings.colorCycle - 190) >> 2;
 
-            // 2. DETONATION CHECK
-            for (int i = 0; i < pool.size(); i++) {
-                if (pool[i].active && pool[i].type != Spark && pool[i].motion.velocity.z <= 0.0f) {
-                    const uint8_t shell = pool[i].type;
-                    const auto origin = pool[i].motion.position;
-                    pool[i].active = false; // Kill the shell
-
-                    if (shell == LayeredShell) {
-                        const int rings = random8(2, 4);
-                        int freeSlots = 0;
-                        for (int j = 0; j < pool.size(); ++j) freeSlots += !pool[j].active;
-                        const int perRing = min(max(4, int(lroundf(26 * volumeScale))), freeSlots / rings);
-                        const float yaw = random16() * (TWO_PI / 65536.0f);
-                        const float tilt = random16(350, 1200) / 1000.0f;
-                        const float cy = cosf(yaw), sy = sinf(yaw), ct = cosf(tilt), st = sinf(tilt);
-                        const float phase = random16() * (TWO_PI / 65536.0f);
-                        const int lobes = random8(2, 7);
-                        const uint8_t hue = random8(), hueStep = random8(24, 128);
-                        int slot = 0;
-                        for (int ring = 0; ring < rings; ++ring) {
-                            const auto color = ColorFromPalette(RainbowColors_p, uint8_t(hue + ring * hueStep));
-                            for (int spark = 0; spark < perRing; ++spark) {
-                                const float angle = phase + spark * (TWO_PI / perRing);
-                                const float speed = (5.4f + 3.0f * ring) * burstScale *
-                                                    (1.0f + 0.16f * sinf(angle * lobes));
-                                const float u = cosf(angle) * speed, v = sinf(angle) * speed;
-                                slot = pool.firstFree(slot);
-                                pool[slot++] = {true, Spark, {origin, {cy * u - sy * ct * v, sy * u + cy * ct * v, st * v}},
-                                                1.0f, 4.0f * launchScale, 1.0f, 0.68f, color, 0};
-                            }
-                        }
-                        continue;
-                    }
-
-                    const bool classic = shell == ClassicShell;
-                    const CRGBPalette16 explosionPal = classic ? PaletteUtils::getRandomOrganicPalette() : CRGBPalette16(RainbowColors_p);
-                    const bool isConfetti = classic && random8(2) == 0;
-                    const CRGB solidColor = classic ? PaletteUtils::getRandomVibrantColor() : CRGB::Black;
-                    const uint8_t hue = classic ? 0 : random8();
-                    int sparksToSpawn = classic ? volume / 29 : max(1, int(lroundf(random8(17, 29) * volumeScale)));
-                    for (int j = pool.firstFree(); j < pool.size() && sparksToSpawn > 0;
-                         j = pool.firstFree(j + 1)) {
-                        float theta = (random16(0, 6283) / 1000.0f);
-                        float v = (random16(0, 2000) / 1000.0f) - 1.0f;
-                        float phi = acos(v);
-
-                        const float burstSpeed = classic ? random16(300, 500) / 10.0f
-                                                         : random16(360, 1000) * (burstScale / 100.0f);
-                        const CRGB sparkColor = classic
-                            ? (isConfetti ? ColorFromPalette(explosionPal, random8(), 255, NOBLEND) : solidColor)
-                            : ColorFromPalette(explosionPal, uint8_t(hue + int(random8(65)) - 32));
-
-                        pool[j] = {
-                            true, Spark,
-                            {origin, {burstSpeed * sin(phi) * cos(theta),
-                                      burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi)}},
-                            classic ? 0.75f : 1.0f, (classic ? 12.0f : 4.0f) * launchScale,
-                            1.0f, classic ? random16(8, 15) / 10.0f : random16(55, 90) / 100.0f,
-                            sparkColor, false // No tails to keep the sphere crisp
-                        };
-                        sparksToSpawn--;
-                    }
-                }
+            stepSpray(pool, Side::Open, Side::Open, false, 0, 0, false);
+            for (int i = 0; i < pool.size(); ++i) {
+                auto& p = pool[i];
+                if (p.active && p.motion.position.z >= RNDR_Z) p.active = false;
             }
-
-            drawKineticParticles(pool, dt);
-            if (timeIsUp && !pool.anyAlive()) keepRunning = false;
-
-            showCube(); yield();
-        }
+            emission += 1.5f * volumeScale;
+            while (emission >= 1.0f) {
+                emission -= 1.0f;
+                const auto& v = head.velocity;
+                const Point3 velocity{-v.x * 0.72f + sample(-spread, spread),
+                                      -v.y * 0.72f + sample(-spread, spread),
+                                      -v.z * 0.72f + sample(-spread, spread)};
+                pool.spawn({true, hue, {head.position, velocity}, 0.995f, 0.0f,
+                            1.0f, 1.0f / sample(0.75f, 1.12f), CRGB::Black, false});
+            }
+        }, [&] {
+            for (int i = 0; i < pool.size(); ++i) {
+                const auto& p = pool[i];
+                if (!p.active) continue;
+                const uint8_t index = settings.ageColor ? hue + int(p.life * 192.0f) : p.type;
+                drawSmooth(p.motion.position,
+                           ColorFromPalette(palette, index, uint8_t(p.life * 240.0f)), false);
+            }
+            drawSmooth(head.position, CRGB::White, !settings.walls);
+        });
     }
 
-    
-
-    // ==========================================
-    // THE ATOM SMASHER (Powered by Kinetic Engine)
-    // ==========================================
-    static void animateAtomSmasher(uint32_t durationMs = 15000, int targetCycles = 0) {
-        uint32_t startTime = millis(), lastFrame = millis();
-        float angleA = 0.0f, angleB = PI, zA = RNDR_Z - 1.0f, zB = 0.0f;
-        
-        // FIX 1: Tucked the orbit radius in slightly to prevent Index 16 Out-Of-Bounds
-        float orbitRadius = min(RNDR_CX, RNDR_CY) - 1.5f; 
-        
-        // ELEVATED DETONATION: We shift the convergence point to the upper 3rd of the cube (65% height).
-        // This gives the explosion plenty of room to occupy the top before the 25.0f gravity pulls it down.
-        float targetZ = RNDR_Z * 0.60f; 
-        
-        float speed = TWO_PI * 0.5f;
-        
-        // Asymmetric vertical speeds guarantee both points arrive at the elevated target simultaneously
-        float speedZA = ((RNDR_Z - 1.0f) - targetZ) / 3.5f;
-        float speedZB = targetZ / 3.5f;
-
-        enum State { SPIRAL_IN, IMPLOSION_PAUSE, KINETIC_BLAST };
-        State state = SPIRAL_IN;
-        uint32_t stateTimer = millis();
-
-        ParticleEngine::Pool embers((RNDR_X * RNDR_Y * RNDR_Z) / 12);
-
-        float masterPhase = 0.0f;
-        int currentCycle = 0;
-        bool keepRunning = true;
-
-        CRGB colA = CHSV(random8(), 255, 255), colB = CHSV(random8(), 255, 255);
-
-        while (keepRunning) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; 
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrame = now; float dt = deltaMs / 1000.0f; masterPhase += 0.33f * deltaMs;
-            clearAll();
-
-            if (state == SPIRAL_IN) {
-                speed += (TWO_PI * 1.5f) * dt; 
-                angleA += speed * dt; angleB -= speed * dt;
-                
-                zA -= speedZA * dt; 
-                zB += speedZB * dt;
-
-                int ax = (int)lroundf(RNDR_CX + cosf(angleA) * orbitRadius), ay = (int)lroundf(RNDR_CY + sinf(angleA) * orbitRadius), az = (int)lroundf(zA);
-                int bx = (int)lroundf(RNDR_CX + cosf(angleB) * orbitRadius), by = (int)lroundf(RNDR_CY + sinf(angleB) * orbitRadius), bz = (int)lroundf(zB);
-                setVoxel(ax, ay, az, colA); setVoxel(bx, by, bz, colB);
-
-                if (zA <= targetZ && zB >= targetZ) { state = IMPLOSION_PAUSE; stateTimer = now; }
-            }
-            else if (state == IMPLOSION_PAUSE) {
-                if (now - stateTimer > 120) {
-                    state = KINETIC_BLAST; stateTimer = now;
-                    for(int i = 0; i < embers.size(); i++) {
-                        float theta = (random16(0, 6283) / 1000.0f); 
-                        float v = (random16(0, 2000) / 1000.0f) - 1.0f; 
-                        float phi = acos(v);
-                        
-                        // Lower initial speed, higher drag. It flashes white, then blooms rainbow.
-                        float burstSpeed = random16(250, 450) / 10.0f; 
-                        
-                        CRGB sparkColor = ColorFromPalette(PartyColors_p, random8(), 255, NOBLEND);
-
-                        embers[i] = {
-                            true, 0,
-                            {{RNDR_CX, RNDR_CY, targetZ},
-                             {burstSpeed * sin(phi) * cos(theta),
-                              burstSpeed * sin(phi) * sin(theta), burstSpeed * cos(phi)}},
-                            0.82f, 25.0f, // Restored: Hard atmospheric braking and heavy gravity
-                            1.0f, 0.2f,   // Restored: Authentic slow decay    
-                            sparkColor, 
-                            true              
-                        };
-                    }
-                }
-            }
-            else if (state == KINETIC_BLAST) {
-                drawKineticParticles(embers, dt);
-                if (!embers.anyAlive() || now - stateTimer > 4000) {
-                    currentCycle++;
-                    if ((!TestDemo::playbackHeld() && targetCycles > 0 && currentCycle >= targetCycles) || (targetCycles <= 0 && (!TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)))) keepRunning = false;
-                    if (keepRunning) {
-                        state = SPIRAL_IN; stateTimer = now;
-                        angleA = 0.0f; angleB = PI; zA = RNDR_Z - 1.0f; zB = 0.0f; speed = TWO_PI * 0.5f;
-                        colA = CHSV(random8(), 255, 255); colB = CHSV(random8(), 255, 255);
-                    }
-                }
-            }
-            showCube(); 
-            
-            // FIX 2: Explicit frame limiter to prevent ESP32 DMA starvation
-            // Replaces the naked 'yield()' call
-            delay(15); 
-        }
+    static void animateSpray(uint32_t durationMs) {
+        animateSpray(durationMs, SpraySettings{});
     }
-    // A collision sheet breaks into one spark per 2x2 patch, using the
-    // same drag, gravity, fade and tails as the Atom Smasher burst.
-    static void animatePlaneBurst(uint8_t axis, uint32_t stepMs) {
-        const int dims[] = {RNDR_X, RNDR_Y, RNDR_Z};
-        const uint8_t uAxis = (axis + 1) % 3;
-        const uint8_t vAxis = (axis + 2) % 3;
-        ParticleEngine::Pool sparks(((dims[uAxis] + 1) / 2) * ((dims[vAxis] + 1) / 2));
-        int count = 0;
-        for (int v = 0; v < dims[vAxis] && count < sparks.size(); v += 2) {
-            for (int u = 0; u < dims[uAxis] && count < sparks.size(); u += 2) {
-                float position[3], velocity[3];
-                position[axis] = (dims[axis] - 1) * 0.5f;
-                position[uAxis] = u + random8(min(2, dims[uAxis] - u));
-                position[vAxis] = v + random8(min(2, dims[vAxis] - v));
-                const float sign = ((u / 2 + v / 2) % 2) ? 1.0f : -1.0f;
-                velocity[axis] = sign * random8(18, 30) * dims[axis] / 16.0f;
-                velocity[uAxis] = (int(random8(161)) - 80) * 0.1f;
-                velocity[vAxis] = (int(random8(161)) - 80) * 0.1f;
-                sparks[count++] = {
-                    true, 0,
-                    {{position[0], position[1], position[2]}, {velocity[0], velocity[1], velocity[2]}},
-                    0.94f, 8.0f,
-                    1.0f, random8(85, 141) * 0.01f,
-                    ColorFromPalette(PartyColors_p, random8(), 255, NOBLEND), true
-                };
-            }
-        }
 
-        uint32_t lastFrame = millis();
-        delay(stepMs);
-        while (true) {
-            const uint32_t now = millis();
-            const float dt = (now - lastFrame) * 0.001f;
-            lastFrame = now;
-            clearAll();
-            drawKineticParticles(sparks, dt);
-            showCube();
-            delay(stepMs);
-            if (!sparks.anyAlive()) break;
-        }
+    static void animateSpray(uint32_t durationMs, const SpraySettings& settings,
+                             const CRGBPalette16& palette = PartyColors_p) {
+        using namespace ParticleEffectSupport;
+        const Point3 nozzle{(RNDR_X - 1) * (settings.leftRight / 255.0f), RNDR_CY,
+                            (RNDR_Z - 1) * (settings.upDown / 255.0f)};
+        const float angle = TWO_PI * (1.0f - (min(31, int(settings.angle)) + 1) / 32.0f);
+        const Side xSide = settings.cylinder ? Side::Wrap : Side::Bounce;
+        constexpr float hardness = 200.0f / 255.0f;
+        Pool pool(population(maxParticles));
+        uint32_t frame = 0;
+        uint8_t hue = random8();
+        float emission = 1.0f - volumeScale;
+        run(durationMs, 200, [&](uint32_t tick) {
+            if (wledFrameDue(tick)) {
+                const int period = 11 - settings.intensity / 25;
+                if (frame % period == 0) {
+                    emission += volumeScale;
+                    if (emission >= 1.0f) {
+                        emission -= 1.0f;
+                        const float speed = (settings.speed >> 2) * wledVelocity;
+                        constexpr int spread = 3;
+                        const float horizontal = speed * cosf(angle) * 0.70710678f;
+                        const Point3 v{horizontal + sample(-spread, spread) * wledVelocity,
+                                       horizontal + sample(-spread, spread) * wledVelocity,
+                                       speed * sinf(angle) + sample(-spread, spread) * wledVelocity};
+                        const float life = sample(150 + settings.intensity, 300 + settings.intensity);
+                        ++hue;
+                        pool.spawn({true, hue, {nozzle, v}, 1.0f, settings.gravity ? 8 * wledGravity : 0.0f,
+                                    1.0f, 42.0f / life, CRGB::Black, 0});
+                    }
+                }
+                ++frame;
+            }
+            stepSpray(pool, xSide, Side::Bounce, true, hardness, 0.0f, settings.collide);
+            if (!settings.gravity) resolveSprayTop(pool, Side::Bounce, hardness);
+        }, [&] { drawSpray(pool, palette, settings.cylinder); });
     }
 
     static void animateVerticalPipes(uint32_t durationMs, uint32_t speedMs) {
@@ -842,35 +195,6 @@ class Streamers {
     }
 
 
-    static void animateTornado(uint32_t durationMs, uint32_t speedMs, CRGBPalette16 pal = CloudColors_p, float startingRevs = 1.0f) {
-        uint32_t startTime = millis(), lastFrameTime = millis(); float globalAngle = 0.0f, colorPhase = 0.0f;
-        const int MAX_DEBRIS = 64; int numDebris = min((int)(RNDR_Z * 3), MAX_DEBRIS); float dZ[MAX_DEBRIS], dAng[MAX_DEBRIS], dRadOffset[MAX_DEBRIS], dSpeed[MAX_DEBRIS];
-        for(int i = 0; i < numDebris; i++) { dZ[i] = random16(0, RNDR_Z * 10) / 10.0f; dAng[i] = random16(0, TWO_PI * 100) / 100.0f; dRadOffset[i] = random16(10, 20) / 10.0f; dSpeed[i] = random16(10, 30) / 10.0f; }
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrameTime; lastFrameTime = now; clearAll();
-            float progress = (float)(now - startTime) / (float)durationMs, currentRevs = startingRevs * (1.0f + (progress * 2.5f)); 
-            globalAngle += (currentRevs * TWO_PI) * (deltaMs / 1000.0f); colorPhase += 150.0f * (deltaMs / 1000.0f);
-            int numArms = 4; 
-            for (int z = 0; z < RNDR_Z; z++) {
-                float zPercent = (float)z / (float)(RNDR_Z > 1 ? RNDR_Z - 1 : 1), maxRadius = (RNDR_X - 1) / 2.0f, idealRadius = 0.5f + pow(zPercent, 1.5f) * (maxRadius - 0.5f);
-                float zTwist = z * 0.5f; uint8_t layerColorIndex = (uint8_t)colorPhase + (z * 8); CRGB layerColor = ColorFromPalette(pal, layerColorIndex, 255, LINEARBLEND);
-                for (int x = 0; x < RNDR_X; x++) {
-                    for (int y = 0; y < RNDR_Y; y++) {
-                        float dx = x - RNDR_CX, dy = y - RNDR_CY, pixelDist = sqrt((dx * dx) + (dy * dy)), distFromWall = abs(pixelDist - idealRadius), wallThickness = 1.5f;
-                        if (distFromWall < wallThickness) { float wallBrightness = 1.0f - (distFromWall / wallThickness), pixelAngle = atan2(dy, dx), spiralPhase = (numArms * (pixelAngle - globalAngle)) + zTwist, spiralMod = (sin(spiralPhase) + 1.0f) * 0.5f, intensity = wallBrightness * (0.2f + 0.8f * spiralMod); CRGB finalColor = layerColor; finalColor.nscale8((uint8_t)(intensity * 255.0f)); setVoxel(x, y, z, finalColor); }
-                    }
-                }
-            }
-            for(int i = 0; i < numDebris; i++) {
-                dZ[i] += dSpeed[i] * (deltaMs / 1000.0f); if (dZ[i] >= RNDR_Z) { dZ[i] = 0; dAng[i] = random16(0, TWO_PI * 100) / 100.0f; }
-                int z = (int)dZ[i]; float zPercent = (float)z / (float)(RNDR_Z > 1 ? RNDR_Z - 1 : 1), maxRadius = (RNDR_X - 1) / 2.0f, baseRadius = 0.5f + pow(zPercent, 1.5f) * (maxRadius - 0.5f), radius = baseRadius * dRadOffset[i];
-                dAng[i] += (currentRevs * TWO_PI * 1.3f) * (deltaMs / 1000.0f);
-                float px = RNDR_CX + (cos(dAng[i]) * radius), py = RNDR_CY + (sin(dAng[i]) * radius);
-                if (px >= 0 && px < RNDR_X && py >= 0 && py < RNDR_Y) { CRGB debrisColor = ColorFromPalette(pal, (uint8_t)(colorPhase + (i * 15)), 255, LINEARBLEND); debrisColor |= CRGB(100, 100, 100); CRGB existing = getVoxel((int)px, (int)py, z); setVoxel((int)px, (int)py, z, existing + debrisColor); }
-            }
-            showCube(); if (speedMs > 0) delay(speedMs); else yield();
-        }
-    }
     // ==========================================
     // WHAT THE HELIX (Continuous Capsule Sweeping)
     // ==========================================
@@ -998,223 +322,6 @@ class Streamers {
         }
     }
     // ==========================================
-    // LAVA LAMP (True Metaballs + Soft Body Physics)
-    // ==========================================
-    struct LavaBlob {
-        float x, y, z;
-        float vx, vy, vz;
-        float targetX, targetY; 
-        bool isRising;          
-        float baseRadius; 
-        float currentRadius; // Active pulsation
-        float pulsePhase;    // Active pulsation
-        float pulseSpeed;    // Active pulsation
-        float speedFactor;      
-        float hue;           // Independent thermal color
-    };
-
-    static void animateLavaLamp(uint32_t durationMs, float speedMultiplier = 1.0f, float volumePercent = 0.15f, CRGBPalette16 pal = LavaColors_p) {
-        uint32_t startTime = millis();
-        uint32_t lastFrameTime = millis();
-
-        float totalCubeVolume = (float)(RNDR_X * RNDR_Y * RNDR_Z);
-        float targetFluidVolume = totalCubeVolume * volumePercent; 
-        
-        const int NUM_BLOBS = (RNDR_X * RNDR_Y * RNDR_Z >= 4096) ? 6 : 3;
-        LavaBlob blobs[NUM_BLOBS];
-
-        float weights[NUM_BLOBS];
-        float sumWeights = 0.0f;
-        for (int i = 0; i < NUM_BLOBS; i++) {
-            weights[i] = 50.0f + (float)random8(); 
-            sumWeights += weights[i];
-        }
-
-        float glassPadding = max(1.0f, RNDR_X * 0.125f); 
-
-        // INITIALIZATION
-        for (int i = 0; i < NUM_BLOBS; i++) {
-            float blobVolume = targetFluidVolume * (weights[i] / sumWeights);
-            blobs[i].baseRadius = powf(blobVolume * 0.238732f, 0.333333f) * 0.65f;
-            blobs[i].currentRadius = blobs[i].baseRadius;
-            
-            blobs[i].pulsePhase = random16(0, 6283) / 1000.0f; // 0 to 2PI
-            blobs[i].pulseSpeed = 1.5f + (random8() / 255.0f) * 2.0f; 
-
-            blobs[i].x = glassPadding + ((float)random8() / 255.0f) * (RNDR_X - glassPadding * 2.0f);
-            blobs[i].y = glassPadding + ((float)random8() / 255.0f) * (RNDR_Y - glassPadding * 2.0f);
-            blobs[i].z = ((float)random8() / 255.0f) * (RNDR_Z - 2.0f) + 1.0f; 
-            
-            blobs[i].targetX = glassPadding + ((float)random8() / 255.0f) * (RNDR_X - glassPadding * 2.0f);
-            blobs[i].targetY = glassPadding + ((float)random8() / 255.0f) * (RNDR_Y - glassPadding * 2.0f);
-            
-            blobs[i].vx = 0; blobs[i].vy = 0; blobs[i].vz = 0;
-            blobs[i].isRising = (random8(2) == 0); 
-            blobs[i].speedFactor = 0.5f + ((float)random8() / 255.0f); 
-            
-            blobs[i].hue = random8(); // Stagger initial thermal colors
-        }
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            uint32_t deltaMs = now - lastFrameTime;
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrameTime = now;
-
-            clearAll(); 
-
-            float dt = ((float)deltaMs / 16.0f) * speedMultiplier; 
-
-            // ==========================================
-            // SOFT-BODY PHYSICS LOOP
-            // ==========================================
-            for (int i = 0; i < NUM_BLOBS; i++) {
-                
-                // 1. Independent Breathing (Radius Pulsation)
-                blobs[i].pulsePhase += blobs[i].pulseSpeed * (deltaMs / 1000.0f);
-                // Pulse size between 80% and 120% of base mass
-                blobs[i].currentRadius = blobs[i].baseRadius * (1.0f + 0.2f * sinf(blobs[i].pulsePhase));
-
-                // 2. Thermal Color Drift
-                blobs[i].hue += 5.0f * (deltaMs / 1000.0f) * speedMultiplier;
-                if (blobs[i].hue >= 255.0f) blobs[i].hue -= 255.0f;
-
-                // 3. X/Y Target Seeking
-                float dx = blobs[i].targetX - blobs[i].x;
-                float dy = blobs[i].targetY - blobs[i].y;
-                float dist = sqrtf(dx*dx + dy*dy);
-
-                if (dist < 1.0f) {
-                    blobs[i].targetX = glassPadding + ((float)random8() / 255.0f) * (RNDR_X - glassPadding * 2.0f);
-                    blobs[i].targetY = glassPadding + ((float)random8() / 255.0f) * (RNDR_Y - glassPadding * 2.0f);
-                } else {
-                    blobs[i].vx += (dx / dist) * 0.006f * dt;
-                    blobs[i].vy += (dy / dist) * 0.006f * dt;
-                }
-
-                // 4. Z-Axis Buoyancy
-                float buoyancyAccel = 0.025f * blobs[i].speedFactor * dt;
-                if (blobs[i].isRising) {
-                    blobs[i].vz += buoyancyAccel;
-                    if (blobs[i].z >= RNDR_Z - 1.5f) blobs[i].isRising = false; 
-                } else {
-                    blobs[i].vz -= buoyancyAccel;
-                    if (blobs[i].z <= 1.0f) blobs[i].isRising = true; 
-                }
-
-                // 5. The "Wall Squish" (Soft Deceleration)
-                float squishBoundaryX = glassPadding + blobs[i].currentRadius * 0.5f;
-                float squishBoundaryY = glassPadding + blobs[i].currentRadius * 0.5f;
-
-                if (blobs[i].x < squishBoundaryX) {
-                    blobs[i].vx += (squishBoundaryX - blobs[i].x) * 0.05f * dt; 
-                    blobs[i].vx *= 0.85f; // Viscous friction against the glass
-                } else if (blobs[i].x > RNDR_X - squishBoundaryX) {
-                    blobs[i].vx -= (blobs[i].x - (RNDR_X - squishBoundaryX)) * 0.05f * dt;
-                    blobs[i].vx *= 0.85f;
-                }
-
-                if (blobs[i].y < squishBoundaryY) {
-                    blobs[i].vy += (squishBoundaryY - blobs[i].y) * 0.05f * dt;
-                    blobs[i].vy *= 0.85f;
-                } else if (blobs[i].y > RNDR_Y - squishBoundaryY) {
-                    blobs[i].vy -= (blobs[i].y - (RNDR_Y - squishBoundaryY)) * 0.05f * dt;
-                    blobs[i].vy *= 0.85f;
-                }
-
-                // Apply general drag and commit velocity
-                float drag = powf(0.88f, dt); 
-                blobs[i].vx *= drag;
-                blobs[i].vy *= drag;
-                blobs[i].vz *= drag;
-
-                blobs[i].x += blobs[i].vx * dt;
-                blobs[i].y += blobs[i].vy * dt;
-                blobs[i].z += blobs[i].vz * dt;
-                
-                // Floor/Ceiling physical locks
-                if (blobs[i].z < 0.0f) { blobs[i].z = 0.0f; blobs[i].vz *= 0.5f; }
-                if (blobs[i].z > RNDR_Z - 1.0f) { blobs[i].z = RNDR_Z - 1.0f; blobs[i].vz *= 0.5f; }
-            }
-
-            // ==========================================
-            // ENERGY-WEIGHTED RENDER LOOP (Deferred Rendering)
-            // ==========================================
-            float skinThreshold = (RNDR_X <= 8) ? 0.85f : 0.75f;
-            float coreThreshold = skinThreshold + 0.30f; 
-            
-            float r2[NUM_BLOBS];
-            float stretchZ[NUM_BLOBS];
-            CRGB blobColors[NUM_BLOBS];
-            
-            for (int i = 0; i < NUM_BLOBS; i++) {
-                r2[i] = blobs[i].currentRadius * blobs[i].currentRadius;
-                stretchZ[i] = 1.0f - constrain(fabsf(blobs[i].vz) * 1.5f, 0.0f, 0.25f);
-                blobColors[i] = ColorFromPalette(pal, (uint8_t)blobs[i].hue, 255, LINEARBLEND);
-            }
-
-            for (uint8_t z = 0; z < RNDR_Z; z++) {
-                // LOOP HOISTING: Calculate Z-axis math once per layer, not 256 times
-                float dzSq[NUM_BLOBS];
-                for (int i = 0; i < NUM_BLOBS; i++) {
-                    float dz = ((float)z - blobs[i].z) * stretchZ[i]; 
-                    dzSq[i] = dz * dz;
-                }
-
-                for (uint8_t y = 0; y < RNDR_Y; y++) {
-                    // LOOP HOISTING: Calculate Y-axis math once per row, not 16 times
-                    float dySq[NUM_BLOBS];
-                    for (int i = 0; i < NUM_BLOBS; i++) {
-                        float dy = (float)y - blobs[i].y;
-                        dySq[i] = dy * dy;
-                    }
-
-                    for (uint8_t x = 0; x < RNDR_X; x++) {
-                        float totalEnergy = 0.0f;
-                        float energies[NUM_BLOBS];
-                        
-                        for (int i = 0; i < NUM_BLOBS; i++) {
-                            float dx = (float)x - blobs[i].x;
-                            float d2 = (dx*dx) + dySq[i] + dzSq[i];
-                            
-                            // Calculate raw energy (Fastest operation possible)
-                            energies[i] = r2[i] / (d2 + 0.1f);
-                            totalEnergy += energies[i];
-                        }
-
-                        // DEFERRED RENDERING: 
-                        // Only mix RGB floats if this voxel actually contains lava!
-                        if (totalEnergy >= skinThreshold) {
-                            float rSum = 0.0f, gSum = 0.0f, bSum = 0.0f;
-                            for (int i = 0; i < NUM_BLOBS; i++) {
-                                rSum += blobColors[i].r * energies[i];
-                                gSum += blobColors[i].g * energies[i];
-                                bSum += blobColors[i].b * energies[i];
-                            }
-                            
-                            CRGB finalColor;
-                            finalColor.r = constrain((int)(rSum / totalEnergy), 0, 255);
-                            finalColor.g = constrain((int)(gSum / totalEnergy), 0, 255);
-                            finalColor.b = constrain((int)(bSum / totalEnergy), 0, 255);
-
-                            if (totalEnergy >= coreThreshold) {
-                                setVoxel(x, y, z, finalColor);
-                            } else {
-                                float depth = (totalEnergy - skinThreshold) / (coreThreshold - skinThreshold);
-                                uint8_t dimFactor = 40 + (uint8_t)(depth * 160.0f);
-                                finalColor.nscale8(dimFactor); 
-                                setVoxel(x, y, z, finalColor);
-                            }
-                        }
-                    }
-                }
-            }
-            
-            showCube();
-            yield();
-        }
-    }
-    // ==========================================
     // VERTICAL STREAMER (Internal Engine)
     // ==========================================
     static void animateVerticalStreamer(uint32_t durationMs, uint32_t speedMs, float volumePercent, CRGBPalette16 pal,ShaderMode sMode) {
@@ -1224,7 +331,7 @@ class Streamers {
         // Divide the footprint among four streamers. On 16x16 this gives
         // each the same brush radius as the former single 8x8 streamer.
         // Total requested coverage remains proportional to logical volume.
-        const float thickness = getThicknessFromVolume(volumePercent / count);
+        const float thickness = StreamerGeometry::getThicknessFromVolume(volumePercent / count);
         float histX[count][RNDR_Z];
         float histY[count][RNDR_Z];
         float currentX[count], currentY[count], targetX[count], targetY[count];
@@ -1372,63 +479,6 @@ class Streamers {
     static void animateVerticalStreamer(uint32_t durationMs, uint32_t speedMs, float volumePercent, CRGB::HTMLColorCode colorCode) { animateVerticalStreamer(durationMs, speedMs, volumePercent, CRGBPalette16(CRGB(colorCode)), MODE_SOLID); }
     static void animateVerticalStreamer(uint32_t durationMs, uint32_t speedMs, float volumePercent, ShaderMode sMode) { animateVerticalStreamer(durationMs, speedMs, volumePercent, RainbowColors_p, sMode); }
 
-     static void animateCyclone(uint32_t durationMs, int numStreamers, float volumePercent, CRGBPalette16 pal, ShaderMode sMode, float rps= 1.0f) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        float masterPhase = 0.0f, anglePhase = 0.0f;
-        float thickness = getThicknessFromVolume(volumePercent);
-        float radius = (RNDR_X / 2.0f) - thickness;
-        
-        // If there are more than 3 arms, proportionally slow down the RPMs 
-        // so the visual frequency (arms per second) remains identical.
-        float adjustedRps = rps;
-        if (numStreamers > 3) {
-            adjustedRps = rps * (3.0f / (float)numStreamers);
-        }
-        
-        float totalTwist = 140.0f;
-        float lagPerLayer = totalTwist / (RNDR_Z - 1);
-        float spinSpeed = adjustedRps * 360.0f;
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
-            clearAll();
-            masterPhase += 0.33f * deltaMs; 
-
-            for (uint8_t z = 0; z < RNDR_Z; z++) {
-                float zDistance = (RNDR_Z - 1) - z, lagAngle = zDistance * lagPerLayer;
-                for (int i = 0; i < numStreamers; i++) {
-                    float offsetAngle = (360.0f / numStreamers) * i;
-                    uint32_t colorOffset = (512 / numStreamers) * i;
-                    
-                    TextureState tex(sMode, pal, 1.0f);
-                    tex.internalPhase = masterPhase + colorOffset + (z * 5);
-                    tex.phase = (uint32_t)tex.internalPhase;
-                    tex.initMath();
-
-                    float rad = (anglePhase + offsetAngle - lagAngle) * 0.0174533f;
-                    float cx = RNDR_CX + cos(rad) * radius, cy = RNDR_CY + sin(rad) * radius;
-
-                    uint8_t ix0 = max(0, (int)round(cx - thickness - 1)), ix1 = min((int)RNDR_X - 1, (int)round(cx + thickness + 1));
-                    uint8_t iy0 = max(0, (int)round(cy - thickness - 1)), iy1 = min((int)RNDR_Y - 1, (int)round(cy + thickness + 1));
-
-                    for(uint8_t x = ix0; x <= ix1; x++) {
-                        for(uint8_t y = iy0; y <= iy1; y++) {
-                            float dx = cx - (float)x, dy = cy - (float)y, dist = sqrtf(dx*dx + dy*dy);
-                            if (dist <= thickness) setVoxel(x, y, z, tex.getColor(x, y, z));
-                        }
-                    }
-                }
-            }
-            showCube();
-            anglePhase += spinSpeed * (deltaMs / 1000.0f);
-            if (anglePhase >= 360.0f) anglePhase -= 360.0f;
-            yield();
-        }
-    } 
-    static void animateCyclone(uint32_t durationMs, int numStreamers, float volumePercent, CRGB::HTMLColorCode colorCode, float rps = 1.0f) { animateCyclone(durationMs, numStreamers, volumePercent, CRGBPalette16(CRGB(colorCode)), MODE_SOLID, rps); }
-    static void animateCyclone(uint32_t durationMs, int numStreamers, float volumePercent, ShaderMode sMode, float rps = 1.0f) { animateCyclone(durationMs, numStreamers, volumePercent, RainbowColors_p, sMode, rps); }
-
     static void animateMeteor(uint32_t durationMs, uint32_t stepMs = 20) {
         constexpr uint8_t spans[] = {RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 1};
         constexpr uint16_t crossingMs = 1250;
@@ -1521,119 +571,6 @@ class Streamers {
 
     // Digital rain across the whole XY footprint. A column's dark interval
     // sets the density, and its trail length scales with the render height.
-    static void animateMatrixRain(uint32_t durationMs, uint32_t stepMs = 25) {
-        struct Column {
-            float headZ;
-            uint8_t fallTimeTenths;
-            uint8_t trailLength;
-        };
-        Column columns[RNDR_Y][RNDR_X];
-        const auto startDrop = [](Column &column, bool stagger) {
-            column.fallTimeTenths = random8(9, 21);
-            column.trailLength = max(1, (RNDR_Z * random8(4, 8) + 8) / 16);
-            column.headZ = stagger
-                ? random16(7 * RNDR_Z * 16) / 16.0f - column.trailLength
-                : RNDR_Z - 1 + random8(3, 8) * RNDR_Z;
-        };
-        for (auto &row : columns) {
-            for (auto &column : row) startDrop(column, true);
-        }
-
-        const uint32_t started = millis();
-        uint32_t lastFrame = started;
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t now = millis();
-            const float travel = (now - lastFrame) * (RNDR_Z / 100.0f);
-            lastFrame = now;
-            clearAll();
-
-            for (int y = 0; y < RNDR_Y; ++y) {
-                for (int x = 0; x < RNDR_X; ++x) {
-                    Column &column = columns[y][x];
-                    column.headZ -= travel / column.fallTimeTenths;
-                    if (column.headZ < -column.trailLength) startDrop(column, false);
-                    if (column.headZ >= RNDR_Z) continue;
-
-                    const int first = max(0, int(floorf(column.headZ)));
-                    const int last = min(RNDR_Z - 1, int(floorf(column.headZ + column.trailLength)));
-                    for (int z = first; z <= last; ++z) {
-                        const float distance = z - column.headZ;
-                        // Feather the bright tip between rows as it falls.
-                        const float tip = max(0.0f, 1.0f - fabsf(distance));
-                        const float green = distance < 0.0f
-                            ? 255.0f * tip
-                            : 210.0f * (1.0f - distance / column.trailLength) + 45.0f * tip;
-                        setVoxel(x, y, z, CRGB(uint8_t(155.0f * tip), uint8_t(green), uint8_t(95.0f * tip)));
-                    }
-                }
-            }
-            showCube();
-            delay(stepMs);
-        }
-    }
-
-    static void animateRain(uint32_t durationMs, int dropsPerFrame, float fallSpeed, CRGBPalette16 pal, ShaderMode sMode) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        float masterPhase = 0.0f;
-        const int MAX_DROPS = 150;
-        float dX[MAX_DROPS], dY[MAX_DROPS], dZ[MAX_DROPS];
-        bool active[MAX_DROPS] = {false};
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis(); uint32_t deltaMs = now - lastFrame; lastFrame = now;
-            clearAll();
-            masterPhase += 0.33f * deltaMs;
-            
-            TextureState tex(sMode, pal, 1.0f);
-            tex.internalPhase = masterPhase;
-            tex.phase = (uint32_t)masterPhase;
-            tex.initMath();
-            
-            for (int i = 0; i < dropsPerFrame; i++) {
-                for (int j = 0; j < MAX_DROPS; j++) {
-                    if (!active[j]) { active[j] = true; dX[j] = random8(RNDR_X); dY[j] = random8(RNDR_Y); dZ[j] = RNDR_Z - 1.0f; break; }
-                }
-            }
-
-            for (int j = 0; j < MAX_DROPS; j++) {
-                if (active[j]) {
-                    int xInt = (int)dX[j], yInt = (int)dY[j], zInt = (int)roundf(dZ[j]);
-                    
-                    // Only check X/Y bounds here so the drop can fall seamlessly through the floor
-                    if (xInt >= 0 && xInt < RNDR_X && yInt >= 0 && yInt < RNDR_Y) {
-                        
-                        // Protect TextureEngine from out-of-bounds Z queries
-                        int safeZ = max(0, min(zInt, RNDR_Z - 1));
-                        CRGB color = (sMode == MODE_SCATTER) ? 
-                                     ColorFromPalette(pal, (j * 37) % 255, 255, NOBLEND) : 
-                                     tex.getColor(xInt, yInt, safeZ);
-
-                        // 1. Draw the Head (if it is currently above the floor)
-                        if (zInt >= 0 && zInt < RNDR_Z) {
-                            setVoxel(xInt, yInt, zInt, color);
-                        }
-                        
-                        // 2. Draw the Tail (1 voxel above the head)
-                        if (zInt + 1 >= 0 && zInt + 1 < RNDR_Z) { 
-                            CRGB tail = color; 
-                            tail.nscale8(80); 
-                            setVoxel(xInt, yInt, zInt + 1, tail); 
-                        }
-                    }
-                    
-                    dZ[j] -= fallSpeed;
-                    
-                    // Let it fall to -1.5f so the tail has time to hit the Z=0 floor before deleting
-                    if (dZ[j] < -1.5f) active[j] = false;
-                }
-            }
-            showCube(); delay(5);
-        }
-    }
-    static void animateRain(uint32_t durationMs, int dropsPerFrame, float fallSpeed, CRGB::HTMLColorCode colorCode) { animateRain(durationMs, dropsPerFrame, fallSpeed, CRGBPalette16(CRGB(colorCode)),MODE_SOLID); }
-    static void animateRain(uint32_t durationMs) { animateRain(durationMs, 2, 0.8f, OceanColors_p, MODE_LINEAR_FLOW);}
-    
     // ==========================================
     // THE WILD MOUSE (Internal Engine)
     // ==========================================
@@ -1804,293 +741,6 @@ class Streamers {
         }
     }
 
-    // ==========================================
-    // BLACK HOLE (Lissajous Orbits)
-    // ==========================================
-    // Master Director
-    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs, CRGBPalette16 pal, ShaderMode sMode, BlackHoleOrbit orbitStyle = ORBIT_SYNC) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        
-        // Dynamically scale the star count so it looks dense on both 8x8x16 and 16^3
-        const int numOuter = (RNDR_X > 8) ? 12 : 6;
-        const int numInner = (RNDR_X > 8) ? 6 : 3;
-        
-        // Construct the 3D paint brush based on user arguments
-        TextureState tex(sMode, pal, 1.0f);
-        
-        float tBase = 0.0f;
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            uint32_t deltaMs = now - lastFrame;
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrame = now;
-            
-            tBase += (deltaMs / 1000.0f) * 1.5f; // Global orbit speed scalar
-
-            // 1. VOLUMETRIC FADE (The Comet Trails)
-            fadeAll(55);
-        
-            // 2. THE SINGULARITY
-            // A persistent, crisp white dot at the dead center of the array
-            int cx = (int)RNDR_CX;
-            int cy = (int)RNDR_CY;
-            int cz = (int)RNDR_CZ;
-            setVoxel(cx, cy, cz, CRGB::White);
-
-            // 3. DRAW ORBITS
-            auto drawOrbit = [&](int count, float radiusMultiplier, int tier) {
-                for (int i = 0; i < count; i++) {
-                    uint16_t phaseX, phaseY, phaseZ;
-                    
-                    if (orbitStyle == ORBIT_SYNC) {
-                        // All stars share the same frequency multipliers. 
-                        // The (i * 8192) evenly spaces them around the single ring.
-                        phaseX = (uint16_t)(tBase * 11000) + (i * 8192);
-                        phaseY = (uint16_t)(tBase * 13000) + (i * 8192);
-                        phaseZ = (uint16_t)(tBase * 9000)  + (i * 8192);
-                    } 
-                    else if (orbitStyle == ORBIT_SPLIT) {
-                        // Frequencies are aggressively shifted based on the 'tier' (0 or 1).
-                        phaseX = (uint16_t)(tBase * (11000 + tier * 4500)) + (i * 8192);
-                        phaseY = (uint16_t)(tBase * (13000 + tier * 3500)) + (i * 8192);
-                        phaseZ = (uint16_t)(tBase * (9000  + tier * 5500)) + (i * 8192);
-                    } 
-                    else { // ORBIT_CHAOTIC
-                        // Generate a globally unique ID for each star to decouple every plane
-                        int uniqueId = (tier * 10) + i; 
-                        phaseX = (uint16_t)(tBase * (11000 + uniqueId * 1500)) + (i * 8192);
-                        phaseY = (uint16_t)(tBase * (13000 - uniqueId * 1100)) + (i * 8192);
-                        phaseZ = (uint16_t)(tBase * (9000  + uniqueId * 1800)) + (i * 8192);
-                    }
-
-                    // Map the sine waves (-32767 to 32767) to the physical rendering limits
-                    float xPos = RNDR_CX + (sin16(phaseX) / 32768.0f) * (RNDR_CX * radiusMultiplier);
-                    float yPos = RNDR_CY + (sin16(phaseY) / 32768.0f) * (RNDR_CY * radiusMultiplier);
-                    float zPos = RNDR_CZ + (sin16(phaseZ) / 32768.0f) * (RNDR_CZ * radiusMultiplier);
-
-                    int px = constrain((int)roundf(xPos), 0, RNDR_X - 1);
-                    int py = constrain((int)roundf(yPos), 0, RNDR_Y - 1);
-                    int pz = constrain((int)roundf(zPos), 0, RNDR_Z - 1);
-
-                    CRGB starColor = tex.getColor(px, py, pz);
-                    CRGB existing = getVoxel(px, py, pz);
-                    setVoxel(px, py, pz, existing + starColor);
-                }
-            };
-
-            // Outer stars: Tier 0
-            drawOrbit(numOuter, 1.0f, 0);
-
-            // Inner stars: Tier 1
-            drawOrbit(numInner, 0.45f, 1);
-
-            showCube();
-            tex.advance(deltaMs); // Push the internal texture clock forward
-            if (speedMs > 0) delay(speedMs); else yield();
-        }
-    }
-    // Overload: Shader Mode + Custom Orbit (Defaults to Rainbow Palette)
-    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs, ShaderMode sMode, BlackHoleOrbit orbitStyle = ORBIT_SYNC) { 
-        animateBlackHole(durationMs, speedMs, RainbowColors_p, sMode, orbitStyle); 
-    }
-    
-    // Overload: The Ultimate Default (Rainbow + Linear Flow + Synchronized)
-    static void animateBlackHole(uint32_t durationMs, uint32_t speedMs = 15) { 
-        animateBlackHole(durationMs, speedMs, RainbowColors_p, MODE_LINEAR_FLOW, ORBIT_SYNC); 
-    }
-
-    // ==========================================
-    // 3D BOUNCING BALLS (Juggler's Matrix)
-    // ==========================================
-    struct BouncingBall {
-        uint32_t lastBounceTime;
-        float impactVelocity;
-        float height;
-    };
-
-    static void animateBouncingBalls(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t gravityParam = 128, uint8_t numBallsParam = 128) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-
-        // 1. FIT ALL COLUMNS INSIDE THE FIXED SHARED ARENA
-        // Each column owns MAX_BALLS_PER_COL slots. This is also the stride
-        // in both indexing loops below: c * MAX_BALLS_PER_COL + i.
-        // Reducing only numBalls would leave the old large stride in place
-        // and would STILL write beyond the arena on the later columns.
-        constexpr int TOTAL_COLS = RNDR_X * RNDR_Y;
-        constexpr int BALLS_PER_COL_CAPACITY =
-            SHARED_APP_MEMORY_BYTES / (TOTAL_COLS * sizeof(BouncingBall));
-        static_assert(BALLS_PER_COL_CAPACITY > 0, "One ball per column does not fit the arena");
-
-        const int requestedMaxBallsPerCol = (RNDR_X == 10) ? 6 : ((RNDR_X > 10) ? 9 : 10);
-        const int MAX_BALLS_PER_COL = min(requestedMaxBallsPerCol, BALLS_PER_COL_CAPACITY);
-
-        // With the current 12-byte structure: 16x16 permits 2 balls/column;
-        // 10x10 retains 6; 8x8 retains 10. No larger allocation is requested.
-        BouncingBall* balls = reinterpret_cast<BouncingBall*>(SharedAppMemory);
-
-        // The input knob still selects between one ball and the safe maximum.
-        unsigned numBalls = (numBallsParam * (MAX_BALLS_PER_COL - 1)) / 255 + 1;
-
-        // Pick each ball's color ONCE, before drawing any frames. On a 16^3
-        // cube the default density selects one ball per column, so every
-        // column uses ball ID zero. Lava's palette entry zero is black;
-        // previously that made the entire scene invisible for that palette.
-        //
-        // Preserve the normal ID-to-color mapping when its color is visible.
-        // If it is black, search the remaining palette entries for a visible
-        // color. An intentionally all-black palette remains all black.
-        // This small local array uses 6 bytes on 16^3; the shared arena,
-        // physics, number of balls, and frame timing do not change.
-        CRGB ballColors[BALLS_PER_COL_CAPACITY];
-
-        for (unsigned i = 0; i < numBalls; ++i) {
-            const uint8_t colorIndex = i * (256 / max((int)numBalls, 8));
-            CRGB color = ColorFromPalette(pal, colorIndex, 255, LINEARBLEND);
-
-            for (uint8_t entry = 0; entry < 16; ++entry) {
-                if (color.r != 0 || color.g != 0 || color.b != 0) {
-                    break;
-                }
-
-                const uint8_t fallbackIndex = entry * 16;
-                color = ColorFromPalette(pal, fallbackIndex, 255, LINEARBLEND);
-            }
-
-            ballColors[i] = color;
-        }
-
-        // 2. WLED PHYSICS TRANSLATION
-        // WLED alters gravity by dividing the time delta. 128 = half speed.
-        float timeDivisor = ((255 - gravityParam) / 64.0f) + 1.0f;
-        const float gravity = -9.81f; 
-
-        // INITIALIZATION
-        for (int c = 0; c < TOTAL_COLS; c++) {
-            for (unsigned i = 0; i < numBalls; i++) {
-                int idx = c * MAX_BALLS_PER_COL + i;
-                balls[idx].lastBounceTime = startTime;
-                
-                // Randomize initial kick velocity so they immediately decouple
-                float impactVelocityStart = sqrtf(-2.0f * gravity) * (random8(5, 11) / 10.0f);
-                balls[idx].impactVelocity = impactVelocityStart;
-                balls[idx].height = 0.0f;
-            }
-        }
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            uint32_t deltaMs = now - lastFrame;
-            if (deltaMs == 0) { yield(); continue; }
-            lastFrame = now;
-
-            clearAll();
-
-            for (int x = 0; x < RNDR_X; x++) {
-                for (int y = 0; y < RNDR_Y; y++) {
-                    int c = x + y * RNDR_X;
-
-                    for (unsigned i = 0; i < numBalls; i++) {
-                        int idx = c * MAX_BALLS_PER_COL + i;
-                        
-                        float timeSinceLastBounce = (now - balls[idx].lastBounceTime) / timeDivisor;
-                        float timeSec = timeSinceLastBounce / 1000.0f;
-                        
-                        // Physics: Height = 1/2 * a * t^2 + v * t
-                        balls[idx].height = (0.5f * gravity * timeSec + balls[idx].impactVelocity) * timeSec;
-
-                        // Floor Collision
-                        if (balls[idx].height <= 0.0f) {
-                            balls[idx].height = 0.0f;
-                            
-                            // WLED Dampening: Balls lose energy at different rates based on their ID
-                            float dampening = 0.9f - (float)i / (float)(numBalls * numBalls);
-                            balls[idx].impactVelocity *= dampening;
-                            balls[idx].lastBounceTime = now;
-
-                            // If it rests on the floor, give it a new random kick to keep it alive
-                            if (balls[idx].impactVelocity < 0.015f) {
-                                balls[idx].impactVelocity = sqrtf(-2.0f * gravity) * (random8(5, 11) / 10.0f);
-                            }
-                        } else if (balls[idx].height > 1.0f) {
-                            continue; // Prevent clipping outside the top glass
-                        }
-
-                        // 3. PHYSICAL Z-MAPPING
-                        int z = constrain((int)roundf(balls[idx].height * (RNDR_Z - 1)), 0, RNDR_Z - 1);
-
-                        // Each ball keeps the visible palette color chosen
-                        // for its ID when this invocation started.
-                        const CRGB color = ballColors[i];
-
-                        // Additive blending allows colors to mix beautifully when passing through each other
-                        CRGB existing = getVoxel(x, y, z);
-                        setVoxel(x, y, z, existing + color);
-                    }
-                }
-            }
-            showCube();
-            delay(15); 
-        }
-    }
-    
-    static void animateBpmVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p,
-                                     uint8_t effectSpeed = 64, BpmSpatialMode mode = BPM_CHECKERBOARD) {
-        // Preserve the original timed animation. The audio wrapper shares its
-        // geometry renderer, but supplies an independently tracked music phase.
-        const uint8_t bpm = map(effectSpeed, 0, 255, 10, 120);
-        uint8_t *phaseMap = reinterpret_cast<uint8_t *>(SharedAppMemory);
-        BpmRenderer::prepare(phaseMap, mode);
-        const uint32_t startTime = millis();
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            const uint32_t now = millis();
-            const uint8_t beat = beatsin8(bpm, 64, 255);
-            const uint8_t timeBase = now / 15;
-            BpmRenderer::draw(phaseMap, pal, uint8_t(beat - timeBase), timeBase);
-            // showCube() owns frame pacing and the mode-change checkpoint.
-            // A second delay here needlessly adds to LED transfer time.
-            showCube();
-        }
-    }
-
-    static void animateAtomicOrbits(uint32_t durationMs, uint32_t stepMs = 20) {
-        using GeometryEngine::Point3;
-        constexpr uint32_t ringTraceMs = 340, holdMs = 600;
-        constexpr unsigned rings = 4;
-        const Point3 center{RNDR_CX, RNDR_CY, RNDR_CZ};
-        const float radius = min(RNDR_CX, min(RNDR_CY, RNDR_CZ)) * 0.9f;
-        // Normals along tetrahedral directions avoid a common line of intersection.
-        const Point3 normals[rings] = {{1,1,1}, {1,-1,-1}, {-1,1,-1}, {-1,-1,1}};
-        const CRGBPalette16 rainbow = RainbowColors_p;
-        TextureState nucleus(MODE_SOLID);
-        const uint32_t started = millis();
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t elapsed = uint32_t(millis() - started);
-            const uint32_t tumbleStart = rings * ringTraceMs + holdMs;
-            const uint32_t movingMs = elapsed > tumbleStart ? elapsed - tumbleStart : 0;
-            const GeometryEngine::TumbleRotation rotation(GeometryEngine::tumbleAngles(movingMs * 0.2f, 0.4f));
-
-            clearAll();
-            for (unsigned i = 0; i < rings; ++i) {
-                const auto &n = normals[i];
-                const float reveal = (float(elapsed) - i * ringTraceMs) / ringTraceMs;
-                const float a = radius * 0.70710678f, b = radius * 0.40824829f;
-                const Point3 u{a*n.y, -a*n.x, 0};
-                const Point3 v{b*n.z*n.x, b*n.z*n.y, -2.0f*b};
-                GeometryEngine::drawEllipse3D(center, rotation.apply(u), rotation.apply(v), reveal,
-                                               rainbow, uint8_t(i * 64 + movingMs / 40));
-            }
-            nucleus.palette[0] = CHSV(uint8_t(elapsed / 48), 255, 255);
-            GeometryEngine::drawSphere(center.x, center.y, center.z, radius * 0.29f,
-                                       RENDER_SOLID, nucleus, 0, 0, 0, false);
-            showCube();
-            delay(stepMs);
-        }
-    }
-
     static void animateChunchunVolumetric(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, uint8_t effectSpeed = 128, uint8_t gapSizeParam = 128, ChunchunMode mode = CHUNCHUN_SERPENTINE) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
@@ -2155,9 +805,9 @@ class Streamers {
         }
     }
     // ==========================================
-    // COLORED BURSTS (Auto-Scaling 3D Rays)
+    // VECTOR ARMS (Auto-Scaling 3D Rays)
     // ==========================================
-  /*  static void animateColoredBursts(uint32_t durationMs, uint8_t effectSpeed = 128) {
+  /*  static void animateVectorArms(uint32_t durationMs, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
         
@@ -2220,9 +870,9 @@ class Streamers {
     }*/
 
     // ==========================================
-    // COLORED BURSTS (Auto-Scaling Anti-Aliased Rays)
+    // VECTOR ARMS (Auto-Scaling Anti-Aliased Rays)
     // ==========================================
-      static void animateColoredBursts(uint32_t durationMs, uint8_t effectSpeed = 128) {
+      static void animateVectorArms(uint32_t durationMs, uint8_t effectSpeed = 128) {
         uint32_t startTime = millis();
         uint32_t lastFrame = millis();
         
@@ -2269,7 +919,7 @@ class Streamers {
     }
     // Based on WLED Frizzles by Stepko and Andrew Tuline.
     // Fill rate counts moving heads per voxel. Trails add light behind them.
-    static void animateFrizzles(uint32_t durationMs, uint32_t stepMs = 20,
+    static void animateComets(uint32_t durationMs, uint32_t stepMs = 20,
                                 float headFillRate = 1.0f / 512.0f) {
         constexpr uint32_t voxelCount = uint32_t(RNDR_X) * RNDR_Y * RNDR_Z;
         const float fill = headFillRate > 0.0f ? min(headFillRate, 1.0f) : 0.0f;
@@ -2300,149 +950,6 @@ class Streamers {
         }
     }
 
-    static void animateFrizzlesMatrix(uint32_t durationMs, uint32_t stepMs = 20) {
-        constexpr uint8_t dimensions[] = {RNDR_X, RNDR_Y, RNDR_Z};
-        constexpr uint8_t trailFade = 24;
-        const uint8_t sweepAxis = random8(3);
-        const uint8_t firstLaneAxis = (sweepAxis + 1) % 3;
-        const uint8_t secondLaneAxis = (sweepAxis + 2) % 3;
-        const uint16_t width = dimensions[firstLaneAxis];
-        const uint16_t footprint = width * dimensions[secondLaneAxis];
-        const uint16_t laneCount = (footprint + 1) / 3;
-        const uint16_t travelLimit = (dimensions[sweepAxis] - 1) * 256;
-
-        struct Lane {
-            uint16_t phase;
-            uint8_t first;
-            uint8_t second;
-            uint8_t bpm;
-        };
-        Lane lanes[(CUBE_SIZE * CUBE_SIZE + 1) / 3];
-        uint16_t selected = 0;
-        for (uint16_t cell = 0; cell < footprint && selected < laneCount; ++cell) {
-            // Sample without replacement so exactly one third of the lanes
-            // are selected, rounded to the nearest whole lane.
-            if (random16(footprint - cell) >= laneCount - selected) continue;
-            // Start near the same wall, then let the different rates spread
-            // the matrix through the cube.
-            lanes[selected++] = {
-                uint16_t(40960u + random16(16384)),
-                uint8_t(cell % width), uint8_t(cell / width), random8(8, 33)
-            };
-        }
-
-        const CRGBPalette16 palette = RainbowColors_p;
-        const uint32_t started = millis();
-        clearAll();
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            fadeAll(trailFade);
-            const CRGB color = ColorFromPalette(palette, beatsin8(12, 0, 255, started));
-            for (uint16_t i = 0; i < laneCount; ++i) {
-                const Lane &lane = lanes[i];
-                uint16_t position[3];
-                position[sweepAxis] = beatsin16(lane.bpm, 0, travelLimit, started, lane.phase);
-                position[firstLaneAxis] = lane.first * 256;
-                position[secondLaneAxis] = lane.second * 256;
-                GeometryEngine::drawWuVoxel(position[0], position[1], position[2], color);
-            }
-            showCube();
-            delay(stepMs);
-        }
-    }
-
-    // ==========================================
-    // COLOR TWINKLES (Volumetric Sparkle)
-    // ==========================================
-    static void animateColorTwinkles(uint32_t durationMs, uint8_t effectSpeed = 128, uint8_t spawnSpeed = 128) {
-        uint32_t startTime = millis();
-        uint32_t lastFrame = millis();
-        
-        const uint32_t totalVoxels = RNDR_X * RNDR_Y * RNDR_Z;
-        
-        // 1. MEMORY OPTIMIZATION (No Heap Allocation)
-        // 1 bit per voxel. 512 bytes for a 16x16x16 cube.
-        const uint32_t stateBytes = (totalVoxels + 7) / 8;
-        
-        // Zero out the shared app memory block so we don't inherit garbage 
-        // data from whatever effect was running before this one.
-        memset(SharedAppMemory, 0, stateBytes);
-
-        uint8_t fadeUpAmount = 8 + (effectSpeed >> 2);
-        uint8_t fadeDownAmount = 8 + (effectSpeed >> 3);
-
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            uint32_t now = millis();
-            if (now - lastFrame < 15) { yield(); continue; } 
-            lastFrame = now;
-
-            // 2. FADE LOOP 
-            for (uint32_t i = 0; i < totalVoxels; i++) {
-                
-                uint8_t x = (i % (RNDR_X * RNDR_Y)) % RNDR_X;
-                uint8_t y = (i % (RNDR_X * RNDR_Y)) / RNDR_X;
-                uint8_t z = i / (RNDR_X * RNDR_Y);
-
-                CRGB c = getVoxel(x, y, z);
-                if (!c) continue; 
-
-                uint32_t byteIndex = i >> 3;
-                uint8_t bitNum = i & 0x07;
-                
-                // Read directly from the SharedAppMemory buffer
-                bool fadingUp = bitRead(SharedAppMemory[byteIndex], bitNum);
-
-                if (fadingUp) {
-                    CRGB inc = c;
-                    inc.nscale8(fadeUpAmount);
-                    if (!inc) inc = c; 
-
-                    c.r = qadd8(c.r, inc.r);
-                    c.g = qadd8(c.g, inc.g);
-                    c.b = qadd8(c.b, inc.b);
-
-                    if (c.r == 255 || c.g == 255 || c.b == 255) {
-                        bitWrite(SharedAppMemory[byteIndex], bitNum, 0); 
-                    }
-                    setVoxel(x, y, z, c);
-                    
-                } else {
-                    c.fadeToBlackBy(fadeDownAmount);
-                    setVoxel(x, y, z, c);
-                }
-            }
-
-            // 3. SPAWN LOOP
-            uint32_t maxSpawns = (totalVoxels / 50) + 1; 
-            
-            for (uint32_t j = 0; j <= maxSpawns; j++) {
-                
-                if (random8() <= spawnSpeed) { 
-                    for (uint8_t attempts = 0; attempts < 5; attempts++) {
-                        uint32_t i = random16(totalVoxels);
-                        uint8_t x = (i % (RNDR_X * RNDR_Y)) % RNDR_X;
-                        uint8_t y = (i % (RNDR_X * RNDR_Y)) / RNDR_X;
-                        uint8_t z = i / (RNDR_X * RNDR_Y);
-
-                        if (!getVoxel(x, y, z)) { 
-                            uint32_t byteIndex = i >> 3;
-                            uint8_t bitNum = i & 0x07;
-                            
-                            // Flag the bit in SharedAppMemory to fade up
-                            bitWrite(SharedAppMemory[byteIndex], bitNum, 1); 
-                            
-                            CRGB startColor = ColorFromPalette(RainbowColors_p, random8(), 64, NOBLEND);
-                            setVoxel(x, y, z, startColor);
-                            
-                            break; 
-                        }
-                    }
-                }
-            }
-
-            showCube();
-        }
-    }
-// ==========================================
     // VOLUMETRIC DNA SPIRAL (SDF Anti-Aliased & Optimized)
     // ==========================================
     static void animateDNASpiral(uint32_t durationMs, CRGBPalette16 pal = RainbowColors_p, float speedMultiplier = 1.0f) {
@@ -2544,131 +1051,6 @@ class Streamers {
     }
     
     
-    static constexpr uint32_t drift3DArmHoldMs = 7000;
-    static constexpr uint32_t drift3DCycleMs = 4 * drift3DArmHoldMs;
-
-    static void animateDrift3D(uint32_t durationMs, uint8_t effectSpeed) {
-        using GeometryEngine::Point3;
-        constexpr float diagonal = 0.57735027f;
-        constexpr float ringRadius = 0.89442719f;
-        constexpr float ringHeight = 0.44721360f;
-        // Tetrahedron, octahedron, cube corners, then a pentagonal
-        // antiprism. Adjacent entries share a hue, pairing opposite arms
-        // whenever the layout has them.
-        const Point3 directions[4][10] = {
-            {{diagonal, diagonal, diagonal}, {-diagonal, -diagonal, diagonal},
-             {diagonal, -diagonal, -diagonal}, {-diagonal, diagonal, -diagonal}},
-            {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}},
-            {{diagonal, diagonal, diagonal}, {-diagonal, -diagonal, -diagonal},
-             {diagonal, diagonal, -diagonal}, {-diagonal, -diagonal, diagonal},
-             {diagonal, -diagonal, diagonal}, {-diagonal, diagonal, -diagonal},
-             {diagonal, -diagonal, -diagonal}, {-diagonal, diagonal, diagonal}},
-            {{ringRadius, 0, ringHeight}, {-ringRadius, 0, -ringHeight},
-             {0.27639320f, 0.85065081f, ringHeight}, {-0.27639320f, -0.85065081f, -ringHeight},
-             {-0.72360680f, 0.52573111f, ringHeight}, {0.72360680f, -0.52573111f, -ringHeight},
-             {-0.72360680f, -0.52573111f, ringHeight}, {0.72360680f, 0.52573111f, -ringHeight},
-             {0.27639320f, -0.85065081f, ringHeight}, {-0.27639320f, 0.85065081f, -ringHeight}}
-        };
-        constexpr uint32_t transitionMs = 1200;
-        // For each target layout, map its arms back to nearby directions in
-        // the preceding layout. -1 marks a new arm.
-        constexpr int8_t previousArm[4][10] = {
-            {2, 6, 5, 9},
-            {0, 1, 3, 2, -1, -1},
-            {0, 1, 2, 3, 4, 5, -1, -1},
-            {-1, -1, 0, 1, 7, 6, 3, 2, 4, 5},
-        };
-        const CRGBPalette16 palette(RainbowColors_p);
-        const float maxRadius = 0.5f * sqrtf(RNDR_X * RNDR_X + RNDR_Y * RNDR_Y + RNDR_Z * RNDR_Z);
-        const uint32_t start = millis();
-        uint32_t lastFrame = start;
-        uint16_t rotationPhase = 0, spin = 0;
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
-            const uint32_t now = millis();
-            const uint32_t deltaMs = now - lastFrame;
-            if (deltaMs < 15) { yield(); continue; }
-            lastFrame = now;
-            const uint32_t elapsed = now - start;
-            const int layout = (elapsed % drift3DCycleMs) / drift3DArmHoldMs;
-            const int arms = 4 + 2 * layout;
-            const uint8_t hue = uint8_t(elapsed * uint64_t(21) / 1000); // 21 hue steps per second.
-            const auto armColor = [&](int arm, int count) {
-                return ColorFromPalette(palette, uint8_t(hue + (arm / 2) * 256 / (count / 2)));
-            };
-            Point3 frameDirections[10];
-            CRGB frameColors[10];
-            int frameArms = arms;
-            const uint32_t layoutAge = elapsed % drift3DArmHoldMs;
-            if (elapsed >= drift3DArmHoldMs && layoutAge < transitionMs) {
-                const int oldLayout = (layout + 3) % 4;
-                const int oldArms = 4 + 2 * oldLayout;
-                const float t = float(layoutAge) / transitionMs;
-                const float mix = t * t * (3.0f - 2.0f * t);
-                const uint8_t weight = uint8_t(lroundf(255.0f * mix));
-                uint16_t carried = 0;
-                for (int arm = 0; arm < arms; ++arm) {
-                    const Point3& to = directions[layout][arm];
-                    const int old = previousArm[layout][arm];
-                    frameDirections[arm] = to;
-                    frameColors[arm] = armColor(arm, arms);
-                    if (old < 0) {
-                        frameColors[arm].nscale8(weight);
-                        continue;
-                    }
-                    carried |= 1u << old;
-                    const Point3& from = directions[oldLayout][old];
-                    const Point3 direction{from.x + mix * (to.x - from.x),
-                                           from.y + mix * (to.y - from.y),
-                                           from.z + mix * (to.z - from.z)};
-                    // Keep the arm's reach while its direction changes.
-                    const float inverseLength = 1.0f / sqrtf(direction.x * direction.x +
-                                                              direction.y * direction.y +
-                                                              direction.z * direction.z);
-                    frameDirections[arm] = {direction.x * inverseLength, direction.y * inverseLength,
-                                            direction.z * inverseLength};
-                    frameColors[arm] = blend(armColor(old, oldArms), frameColors[arm], weight);
-                }
-                for (int old = 0; old < oldArms; ++old) {
-                    if (carried & (1u << old)) continue;
-                    frameDirections[frameArms] = directions[oldLayout][old];
-                    frameColors[frameArms] = armColor(old, oldArms);
-                    frameColors[frameArms++].nscale8(255 - weight);
-                }
-            } else {
-                for (int arm = 0; arm < arms; ++arm) {
-                    frameDirections[arm] = directions[layout][arm];
-                    frameColors[arm] = armColor(arm, arms);
-                }
-            }
-            const float pulse = (sin16(uint16_t(elapsed * effectSpeed / 24)) + 32768) / 65536.0f;
-            const uint32_t speed = uint32_t((20 + effectSpeed / 3) * (1.0f + 0.10f * pulse) * deltaMs / 15.0f);
-            rotationPhase += speed;
-            spin += 20 * speed;
-            constexpr float degreesPerStep = 360.0f / 65536.0f;
-            const float angle = rotationPhase * degreesPerStep;
-            const GeometryEngine::TumbleRotation tumble({angle, 2 * angle, 3 * angle});
-            const float bend = 1000.0f + 29000.0f * pulse * pulse;
-
-            fadeAll(155);
-            for (float radius = 0; radius <= maxRadius; radius += 0.125f) {
-                const uint16_t twist = spin - uint16_t(bend * radius / maxRadius);
-                const float sine = sin16(twist) / 32768.0f, cosine = cos16(twist) / 32768.0f;
-                const uint8_t brightness = min(255, 64 + int(radius * 30));
-                for (int arm = 0; arm < frameArms; ++arm) {
-                    const auto& dir = frameDirections[arm];
-                    const auto p = tumble.apply({radius * (dir.x * cosine - dir.y * sine),
-                                                 radius * (dir.x * sine + dir.y * cosine), radius * dir.z});
-                    CRGB color = frameColors[arm];
-                    color.nscale8(brightness);
-                    GeometryEngine::drawWuVoxel(lroundf(256 * (RNDR_CX + p.x)),
-                                                lroundf(256 * (RNDR_CY + p.y)),
-                                                lroundf(256 * (RNDR_CZ + p.z)), color);
-                }
-            }
-            showCube();
-        }
-    }
-
     // ==========================================
     // 3D DRIFT ROSE (Harmonic Fibonacci Mandala)
     // ==========================================
@@ -2792,7 +1174,7 @@ class Streamers {
 
     // Inspired by WLED 16.0.1's 2D Plasma Ball (Stepko, modified by Andrew
     // Tuline). Warp filaments through the volume and cycle one shared hue.
-    static void animateWledPlasmaBall(uint32_t durationMs, uint8_t effectSpeed = 128) {
+    static void animatePlasmaArms(uint32_t durationMs, uint8_t effectSpeed = 128) {
         constexpr float referenceHalfSpan = 7.5f;
         constexpr uint16_t noiseSpan = 480;
         const CRGBPalette16 palette = RainbowColors_p;

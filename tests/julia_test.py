@@ -149,19 +149,21 @@ constexpr int NUM_SHAPES=2, TOTAL_CONCEPTS=5;
 struct Rule { bool enabled; };
 Rule SHAPE_RULES[]={{true},{false}};
 Rule SCENE_RULES[]={{true},{false},{true}};
-int seqConcept=-1;
+using ConceptType = int;
+constexpr ConceptType orderedConcepts[] = {2, 1, 4, 3, 0};
+int seqIndex=-1;
 constexpr int CONCEPT_SHAPE_BOX=0;
 uint8_t orderedBoxStep=0;
-int select() { __SELECT__ return seqConcept; }
+int select() { __SELECT__ return orderedConcepts[seqIndex]; }
 namespace TestDemo { __STOP__ __ADVANCE__ }
 int main() {
-    assert(select()==4); // last slot/new Julia
-    --seqConcept;
-    assert(select()==2); // skip disabled
-    --seqConcept;
-    assert(select()==0);
-    --seqConcept;
-    assert(select()==4); // wrap
+    assert(select()==0); // Box is first in descending playback
+    --seqIndex;
+    assert(select()==4); // skip disabled
+    --seqIndex;
+    assert(select()==2);
+    --seqIndex;
+    assert(select()==0); // wrap
     assert(TestDemo::animationHoldUntilNext());
     assert(!TestDemo::routineTimeRemaining(100,10));
     TestDemo::Detail::animationDurationHeld()=true;
@@ -169,22 +171,22 @@ int main() {
     TestDemo::Detail::animationDurationHeld()=false;
     assert(!TestDemo::routineTimeRemaining(100,10));
     order=PlaybackOrder::Sequential;
-    seqConcept=-1;
-    assert(select()==0);
-    ++seqConcept;
+    seqIndex=-1;
     assert(select()==2);
+    ++seqIndex;
+    assert(select()==4);
     order=PlaybackOrder::Descending;
-    seqConcept=4;
+    seqIndex=2;
     TestDemo::Detail::animationDurationHeld()=true;
     TestDemo::Detail::advanceAnimation();
-    assert(seqConcept==3); // Next still moves once while held
-    seqConcept=CONCEPT_SHAPE_BOX;
+    assert(seqIndex==1); // Next still moves once while held
+    seqIndex=4;
     orderedBoxStep=7;
     TestDemo::Detail::advanceAnimation();
-    assert(seqConcept==CONCEPT_SHAPE_BOX); // Next auditions the remaining Box textures
+    assert(seqIndex==4); // Next auditions the remaining Box textures
     orderedBoxStep=0;
     TestDemo::Detail::advanceAnimation();
-    assert(seqConcept==-1); // The final Box texture advances the deck
+    assert(seqIndex==3); // The final Box texture advances the deck
     TestDemo::Detail::stopAnimation();
     assert(!TestDemo::Detail::animationDurationHeld());
     assert(!animationSceneActive);
@@ -192,10 +194,10 @@ int main() {
 '''
 
 def main():
-    code=function((SOURCE/'Streamers.h').read_text(),'static void animateJulia(')
+    code=function((SOURCE/'JuliaRenderer.h').read_text(),'static void animateJulia(')
     demo=(SOURCE/'TestDemo.cpp').read_text()
     start=demo.index('            const int direction =')
-    end=demo.index('            concept = seqConcept;',start)
+    end=demo.index('            concept = orderedConcepts[seqIndex];',start)
     with tempfile.TemporaryDirectory(prefix='cubina-julia-') as directory:
         folder=Path(directory)
         for canvas in (16,10):

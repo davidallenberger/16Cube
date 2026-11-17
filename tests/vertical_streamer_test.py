@@ -68,9 +68,11 @@ void showCube(){
  }
  ++frames;
 }
+namespace StreamerGeometry {
+__THICKNESS__
+}
 class Streamers {
 public:
-__THICKNESS__
 __STREAMER__
 };
 int main(){
@@ -80,14 +82,15 @@ int main(){
 #ifdef CLUSTERED
  assert(redirects>0);
 #endif
- assert(fabsf(Streamers::getThicknessFromVolume(0.1875f/4)-sqrtf(CANVAS*CANVAS*0.1875f/4)/2)<0.0001f);
+ assert(fabsf(StreamerGeometry::getThicknessFromVolume(0.1875f/4)-sqrtf(CANVAS*CANVAS*0.1875f/4)/2)<0.0001f);
  printf("Four streamers: %dx%dx16, independent plans, bounds and work limit pass.\n",CANVAS,CANVAS);
 }
 '''
 
 def main():
     text = (SOURCE / 'Streamers.h').read_text()
-    code = HARNESS.replace('__THICKNESS__', function(text, 'static float getThicknessFromVolume('))
+    geometry = (SOURCE / 'StreamerGeometry.h').read_text()
+    code = HARNESS.replace('__THICKNESS__', function(geometry, 'inline float getThicknessFromVolume('))
     loop = function(text, 'static void animateVerticalStreamer(')
     # Count redirections in the host copy, without adding firmware diagnostics.
     loop = loop.replace('if (redirect) {', 'if (redirect) { ++redirects;')

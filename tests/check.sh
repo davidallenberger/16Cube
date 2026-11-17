@@ -51,12 +51,10 @@ stage "$command_src" "$command_include" "$work/command" \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \
-    TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h MidrangeBoost.h Audio.cpp Audio.h Depth.cpp Depth.h GeometryEngine.h
-# Compile the shared BPM and Julia renderers from Streamers.h. Stub the
-# Drift Rose renderer for the host audio checks. The firmware build
-# compiles the actual Streamers effects.
-sed '/^#include "GeometryEngine.h"/,$d' "$render_src/Streamers.h" > "$work/render/Streamers.h"
-cat >> "$work/render/Streamers.h" <<'EOF'
+    TestDemo.h TestDemoAudio.cpp SpacerCheck.h SpacerCheck.cpp UARTReceiver.cpp UARTReceiver.h AudioFrame.h AudioFrameClock.h MidrangeBoost.h Audio.cpp Audio.h Depth.cpp Depth.h GeometryEngine.h JuliaRenderer.h BpmRenderer.h
+# Stub Drift Rose for the host audio checks. The firmware build compiles
+# the actual Streamers effects.
+cat > "$work/render/Streamers.h" <<'EOF'
 class Streamers {
 public:
     static void animateDriftRose3D(uint32_t, CRGBPalette16, uint8_t,

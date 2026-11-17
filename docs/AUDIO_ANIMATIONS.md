@@ -607,10 +607,10 @@ fractal occupancy itself is nonlinear. Hardware/source calibration is unchanged.
 Debug includes measured volume, mapped closure, gain and gamma for later tuning.
 
 The approved 4-second color holds and 2-second saturated hue transitions remain
-independent of volume. The non-audio Julia card remains last in the animation
-deck with timed c motion and development Hold. Both call the same JuliaRenderer
-in Streamers.h, next to shared BpmRenderer; Surfaces::animateJulia remains the
-normal entry point. The audio wrapper supplies plain callbacks for closure and
+independent of volume. The non-audio Julia card plays in the Surfaces group
+with timed c motion and development Hold. Both modes call the shared renderer
+in `JuliaRenderer.h`. The ambient entry point is `Surfaces::animateJulia`.
+The audio wrapper supplies plain callbacks for closure and
 managed duration/Next, without allocation, private timers or detector state.
 
 Validation includes real receiver->audio snapshot->Julia integration for quiet,

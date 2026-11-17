@@ -3,6 +3,6 @@ Volumetric cube animation system
 
 ## Project status
 
-- **Polar Lights is an audition.** Watch it on the full-size cube before
+- **Aurora is an audition.** Watch it on the full-size cube before
   deciding whether to keep it. Check whether the thin curtains and faint
   vertical wisps read clearly through the depth from normal viewing angles.

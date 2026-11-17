@@ -46,7 +46,7 @@ namespace TestDemo {
     // It never enters the art/billboard decks. Changing order keeps the current
     // routine and applies the new ordering to subsequent selection.
     AudioPlaybackSettings &audioPlayback();
-    PlaybackOrder &animationOrder(); // Descending ordered tests start at the newest/last entry.
+    PlaybackOrder &animationOrder(); // Descending ordered tests start at the last position in the ordered deck.
     void runAudio();
     void runAnimation();
     const char *currentAudioRoutineName();

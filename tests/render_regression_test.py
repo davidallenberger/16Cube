@@ -3,7 +3,7 @@
 
 Only these production functions are extracted into small host harnesses.
 This exercises the actual function bodies without stubbing every unrelated
-animation in Streamers.h/TestDemo.cpp. It does not emulate ESP32 LED timing.
+animation in Balls.h/TestDemo.cpp. It does not emulate ESP32 LED timing.
 """
 
 import os
@@ -97,12 +97,12 @@ void setVoxel(int x, int y, int z, CRGB color) {
         ++lit;
     }
 }
-class Streamers {
+class Balls {
 public:
 __BALL_CODE__
 };
 int main() {
-    static_assert(sizeof(Streamers::BouncingBall) == 12, "Test matches ESP32 ball size");
+    static_assert(sizeof(Balls::BouncingBall) == 12, "Test matches ESP32 ball size");
     const CRGB starts[] = {
         CRGB(0, 0, 0),      // Lava: entry zero black, entry one maroon.
         CRGB(25, 25, 112),  // Ocean.
@@ -125,7 +125,7 @@ int main() {
             writes = 0;
             lit = 0;
             colorCalls = 0;
-            Streamers::animateBouncingBalls(200, pal, 128, density);
+            Balls::animateBouncingBalls(200, pal, 128, density);
             assert(frames > 0);
             assert(writes > 0);
             assert(palette == 4 ? lit == 0 : lit == writes);
@@ -212,10 +212,10 @@ def main():
     if not shutil.which(COMPILER):
         raise SystemExit('Install a C++ compiler or set CXX to its executable.')
 
-    streamers = (SOURCE / 'Streamers.h').read_text()
-    beginning = streamers.index('    struct BouncingBall {')
-    ending = streamers.index('    static void animateBpmVolumetric(', beginning)
-    ball_code = streamers[beginning:ending]
+    balls = (SOURCE / 'Balls.h').read_text()
+    beginning = balls.index('    struct BouncingBall {')
+    ball_code = (balls[beginning:balls.index('    static void animateBouncingBalls(', beginning)]
+                 + function(balls, '    static void animateBouncingBalls('))
     demo = (SOURCE / 'TestDemo.cpp').read_text()
     playback_code = function(demo, 'void runAnimation()')
 

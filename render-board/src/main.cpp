@@ -3,6 +3,11 @@
 #include "CubeCore.h"
 #include "TestDemo.h"
 
+#include "Balls.h"
+#include "Boxes.h"
+#include "Patterns.h"
+#include "Swirls.h"
+#include "Explosions.h"
 #include "Planes.h"
 #include "Letters.h"
 #include "Icons.h"
@@ -81,7 +86,7 @@ Streamers::animateChartExtruded(10000, Streamers::RATIO_5_3, 2, ForestColors_p);
 Streamers::animateDriftRose3D(10000);
 // 1. THE CHECKERBOARD PISTON
 // 10 Seconds. (Your previous view). The interlocking 2D scatter mapped to Z-columns.
-Streamers::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
+Patterns::animateBpmVolumetric(10000, RainbowColors_p, 64, BPM_CHECKERBOARD); //<--the only one I like
 return;
 // 2. THE LISSAJOUS WEAVE (The Rubber Band)
 // 10 Seconds. Gap size 128 (Mid). 
@@ -91,8 +96,8 @@ Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_
 //Streamers::animateLissajous3D(10000, PartyColors_p, 128);
 return;
 
-// Drift 3D with cycling rainbow pairs.
-Streamers::animateDrift3D(120000, 32);
+// Pinwheel Arms with cycling rainbow pairs.
+Swirls::animatePinwheelArms(120000, 32);
 return;
 // 1. THE DISTORTED SOLID BOX
 // 10 Seconds. A perfectly static, solid 3D box. The physical geometry 
@@ -116,25 +121,25 @@ Streamers::animateDNASpiral(10000, RainbowColors_p, .85f);
 // 1. THE CLASSIC LAVA LAMP
 // 15 seconds. Uses default LavaColors_p. Smooth, warm red/orange 
 // blobs that squish against the glass and seamlessly mix colors when they merge.
-Streamers::animateLavaLamp(10000);// <--workable
+Balls::animateLavaLamp(10000);// <--workable
 
 // 2. THE ALIEN INCUBATOR (Acid Colors)
 // 15 seconds. Fills 20% of the cube. Uses PartyColors_p for high-contrast neon 
 // blobs (Cyan, Magenta, Yellow) that dynamically blend into wild secondary 
 // colors (e.g. Purple, Green) as their energy fields intersect mid-air.
-Streamers::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
+Balls::animateLavaLamp(10000, 1.0f, 0.20f, PartyColors_p); // <--workable
 
 // 3. RAPID BOILING (Fast Physics)
 // 15 seconds. Runs at 2.5x speed multiplier and drops the volume to 10% 
 // to create small, highly kinetic droplets that shoot up, bounce off 
 // the ceiling, and violently merge on the way down.
-Streamers::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this and kill the bouncing ball
+Balls::animateLavaLamp(10000, 2.5f, 0.10f, RainbowColors_p); //<--use this and kill the bouncing ball
 
 // 4. THE DEEP FREEZE
 // 15 seconds. Very slow movement (0.3x speed). Massive volume (20%).
 // Creates huge, sluggish clouds of deep oceanic blues and greens that barely 
 // separate from each other, simulating extreme viscosity.
-Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
+Balls::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
 
 // 3. THE DRIFT ROSE MANDALA
 // 10 Seconds. Default WLED speed (128). Rainbow default.
@@ -143,10 +148,10 @@ Streamers::animateLavaLamp(10000, 0.3f, 0.20f, OceanColors_p); // <--workable
 Streamers::animateDriftRose3D(10000, RainbowColors_p, 200);
 
 
-Streamers::animateColorTwinkles(10000);
+Patterns::animateColorTwinkles(10000);
 // 1. THE VOLUMETRIC CORE
 // 10 Seconds. Medium speed. Graceful architectural sweeping.
-Streamers::animateColoredBursts(10000, 96);
+Streamers::animateVectorArms(10000, 96);
 // 1. THE LASSOED SERPENTINE (The 3D Matrix Scanner)
 // 10 Seconds. Gap size locked down to 32 as requested. 
 // Tightly groups the flock so they scan through the literal rows 
@@ -165,40 +170,40 @@ Streamers::animateChunchunVolumetric(10000, RainbowColors_p, 128, 128, CHUNCHUN_
 // 1. THE CLASSIC JUGGLER (Rainbow Default)
 // 10 Seconds. 128 Gravity, 128 Count. Every column behaves like a popcorn 
 // popper full of tracking, independent neon balls jumping and crossing paths.
-Streamers::animateBouncingBalls(10000);
+Balls::animateBouncingBalls(10000);
 
 // 2. THE DEEP SEA POPPER (Ocean Palette)
 // 10 Seconds. Beautiful, cool-toned tracking. Because colors are fixed to 
 // the balls, you can perfectly track the teal ball passing through the blue ball.
-Streamers::animateBouncingBalls(10000, OceanColors_p);
+Balls::animateBouncingBalls(10000, OceanColors_p);
 
 // 4. THE MANIC PARTY (Party Palette)
 // 10 Seconds. Cranks the ball count to 220 and the gravity/speed to 200. 
 // Nearly maximizes the memory arena for a frantic, high-density kinetic explosion.
-Streamers::animateBouncingBalls(10000, PartyColors_p, 200, 220);
+Balls::animateBouncingBalls(10000, PartyColors_p, 200, 220);
 
 
 // 1. THE SATURN RING (Sync)
 // Runs for 10 seconds. All stars are locked to the exact same tumbling 
 // 3D plane, creating a majestic, unified ring system. 
 // Uses the default Rainbow palette and Linear Flow.
-Streamers::animateBlackHole(10000);
+Swirls::animateBlackHole(10000);
 return;
   /*
 // 2. THE SPHERICAL HEARTBEAT
 // 10 Seconds. 3D shells of light spawn at the core and push out to the glass.
 // Uses PartyColors_p and a slightly faster speed (90).
-Streamers::animateBpmVolumetric(10000, PartyColors_p, 90, BPM_SPHERE);
+Patterns::animateBpmVolumetric(10000, PartyColors_p, 90, BPM_SPHERE);
 
 // 3. THE DIAGONAL SLICER
 // 10 Seconds. Solid, 45-degree angled planes washing through the cube.
 // Uses OceanColors_p and a slow speed (40) for a sweeping sonar feel.
-Streamers::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
+Patterns::animateBpmVolumetric(10000, OceanColors_p, 40, BPM_DIAGONAL);
 
 // 4. THE TWISTING HELIX
 // 10 Seconds. A solid spiral staircase of light threading up and down the Z-axis.
 // Uses LavaColors_p at default speed (64) for a twisting thermal vortex.
-Streamers::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
+Patterns::animateBpmVolumetric(10000, LavaColors_p, 64, BPM_HELIX);
 */
 
   
@@ -279,15 +284,15 @@ Shapes::animateExpandingCollapsing(SHAPE_BOX, 5000, RENDER_WIREFRAME, CRGB::Gree
 Shapes::animateExpandingCollapsing(SHAPE_BOX, 5000, RENDER_SOLID, PartyColors_p, MODE_UNIFORM_CYCLE, 25, true);
   
   // Specialty Box Movements
-Shapes::animateFlyingBox(5000,  10);
+Boxes::animateFlyingBox(5000,  10);
 
-Shapes::animateMovingBoxes(15000, 15);  
+Boxes::animateMovingBoxes(15000, 15);
 
 // 5. The Elevator Block (A solid cube sliding through the floor
 Shapes::animateSpring(SHAPE_BOX, 5000, RENDER_SOLID, LavaColors_p, MODE_NOISE_FIELD, 25);
 
 #ifndef TARGET_2026_CUBOID
-  //xxx kind of a whatever Shapes::animatePulseBoxSequence(4, false, RENDER_SHELL, TEX_RANDOM, PartyColors_p,15); 
+  //xxx kind of a whatever Boxes::animatePulseBoxSequence(4, false, RENDER_SHELL, TEX_RANDOM, PartyColors_p,15);
 #endif
 
   // Tumbling/spinning not interesting or relevant
@@ -304,13 +309,13 @@ Shapes::animateSpring(SHAPE_BOX, 5000, RENDER_SOLID, LavaColors_p, MODE_NOISE_FI
   Shapes::animateExpandingCollapsing(SHAPE_SPHERE, 5000, RENDER_SHELL, MODE_HIPHOTIC, 10);
   Shapes::animateExpandingCollapsing(SHAPE_SPHERE, 5000, RENDER_SOLID, PartyColors_p, MODE_NOISE_FIELD, 20);
   // 1. The Perlin Cloud (MODE_NOISE_FIELD) The solid ball is painted with 3D noise. As it rolls, organic clouds of rainbow colors boil and shift across its surface.
-  Shapes::animateRollingBall(5000, RENDER_SOLID, RainbowColors_p, MODE_NOISE_FIELD);
+  Balls::animateRollingBall(5000, RENDER_SOLID, RainbowColors_p, MODE_NOISE_FIELD);
   // 2. The Digital Glitter (MODE_SCATTER) The solid ball is covered in rapidly shifting, random digital hash noise, sparkling exclusively in deep ocean blues and greens.
-  Shapes::animateRollingBall(5000, RENDER_SOLID, OceanColors_p, MODE_SCATTER);
+  Balls::animateRollingBall(5000, RENDER_SOLID, OceanColors_p, MODE_SCATTER);
   // 3. The Generative Math Core (MODE_HIPHOTIC) The ball is driven by complex, self-contained sine/cosine math, creating trippy, organic patterns that evolve internally as it rolls.
-  Shapes::animateRollingBall(5000, RENDER_SOLID, MODE_HIPHOTIC);
+  Balls::animateRollingBall(5000, RENDER_SOLID, MODE_HIPHOTIC);
   // 4. The Cycling Shell (RENDER_SHELL with MODE_UNIFORM_CYCLE) A hollow ball rolling around, with its outer surface smoothly pulsing as one uniform color through the neon party palette.
-  Shapes::animateRollingBall(5000, RENDER_SHELL, PartyColors_p, MODE_UNIFORM_CYCLE);  // Tumbling, spinning not interesting or relevant
+  Balls::animateRollingBall(5000, RENDER_SHELL, PartyColors_p, MODE_UNIFORM_CYCLE);  // Tumbling, spinning not interesting or relevant
   // wireframe not relevant.
 
   // ==========================================
@@ -399,11 +404,11 @@ Shapes::animateSpring(SHAPE_TETRAHEDRON, 5000, RENDER_SOLID, CRGB::Cyan, 25);
   
   //A bunch of vertical oriented winds, lines etc.
   // 1. The Classic Storm (Ocean colors, starts at 1.0 RPS, accelerates to 3.5 RPS)
-  Streamers::animateTornado(5000, 25, OceanColors_p, 1.0f);
+  Swirls::animateTornado(5000, 25, OceanColors_p, 1.0f);
   // 2. Fire Whirl (Lava colors, starts violently fast at 2.5 RPS, accelerates to 8.75 RPS)
-  Streamers::animateTornado(5000, 30, LavaColors_p, 2.5f);
+  Swirls::animateTornado(5000, 30, LavaColors_p, 2.5f);
   // 3. Magic Funnel (Rainbow cycling, slow, majestic wind-up)
-  Streamers::animateTornado(5000, 25, RainbowColors_p, 0.5f);
+  Swirls::animateTornado(5000, 25, RainbowColors_p, 0.5f);
   // 1.5 revs per second (The speed you were seeing)
   Streamers::animateHula(5000, 20, RainbowColors_p, 3.5f);
   // 4.0 revs per second (Aggressive, rapid spinning)
@@ -411,28 +416,28 @@ Shapes::animateSpring(SHAPE_TETRAHEDRON, 5000, RENDER_SOLID, CRGB::Cyan, 25);
   // 8.0 revs per second (Helicopter mode)
   Streamers::animateHula(5000, 20, OceanColors_p, 3.0f);
   // Classic 2-streamer cyclone using 4% volume and the Rainbow cycle
-  Streamers::animateCyclone(5000, 2, 0.04f, RainbowColors_p, MODE_UNIFORM_CYCLE);
+  Swirls::animateCyclone(5000, 2, 0.04f, RainbowColors_p, MODE_UNIFORM_CYCLE);
   // A denser 4-streamer vortex using 3% volume and the Lava cycle
-  Streamers::animateCyclone(5000, 3, 0.03f, LavaColors_p, MODE_UNIFORM_CYCLE); 
+  Swirls::animateCyclone(5000, 3, 0.03f, LavaColors_p, MODE_UNIFORM_CYCLE);
   // 1. VERTICAL STREAMER: Consumes 6.25% of the cube volume, wandering randomly
   Streamers::animateVerticalStreamer(5000, 5, 0.1875f, RainbowColors_p, MODE_UNIFORM_CYCLE);
   Streamers::animateVerticalPipes(5000, 30);
 
   // Version of rain
   // Uses default fallSpeed (0.4) and returnSpeed (0.8) for that fast "zoom" back up.
-  Streamers::animateRandomFall(10000);
-  Streamers::animateRain(5000, 2, 0.6f, PartyColors_p, MODE_SCATTER);
+  Patterns::animateRandomFall(10000);
+  Patterns::animateRain(5000, 2, 0.6f, PartyColors_p, MODE_SCATTER);
   // Classic solid rain in a beautiful deep blue
-  Streamers::animateRain(5000, 2, 0.6f, CRGB::Blue);
+  Patterns::animateRain(5000, 2, 0.6f, CRGB::Blue);
   // Acid rain: constantly cycling through neon party colors
-  Streamers::animateRain(5000, 3, 0.8f, PartyColors_p, MODE_UNIFORM_CYCLE);
+  Patterns::animateRain(5000, 3, 0.8f, PartyColors_p, MODE_UNIFORM_CYCLE);
   // Lava rain: Heavy, slower drops drawn using the noise engine
-  Streamers::animateRain(5000, 1, 0.3f, LavaColors_p, MODE_NOISE_FIELD);
+  Patterns::animateRain(5000, 1, 0.3f, LavaColors_p, MODE_NOISE_FIELD);
   
   //Misc
   // Scurries through a shifting rainbow space
   Streamers::animateWildMouse(5000, 30);
-  Streamers::animateFireworks(10000);
+  Explosions::animateFireworks(10000);
 
  
   // ==========================================

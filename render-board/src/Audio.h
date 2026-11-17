@@ -3,7 +3,7 @@
 #include "CubeCore.h"
 #include "TextureEngine.h"
 #include "UARTReceiver.h"
-#include "Streamers.h"
+#include "BpmRenderer.h"
 
 namespace AudioLayouts {
     // Top view, row-major tile indices. Each successive pair moves clockwise

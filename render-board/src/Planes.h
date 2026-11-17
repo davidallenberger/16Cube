@@ -3,7 +3,7 @@
 #include "TestDemo.h"
 #include "CubeCore.h"
 #include "GeometryEngine.h"
-#include "Streamers.h"
+#include "Explosions.h"
 #include "TextureEngine.h"
 
 class Planes {
@@ -41,7 +41,57 @@ private:
     
 
 public:
-    static void animatePlaneSplit(uint32_t durationMs) {
+    static void animatePlaneTrails(uint32_t durationMs, uint32_t stepMs = 20) {
+        constexpr uint8_t dimensions[] = {RNDR_X, RNDR_Y, RNDR_Z};
+        constexpr uint8_t trailFade = 24;
+        const uint8_t sweepAxis = random8(3);
+        const uint8_t firstLaneAxis = (sweepAxis + 1) % 3;
+        const uint8_t secondLaneAxis = (sweepAxis + 2) % 3;
+        const uint16_t width = dimensions[firstLaneAxis];
+        const uint16_t footprint = width * dimensions[secondLaneAxis];
+        const uint16_t laneCount = (footprint + 1) / 3;
+        const uint16_t travelLimit = (dimensions[sweepAxis] - 1) * 256;
+
+        struct Lane {
+            uint16_t phase;
+            uint8_t first;
+            uint8_t second;
+            uint8_t bpm;
+        };
+        Lane lanes[(CUBE_SIZE * CUBE_SIZE + 1) / 3];
+        uint16_t selected = 0;
+        for (uint16_t cell = 0; cell < footprint && selected < laneCount; ++cell) {
+            // Sample without replacement so exactly one third of the lanes
+            // are selected, rounded to the nearest whole lane.
+            if (random16(footprint - cell) >= laneCount - selected) continue;
+            // Start near the same wall, then let the different rates spread
+            // the matrix through the cube.
+            lanes[selected++] = {
+                uint16_t(40960u + random16(16384)),
+                uint8_t(cell % width), uint8_t(cell / width), random8(8, 33)
+            };
+        }
+
+        const CRGBPalette16 palette = RainbowColors_p;
+        const uint32_t started = millis();
+        clearAll();
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            fadeAll(trailFade);
+            const CRGB color = ColorFromPalette(palette, beatsin8(12, 0, 255, started));
+            for (uint16_t i = 0; i < laneCount; ++i) {
+                const Lane &lane = lanes[i];
+                uint16_t position[3];
+                position[sweepAxis] = beatsin16(lane.bpm, 0, travelLimit, started, lane.phase);
+                position[firstLaneAxis] = lane.first * 256;
+                position[secondLaneAxis] = lane.second * 256;
+                GeometryEngine::drawWuVoxel(position[0], position[1], position[2], color);
+            }
+            showCube();
+            delay(stepMs);
+        }
+    }
+
+    static void animateSmashingPlanes(uint32_t durationMs) {
         constexpr uint32_t travelMs = 900;
         constexpr uint32_t soloTrips = 4;
         constexpr uint32_t pairedTrips = 4;
@@ -116,7 +166,7 @@ public:
                 if (detonate) break;
                 delay(stepMs);
             }
-            Streamers::animatePlaneBurst(axis, stepMs);
+            Explosions::animateSmashingPlanesBurst(axis, stepMs);
             axis = (axis + 1 + random8(2)) % 3;
         }
     }
@@ -173,55 +223,6 @@ public:
                                        recipe[2], mix);
                     color.nscale8(brightness);
                     for (int y = 0; y < RNDR_Y; ++y) setVoxel(x, y, z, color);
-                }
-            }
-            showCube();
-            delay(stepMs);
-        }
-    }
-
-    // Based on WLED's Tartan (Elliott Kember, modified by Andrew Tuline).
-    // The three stripe profiles are evaluated separately, then added in RGB.
-    static void animateTartan(uint32_t durationMs, uint32_t stepMs = 24) {
-        constexpr float bandCutoff = 0.35f;
-        const CRGBPalette16 palette = RainbowColors_p;
-        const uint32_t started = millis();
-        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const uint32_t elapsed = millis() - started;
-            const auto oscillate = [elapsed](uint32_t periodMs, float phase) {
-                return sinf(TWO_PI * float(elapsed % periodMs) / periodMs + phase);
-            };
-            const float driftX = 360.0f * oscillate(20000, 0.0f);
-            const float driftY = 360.0f * oscillate(30000, PI / 2.0f);
-            const float driftZ = 360.0f * oscillate(15000, PI);
-            const float hueSpread = 5.5f + 2.5f * oscillate(6000, 0.0f);
-            const auto stripe = [&palette](int position, int span, float phaseSpan,
-                                           float drift, float hueOffset, float hueStep) {
-                // Keep fractional stripe positions through the turn. Use
-                // only the part above the cutoff, with soft shoulders.
-                const float phase = position * phaseSpan / span + drift;
-                const float wave = sinf(phase * (TWO_PI / 256.0f));
-                const float crest = max(0.0f, (wave - bandCutoff) / (1.0f - bandCutoff));
-                const uint8_t brightness = uint8_t(144.0f * crest * crest * (2.0f - crest));
-                const uint8_t hue = uint8_t(lroundf(hueOffset + position * (16.0f * hueStep) / span));
-                return ColorFromPalette(palette, hue, brightness, LINEARBLEND);
-            };
-
-            CRGB across[RNDR_X], depth[RNDR_Y], height[RNDR_Z];
-            for (int x = 0; x < RNDR_X; ++x) {
-                across[x] = stripe(x, RNDR_X, 512, driftX, driftY / 3.0f, hueSpread);
-            }
-            for (int y = 0; y < RNDR_Y; ++y) {
-                depth[y] = stripe(y, RNDR_Y, 640, driftY, driftZ / 3.0f + 85, 3);
-            }
-            for (int z = 0; z < RNDR_Z; ++z) {
-                height[z] = stripe(z, RNDR_Z, 384, driftZ, driftX / 3.0f + 171, 7);
-            }
-
-            for (int z = 0; z < RNDR_Z; ++z) {
-                for (int y = 0; y < RNDR_Y; ++y) {
-                    const CRGB yz = depth[y] + height[z];
-                    for (int x = 0; x < RNDR_X; ++x) setVoxel(x, y, z, across[x] + yz);
                 }
             }
             showCube();

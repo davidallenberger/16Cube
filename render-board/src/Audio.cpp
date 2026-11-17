@@ -1,4 +1,6 @@
 #include "Audio.h"
+#include "JuliaRenderer.h"
+#include "Streamers.h"
 #include "MidrangeBoost.h"
 #include "TestDemo.h"
 #include "AppMemory.h"
