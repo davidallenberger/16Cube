@@ -165,7 +165,7 @@ namespace TestDemo {
 
         // Implemented beside the existing normal animation engine. Its
         // shuffled cursor already moves before drawing; ordered playback
-        // needs an explicit step when the OS abandons a scene on a button.
+        // accepts an explicit step both during drawing and between app calls.
         void advanceAnimation();
         void stopAnimation();
     }

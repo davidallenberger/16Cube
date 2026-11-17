@@ -138,6 +138,7 @@ int main() {
 '''
 
 ORDER = r'''
+#define INCLUDE_WLED_PALETTES 1
 #include "TestDemo.h"
 #include <cassert>
 using TestDemo::PlaybackOrder;
@@ -145,25 +146,35 @@ PlaybackOrder order=PlaybackOrder::Descending;
 PlaybackOrder &TestDemo::animationOrder() { return order; }
 using TestDemo::animationOrder;
 bool animationSceneActive=true, animationSceneOrdered=true;
-constexpr int NUM_SHAPES=2, TOTAL_CONCEPTS=5;
+constexpr int NUM_SHAPES=2, TOTAL_CONCEPTS=6;
 struct Rule { bool enabled; };
 Rule SHAPE_RULES[]={{true},{false}};
-Rule SCENE_RULES[]={{true},{false},{true}};
+Rule SCENE_RULES[]={{true},{false},{true},{true}};
 using ConceptType = int;
-constexpr ConceptType orderedConcepts[] = {2, 1, 4, 3, 0};
+constexpr ConceptType orderedConcepts[] = {2, 1, 4, 3, 0, 5};
 int seqIndex=-1;
 constexpr int CONCEPT_SHAPE_BOX=0;
+constexpr int CONCEPT_SCENE_PALETTE_AUDITION=5;
+namespace WledPalettes { constexpr size_t count=49; }
+size_t paletteAuditionIndex=0;
 uint8_t orderedBoxStep=0;
 int select() { __SELECT__ return orderedConcepts[seqIndex]; }
 namespace TestDemo { __STOP__ __ADVANCE__ }
 int main() {
-    assert(select()==0); // Box is first in descending playback
+    assert(select()==CONCEPT_SCENE_PALETTE_AUDITION);
+    for (size_t next=1; next<WledPalettes::count; ++next) {
+        TestDemo::Detail::advanceAnimation();
+        assert(select()==CONCEPT_SCENE_PALETTE_AUDITION);
+        assert(paletteAuditionIndex==next);
+    }
+    TestDemo::Detail::advanceAnimation();
+    assert(select()==0 && paletteAuditionIndex==0); // Last palette advances to Box
     --seqIndex;
     assert(select()==4); // skip disabled
     --seqIndex;
     assert(select()==2);
     --seqIndex;
-    assert(select()==0); // wrap
+    assert(select()==CONCEPT_SCENE_PALETTE_AUDITION); // Wrap starts a new audition
     assert(TestDemo::animationHoldUntilNext());
     assert(!TestDemo::routineTimeRemaining(100,10));
     TestDemo::Detail::animationDurationHeld()=true;
@@ -187,6 +198,21 @@ int main() {
     orderedBoxStep=0;
     TestDemo::Detail::advanceAnimation();
     assert(seqIndex==3); // The final Box texture advances the deck
+    // A new Animation revision can arrive at CubeSystem::loop's checkpoint
+    // between app calls, after stopPlayback cleared the drawing flag.
+    TestDemo::Detail::stopAnimation();
+    seqIndex=2;
+    TestDemo::Detail::advanceAnimation();
+    assert(seqIndex==1); // Next must advance the selected scene between calls
+    TestDemo::Detail::advanceAnimation();
+    assert(seqIndex==0); // A second explicit press is another step
+    seqIndex=-1;
+    TestDemo::Detail::advanceAnimation();
+    assert(seqIndex==-1); // No selected card before first launch
+    seqIndex=2;
+    animationSceneOrdered=false;
+    TestDemo::Detail::advanceAnimation();
+    assert(seqIndex==2); // Shuffled playback already advanced before drawing
     TestDemo::Detail::stopAnimation();
     assert(!TestDemo::Detail::animationDurationHeld());
     assert(!animationSceneActive);

@@ -63,11 +63,6 @@ static RenderMode applyShapeRenderHacks(ShapeType shape, RenderMode rMode) {
         }
         return pal; 
     }
-    static CRGBPalette16 getSmartPalette(ShaderMode sMode) {
-        if (sMode == MODE_SOLID) return CRGBPalette16(CHSV(random8(), 255, 255));
-        if (sMode == MODE_NOISE_FIELD || sMode == MODE_LINEAR_FLOW) return PaletteUtils::getRandomOrganicPalette();
-        return PartyColors_p;
-    }
     
     // ==========================================
     // MASTER DIRECTORS (Transform Path)

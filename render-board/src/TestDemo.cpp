@@ -131,6 +131,7 @@ namespace {
         CONCEPT_SCENE_BOUNCING_BALL,
         CONCEPT_SCENE_PLASMA_ARMS,
         CONCEPT_SCENE_AURORA,
+        CONCEPT_SCENE_PALETTE_AUDITION,
         CONCEPT_COUNT
     };
 
@@ -227,6 +228,7 @@ namespace {
         CONCEPT_SHAPE_TETRAHEDRON,
         CONCEPT_SHAPE_SPHERE,
         CONCEPT_SHAPE_BOX,
+        CONCEPT_SCENE_PALETTE_AUDITION,
     };
     static_assert(sizeof(orderedConcepts) / sizeof(orderedConcepts[0]) == TOTAL_CONCEPTS,
                   "Ordered deck must contain every concept");
@@ -286,7 +288,8 @@ namespace {
         /* PS Galaxy */ { true, 1 },
         /* Bouncing Ball */ { true, 1 },
         /* Plasma Arms */ { true, 1 },
-        /* Aurora */ { true, 1 }
+        /* Aurora */ { true, 1 },
+        /* Palette Audition */ { false, 0 } // Enable for a palette review.
     };
 
     static const char* sceneNames[] = {
@@ -309,7 +312,7 @@ namespace {
         "PS Attractor", "PS Waterfall",
         "PS Volcano", "PS Fire", "Pinwheel Arms",
         "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball",
-        "Plasma Arms", "Aurora"
+        "Plasma Arms", "Aurora", "Palette Audition"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -318,9 +321,6 @@ namespace {
                   "Scene names must match the concept deck");
 
     static const char* renderNames[] = {"Solid", "Shell", "Wireframe"};
-    static const char* shaderModeNames[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow", "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves", "Soap", "Waving Cell"};
-    static_assert(sizeof(shaderModeNames) / sizeof(shaderModeNames[0]) == SHADER_MODE_COUNT,
-                  "Every shader needs a display name");
     static const char* motionNames[] = {"Static", "Expand/Collapse", "Spring", "Tumbling", "Spinning"};
 
     template <typename T>
@@ -357,6 +357,9 @@ namespace {
     int seqIndex = -1; // Initialized from the selected ordered direction.
     ConceptDebugState states[TOTAL_CONCEPTS]; 
     uint8_t orderedBoxStep = 0;
+#if INCLUDE_WLED_PALETTES
+    size_t paletteAuditionIndex = 0;
+#endif
     uint8_t shuffledBoxStep = 0;
 
     // Only playback state lives here. Rendering, durations and weighted normal
@@ -395,27 +398,67 @@ namespace {
         const bool useTartan = tartanOrPassingPlanes && random8(2) == 0;
         const char* sceneName = sceneNames[concept];
         if (tartanOrPassingPlanes) sceneName = useTartan ? "Tartan" : "Passing Planes";
-        const bool isSelfManaged = isSelfManagedScene(concept) || rockingSineWave;
-        const char* displayShader = isSelfManaged ? "Internal" : shaderModeNames[sModeTracker];
-        const char* displayColor = isSelfManaged ? "Self-Managed" : (sModeTracker == MODE_HIPHOTIC ? "N/A" : PaletteUtils::getPaletteNameBuffer());
-        if (concept == CONCEPT_SCENE_THE_MATRIX) displayColor = "Matrix Green";
-        if (concept == CONCEPT_SCENE_NOISE_CLOUDS || concept == CONCEPT_SCENE_METEOR) displayColor = "Rainbow";
-        if (concept == CONCEPT_SCENE_PS_IMPACT) displayColor = "Random hue per meteor";
-        if (concept == CONCEPT_SCENE_PS_VOLCANO) displayColor = "Fire by age";
-        if (concept == CONCEPT_SCENE_PS_FIRE) displayColor = "Fire by heat";
-        if (concept == CONCEPT_SCENE_EYE_OF_SAURON) {
-            displayShader = "Radial Fire";
-            displayColor = "Fire palette";
+        const bool isSelfManaged = isSelfManagedScene(concept);
+        const char* displayShader = isSelfManaged ? "Internal" : PaletteUtils::shaderName(sModeTracker);
+        const char* displayColor = isSelfManaged ? "Per-object choices follow" : (sModeTracker == MODE_HIPHOTIC ? "N/A" : PaletteUtils::getPaletteNameBuffer());
+#if INCLUDE_WLED_PALETTES
+        const auto *paletteAudition = concept == CONCEPT_SCENE_PALETTE_AUDITION
+            ? &WledPalettes::entries[paletteAuditionIndex] : nullptr;
+        if (paletteAudition) {
+            displayShader = "Linear Flow";
+            displayColor = paletteAudition->name;
         }
-        if (concept == CONCEPT_SCENE_PINWHEEL_ARMS) displayColor = "Cycling Rainbow Pairs";
-        if (rockingSineWave) displayColor = "Rainbow Linear Flow (Rocking)";
-        if (concept == CONCEPT_SCENE_PS_BOX) displayColor = "C9 New per ball";
-        if (concept == CONCEPT_SCENE_PS_WATERFALL) displayColor = "Ocean";
-        if (concept == CONCEPT_SCENE_PS_GHOST_RIDER) displayColor = "Cycling Rainbow";
-        if (concept == CONCEPT_SCENE_PS_GALAXY) displayColor = "Cycling Rainbow";
-        if (concept == CONCEPT_SCENE_PS_SPRAY) displayColor = "Party";
-        if (concept == CONCEPT_SCENE_PS_ATTRACTOR) displayColor = "Sweeping rainbow";
-        if (concept == CONCEPT_SCENE_BOUNCING_BALL) displayColor = "Random solids and textures";
+#endif
+        switch (concept) {
+            case CONCEPT_SCENE_THE_MATRIX: displayColor = "Green trails / pale tips"; break;
+            case CONCEPT_SCENE_NOISE_CLOUDS: displayColor = "Rainbow / noise brightness"; break;
+            case CONCEPT_SCENE_METEOR: displayColor = "Rainbow / pale head"; break;
+            case CONCEPT_SCENE_PS_IMPACT: displayColor = "Random HSV per meteor / matching splash"; break;
+            case CONCEPT_SCENE_PS_FIRE: displayColor = "Fire gradient / heat mapped"; break;
+            case CONCEPT_SCENE_EYE_OF_SAURON: displayColor = "Radial Fire / black pupil / blue removed"; break;
+            case CONCEPT_SCENE_PINWHEEL_ARMS: displayColor = "Rainbow / paired arms cycling"; break;
+            case CONCEPT_SCENE_PS_BOX: displayColor = "C9 New (ID 53) per ball / 250ms fade"; break;
+            case CONCEPT_SCENE_PS_WATERFALL: displayColor = "Ocean (ID 9) / four face copies"; break;
+            case CONCEPT_SCENE_PS_GHOST_RIDER: displayColor = "Rainbow (ID 11) / age and hue cycle / white head"; break;
+            case CONCEPT_SCENE_PS_GALAXY: displayColor = "Rainbow (ID 11) / spiral color sweep"; break;
+            case CONCEPT_SCENE_PS_SPRAY: displayColor = "Party (ID 6) / hue advances at emission"; break;
+            case CONCEPT_SCENE_PS_ATTRACTOR: displayColor = "Rainbow (ID 11) / spatial and age wave"; break;
+            case CONCEPT_SCENE_PS_VOLCANO: displayColor = "Red / Orange Red / Orange / Yellow by age"; break;
+            case CONCEPT_SCENE_ATOMIC_ORBITS: displayColor = "Rainbow (ID 11) rings / cycling HSV nucleus"; break;
+            case CONCEPT_SCENE_JULIA: displayColor = "Canonical ROYGBIV / 4s hold + 2s transition"; break;
+            case CONCEPT_SCENE_AURORA: displayColor = "Green / Pink / Teal / Violet by altitude"; break;
+            case CONCEPT_SCENE_COMETS: displayColor = "Rainbow (ID 11) / fading trails"; break;
+            case CONCEPT_SCENE_PLANE_TRAILS: displayColor = "Rainbow (ID 11) / fading lanes"; break;
+            case CONCEPT_SCENE_DNA_SPIRAL: displayColor = "Rainbow (ID 11)"; break;
+            case CONCEPT_SCENE_DRIFT_ROSE: displayColor = "Rainbow (ID 11)"; break;
+            case CONCEPT_SCENE_VECTOR_ARMS: displayColor = "Rainbow (ID 11)"; break;
+            case CONCEPT_SCENE_PLASMA_ARMS: displayColor = "Rainbow (ID 11)"; break;
+            case CONCEPT_SCENE_BLACKHOLE: displayColor = "Rainbow Linear Flow / white center"; break;
+            case CONCEPT_SCENE_COLOR_TWINKLES: displayColor = "Rainbow (ID 11) / random swatches"; break;
+            case CONCEPT_SCENE_RANDOM_FALL: displayColor = "Blue to Red by height"; break;
+            case CONCEPT_SCENE_PIPES: displayColor = "Cycling HSV / common hue"; break;
+            case CONCEPT_SCENE_ATOM_SMASHER: displayColor = "Two random HSV atoms / Party sparks / white-hot highlights"; break;
+            case CONCEPT_SCENE_FIREWORKS: displayColor = "Burst color choices follow"; break;
+            default: break;
+        }
+        switch (concept) {
+            case CONCEPT_SCENE_HULA:
+            case CONCEPT_SCENE_TORNADO:
+            case CONCEPT_SCENE_CHUNCHUN_SERP:
+            case CONCEPT_SCENE_CHUNCHUN_LISSAJOUS:
+            case CONCEPT_SCENE_LAVA_LAMP:
+            case CONCEPT_SCENE_BPM_CHECKERBOARD:
+                displayShader = "Internal palette animation";
+                break;
+            case CONCEPT_SCENE_BOUNCING_BALLS:
+                displayShader = "Stable color per ball ID";
+                break;
+            default: break;
+        }
+        if (concept == CONCEPT_SCENE_EYE_OF_SAURON) displayShader = "Radial Fire";
+        if (tartanOrPassingPlanes) {
+            displayColor = useTartan ? "Rainbow (ID 11)" : "Curated mix recipe follows";
+        }
         char speedBuf[32] = "N/A";
 
         if (concept < NUM_SHAPES) {
@@ -428,7 +471,15 @@ namespace {
             const char* displayStretch = (shape == SHAPE_BOX || shape == SHAPE_TETRAHEDRON || shape == SHAPE_OCTAHEDRON) ? (stretch ? "Yes" : "No") : "N/A";
             Serial.printf("[%02d/%02d] Concept: %02d | Shape: %-12s | Render: %-9s | Shader: %-16s | Color: %-22s | Motion: %-10s | Stretch: %-3s | Speed: %s\n", 
                 currentStep, totalSteps, concept, sceneNames[concept], renderNames[rMode], displayShader, displayColor, motionNames[motion], displayStretch, speedBuf);
-        } else {
+        }
+#if INCLUDE_WLED_PALETTES
+        else if (paletteAudition) {
+            Serial.printf("Palette audition [%02u/%02u] | ID %02u | %s | Full Box / Linear Flow\n",
+                          unsigned(paletteAuditionIndex + 1), unsigned(WledPalettes::count),
+                          unsigned(paletteAudition->id), paletteAudition->name);
+        }
+#endif
+        else {
             if (concept == CONCEPT_SCENE_HINGE_DANCE) sprintf(speedBuf, "%u ms", SPEED_SCENE_HINGE_DANCE);
             else if (concept == CONCEPT_SCENE_SPLAT)  sprintf(speedBuf, "%u ms", SPEED_SCENE_SPLAT);
             else if (concept == CONCEPT_SCENE_BOUNCE) sprintf(speedBuf, "%u ms", SPEED_SCENE_BOUNCE);
@@ -528,7 +579,7 @@ namespace {
         else if (concept >= CONCEPT_SCENE_SADDLE && concept <= CONCEPT_SCENE_SINE_WAVE) { 
             if (concept == CONCEPT_SCENE_SADDLE) Surfaces::animateHyperbolicParaboloid(durationMs, SPEED_SCENE_SADDLE, (Orientation)random8(3), pal, sModeTracker, 15);
             else if (rockingSineWave) {
-                Surfaces::animateRockingSineWave(durationMs, SPEED_SCENE_SINE_WAVE);
+                Surfaces::animateRockingSineWave(durationMs, SPEED_SCENE_SINE_WAVE, pal, sModeTracker);
             } else {
                 #ifndef TARGET_2026_CUBOID
                 Surfaces::animateSineWave(durationMs, (Orientation)random8(3), WAVE_RADIAL, 360, pal, sModeTracker, SPEED_SCENE_SINE_WAVE);
@@ -546,6 +597,13 @@ namespace {
                 case CONCEPT_SCENE_SMASHING_PLANES:      Planes::animateSmashingPlanes(durationMs); break;
                 case CONCEPT_SCENE_PLASMA_ARMS:     Streamers::animatePlasmaArms(durationMs); break;
                 case CONCEPT_SCENE_AURORA:    Surfaces::animateAurora(durationMs); break;
+#if INCLUDE_WLED_PALETTES
+                case CONCEPT_SCENE_PALETTE_AUDITION:
+                    Shapes::animateStatic(SHAPE_BOX, durationMs, RENDER_SOLID,
+                                          WledPalettes::load(*paletteAudition), MODE_LINEAR_FLOW,
+                                          SPEED_MOTION_STATIC);
+                    break;
+#endif
                 case CONCEPT_SCENE_COMETS:        Streamers::animateComets(durationMs); break;
                 case CONCEPT_SCENE_PLANE_TRAILS: Planes::animatePlaneTrails(durationMs); break;
                 case CONCEPT_SCENE_THE_MATRIX:     Patterns::animateTheMatrix(durationMs); break;
@@ -689,11 +747,18 @@ namespace TestDemo {
     }
 
     void Detail::advanceAnimation() {
-        if (animationSceneActive && animationSceneOrdered) {
+        if (animationSceneOrdered && seqIndex >= 0 && seqIndex < TOTAL_CONCEPTS) {
             // Shuffled decks already moved their cursor BEFORE drawing.
-            // Ordered tests move it AFTER returning, so an abandoned scene
-            // must explicitly step over the current concept on a button.
+            // Ordered playback also accepts Next between app calls, when
+            // stopPlayback has cleared animationSceneActive. CubeSystem
+            // consumes the revision at that checkpoint before relaunching.
             if (orderedConcepts[seqIndex] == CONCEPT_SHAPE_BOX && orderedBoxStep != 0) return;
+#if INCLUDE_WLED_PALETTES
+            if (orderedConcepts[seqIndex] == CONCEPT_SCENE_PALETTE_AUDITION) {
+                if (++paletteAuditionIndex < WledPalettes::count) return;
+                paletteAuditionIndex = 0;
+            }
+#endif
             seqIndex += animationOrder() == PlaybackOrder::Descending ? -1 : 1;
         }
     }
@@ -887,18 +952,17 @@ namespace TestDemo {
             if (shape == SHAPE_BOX) stretch = (motion != MOTION_TUMBLING);
             else stretch = (motion != MOTION_SPRING) && (random8(2) == 0);
             
-            // ==========================================
-            // THE SURGICAL BOX SHUFFLER STATE
-            // ==========================================
+#if !INCLUDE_WLED_PALETTES
+            // Preserve the original Box shuffle when the expanded pool is disabled.
             static CRGBPalette16 boxPalettes[5] = {RainbowColors_p, LavaColors_p, ForestColors_p, OceanColors_p, PartyColors_p};
             static const char* boxPaletteNames[5] = {"Rainbow", "Lava", "Forest", "Ocean", "Party"};
+#endif
             
             uint8_t &boxStep = isTestMode ? orderedBoxStep : shuffledBoxStep;
             if (motion == MOTION_STATIC) {
                 if (shape == SHAPE_BOX) { 
                     sModeTracker = boxShaders[boxStep];
-                    
-                    // Trigger a private shuffle at the start of every Box cycle
+#if !INCLUDE_WLED_PALETTES
                     if (boxStep == 0) {
                         for (int i = 4; i > 0; i--) {
                             int j = random8(i + 1);
@@ -906,6 +970,7 @@ namespace TestDemo {
                             const char* tempName = boxPaletteNames[i]; boxPaletteNames[i] = boxPaletteNames[j]; boxPaletteNames[j] = tempName;
                         }
                     }
+#endif
                 } else {
                     sModeTracker = boxShaders[random8(boxShaderCount)];
                 }
@@ -916,7 +981,8 @@ namespace TestDemo {
                 }
             }
             
-            pal = PaletteUtils::getSmartPalette(sModeTracker);
+            pal = PaletteUtils::getSmartPalette(sModeTracker, false,
+                shape == SHAPE_BOX && rMode != RENDER_WIREFRAME);
             
             // ==========================================
             // THE BOX PALETTE ENFORCER
@@ -930,14 +996,17 @@ namespace TestDemo {
                     strcpy(PaletteUtils::getPaletteNameBuffer(), "Hiphotic Native");
                 }
                 else if (sModeTracker == MODE_DISTORTION_WAVES) {
-                    pal = PaletteUtils::getRandomOrganicPalette(); 
-                    strcpy(PaletteUtils::getPaletteNameBuffer(), "Distortion Organic");
+                    pal = PaletteUtils::getRandomOrganicPalette(rMode != RENDER_WIREFRAME);
                 }
                 else if (sModeTracker != MODE_SOAP && sModeTracker != MODE_WAVING_CELL) {
+#if INCLUDE_WLED_PALETTES
+                    pal = PaletteUtils::getRandomPalette(rMode != RENDER_WIREFRAME);
+#else
                     // The four original box brushes use the shuffled palettes.
                     const int palIndex = boxStep >= 1 && boxStep <= 4 ? boxStep - 1 : random8(5);
                     pal = boxPalettes[palIndex];
                     strcpy(PaletteUtils::getPaletteNameBuffer(), boxPaletteNames[palIndex]);
+#endif
                 }
                 
                 // Increment tracker AFTER assignment is complete
@@ -962,11 +1031,6 @@ namespace TestDemo {
                     if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
                     else sModeTracker = PaletteUtils::getRandomNonSolidShader();
                 } 
-                else if (concept == CONCEPT_SCENE_SINE_WAVE) {
-                    // ISOLATED: De-seizured pool for Sine Wave (Removed Noise & Distance Fields)
-                    if (allowSolid && random8(2) == 0) sModeTracker = MODE_SOLID;
-                    else { ShaderMode comp[] = {MODE_UNIFORM_CYCLE, MODE_SPATIAL_GRADIENT, MODE_LINEAR_FLOW, MODE_SCATTER, MODE_HIPHOTIC}; sModeTracker = comp[random8(5)];} 
-                }
                 else { 
                     if (allowSolid) sModeTracker = MODE_SOLID; 
                     else {
@@ -976,10 +1040,19 @@ namespace TestDemo {
                     }
                 }
                 
-                if (sModeTracker == MODE_SOAP || sModeTracker == MODE_WAVING_CELL) {
+                if (concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_CHUNCHUN_SERP ||
+                    concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS) {
+                    pal = PaletteUtils::getRandomPalette();
+                }
+                else if (concept == CONCEPT_SCENE_VERT_STREAMER || concept == CONCEPT_SCENE_SADDLE ||
+                         concept == CONCEPT_SCENE_SINE_WAVE) {
+                    pal = PaletteUtils::getSmartPalette(sModeTracker, true);
+                }
+                else if (sModeTracker == MODE_SOAP || sModeTracker == MODE_WAVING_CELL) {
                     pal = PaletteUtils::getSmartPalette(sModeTracker);
                 }
-                else if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_WILD_MOUSE || concept == CONCEPT_SCENE_HULA || concept == CONCEPT_SCENE_LAVA_LAMP || concept == CONCEPT_SCENE_CHUNCHUN_SERP || concept == CONCEPT_SCENE_CHUNCHUN_LISSAJOUS || concept == CONCEPT_SCENE_BPM_CHECKERBOARD || concept == CONCEPT_SCENE_BOUNCING_BALLS) {
+                else if (concept == CONCEPT_SCENE_TORNADO || concept == CONCEPT_SCENE_LAVA_LAMP ||
+                         concept == CONCEPT_SCENE_BPM_CHECKERBOARD || concept == CONCEPT_SCENE_BOUNCING_BALLS) {
                     pal = PaletteUtils::getRandomOrganicPalette(); // Satisfies "random palette no solids" requirement
                 }
                 else {
@@ -988,7 +1061,7 @@ namespace TestDemo {
             }        
         }
 
-        Detail::animationDurationHeld() = animationHoldUntilNext();
+        Detail::animationDurationHeld() = animationHoldUntilNext() || concept == CONCEPT_SCENE_PALETTE_AUDITION;
         animationSceneActive = true;
         animationSceneOrdered = isTestMode;
         // Finite shows (for example Rubiks) may return without a duration

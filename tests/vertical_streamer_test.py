@@ -22,9 +22,12 @@ struct CRGB {
  CRGB &operator+=(CRGB c){r=min(255,r+c.r);return *this;}
  void nscale8(uint8_t v){r=r*v/255;}
 };
-struct TexturePlan {ShaderMode sMode; CRGBPalette16 palette;};
+struct PaletteDescription {};
+struct TexturePlan {ShaderMode sMode; CRGBPalette16 palette; PaletteDescription color;};
 static unsigned plans=0;
 struct PaletteUtils {
+ static PaletteDescription lastPaletteDescription(){return {};}
+ static void logTexture(const char *, const TexturePlan &, unsigned=0){}
  static TexturePlan getRandomMovingTexturePlan(){return {0,int(++plans)+1};}
 };
 static float headX[4]={},headY[4]={},headN[4]={};

@@ -216,8 +216,8 @@ public:
         static uint8_t helixStyle = 255;
         helixStyle = (helixStyle + 1) % 4; 
         
-        // Pull dynamically from the full non-solid pool
-        TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan();
+        TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan(true);
+        PaletteUtils::logTexture("What The Helix", plan);
         TextureState tex(plan.sMode, plan.palette, 1.0f);
 
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
@@ -335,6 +335,7 @@ public:
         float histX[count][RNDR_Z];
         float histY[count][RNDR_Z];
         float currentX[count], currentY[count], targetX[count], targetY[count];
+        const PaletteDescription firstColor = PaletteUtils::lastPaletteDescription();
         TexturePlan plans[count];
         float lowX[count], highX[count], lowY[count], highY[count];
         uint32_t redirectedMs[count];
@@ -345,7 +346,9 @@ public:
             if (i == 0) {
                 plans[i].sMode = sMode;
                 plans[i].palette = pal;
+                plans[i].color = firstColor;
             }
+            PaletteUtils::logTexture("Vert Streamer", plans[i], i + 1);
             // Restore the original full-footprint freedom for every head.
             lowX[i] = min(thickness, (RNDR_X - 1.0f) * 0.5f);
             highX[i] = RNDR_X - 1.0f - lowX[i];
@@ -615,8 +618,10 @@ public:
             if (random8(2) == 0) {
                 mousePals[m] = CRGBPalette16(PaletteUtils::getRandomVibrantColor());
             } else {
-                mousePals[m] = PaletteUtils::getRandomOrganicPalette();
+                mousePals[m] = PaletteUtils::getRandomPalette();
             }
+
+            PaletteUtils::logTexture("Wild Mouse", MODE_LINEAR_FLOW, PaletteUtils::lastPaletteDescription(), m + 1);
 
             for (int i = 0; i < TAIL_LENGTH; i++) {
                 hx[m][i] = x[m];

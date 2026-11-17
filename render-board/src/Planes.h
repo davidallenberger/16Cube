@@ -101,8 +101,10 @@ public:
         uint8_t axis = random8(3);
         const uint32_t started = millis();
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
-            const TexturePlan firstPlan = PaletteUtils::getRandomTexturePlan();
-            const TexturePlan secondPlan = PaletteUtils::getRandomTexturePlan();
+            const TexturePlan firstPlan = PaletteUtils::getRandomTexturePlan(false, true);
+            const TexturePlan secondPlan = PaletteUtils::getRandomTexturePlan(false, true);
+            PaletteUtils::logTexture("Smashing Planes", firstPlan, 1);
+            PaletteUtils::logTexture("Smashing Planes", secondPlan, 2);
             TextureState firstTexture(firstPlan.sMode, firstPlan.palette, 1.0f);
             TextureState secondTexture(secondPlan.sMode, secondPlan.palette, 1.0f);
             const uint8_t layers = getDimSize(axis);
@@ -185,6 +187,11 @@ public:
         };
         // Pick once so the mix stays consistent throughout the run.
         const auto &recipe = recipes[random8(sizeof(recipes) / sizeof(recipes[0]))];
+#if CUBINA_LOG_ANIMATION_COLORS
+        Serial.printf("Colors | Passing Planes | #%02X%02X%02X + #%02X%02X%02X | overlap #%02X%02X%02X\n",
+                      recipe[0].r, recipe[0].g, recipe[0].b, recipe[1].r, recipe[1].g, recipe[1].b,
+                      recipe[2].r, recipe[2].g, recipe[2].b);
+#endif
         constexpr uint8_t sheetPeak = 210;
         const uint32_t started = millis();
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
@@ -267,9 +274,12 @@ public:
     //These animations only make sense with an automatic color selection done internally
 
     static void animateBounce(uint32_t durationMs, uint32_t speedMs) {
-        TexturePlan    pX = PaletteUtils::getRandomTexturePlan();
-        TexturePlan   pY = PaletteUtils::getRandomTexturePlan();
-        TexturePlan   pZ = PaletteUtils::getRandomTexturePlan();
+        TexturePlan    pX = PaletteUtils::getRandomTexturePlan(false, true);
+        TexturePlan   pY = PaletteUtils::getRandomTexturePlan(false, true);
+        TexturePlan   pZ = PaletteUtils::getRandomTexturePlan(false, true);
+        PaletteUtils::logTexture("Plane Bounce X", pX);
+        PaletteUtils::logTexture("Plane Bounce Y", pY);
+        PaletteUtils::logTexture("Plane Bounce Z", pZ);
      
         TextureState tX(pX.sMode, pX.palette, 1.0f);
         TextureState tY(pY.sMode, pY.palette, 1.0f);
@@ -297,7 +307,8 @@ public:
         
         uint32_t startTime = millis();
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            TexturePlan plan  = PaletteUtils::getRandomTexturePlan();
+            TexturePlan plan  = PaletteUtils::getRandomTexturePlan(false, true);
+            PaletteUtils::logTexture("Hinge Dance", plan);
             TextureState tex(plan.sMode, plan.palette, 1.0f);
             
             uint8_t pin_axis;
@@ -337,7 +348,8 @@ public:
     static void animateSplat(uint32_t durationMs, uint32_t speedMs=0) {    
         uint32_t startTime = millis();
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - startTime), durationMs)) {
-            TexturePlan plan= PaletteUtils::getRandomTexturePlan();
+            TexturePlan plan= PaletteUtils::getRandomTexturePlan(false, true);
+            PaletteUtils::logTexture("Plane Splat", plan);
             TextureState tex(plan.sMode, plan.palette, 1.0f);
             
             uint8_t axis = random8(3), max_pos = getDimSize(axis) - 1, start_pos = (random8() & 1) ? 0 : max_pos;

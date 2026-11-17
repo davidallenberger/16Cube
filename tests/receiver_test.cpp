@@ -291,8 +291,15 @@ int main(){
     }
     assert(animationAdvanceRequests == 1);
     assert(!teleportArmed);
+    // The OS also consumes a new revision between app calls, before the
+    // launcher arms an escape for the next running scene.
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
     CubeSystem::frameCheckpoint();
-    assert(animationAdvanceRequests == 1);
+    assert(animationAdvanceRequests == 2);
+    CubeSystem::frameCheckpoint();
+    assert(animationAdvanceRequests == 2); // A heartbeat never repeats Next
 
     puts("Receiver/OS tests passed: stale input, session reboot, edge latches, beat latches, direct dispatch, one-shot mode tripwire.");
     puts("Audio dispatch tests passed: repeated source advances once; heartbeat, source switch, reboot, menu return, and reconnect preserve selection.");

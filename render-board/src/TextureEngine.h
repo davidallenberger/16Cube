@@ -1,6 +1,8 @@
 #pragma once
 #include "CubeCore.h"
 
+#include "WledPalettes.h"
+
 // ==========================================
 // V2 ARCHITECTURE (THE BRUSHES)
 // ==========================================
@@ -95,12 +97,90 @@ namespace TextureDetail {
 // UNIFIED PALETTE UTILITIES
 // ==========================================
 // Add this simple struct right above or inside PaletteUtils
+struct PaletteDescription {
+    const char *name = "Unspecified";
+    int16_t id = -1;
+    CRGB solidColor = CRGB::Black;
+    bool isSolid = false;
+};
+
 struct TexturePlan { 
     ShaderMode sMode; 
-    CRGBPalette16 palette; 
+    CRGBPalette16 palette;
+    PaletteDescription color;
 };
+#ifndef CUBINA_LOG_ANIMATION_COLORS
+#define CUBINA_LOG_ANIMATION_COLORS 0
+#endif
+
 class PaletteUtils {
 public:
+    static PaletteDescription &lastPaletteDescription() {
+        static PaletteDescription description;
+        return description;
+    }
+
+    static void describePalette(const char *name, int16_t id = -1) {
+        auto &description = lastPaletteDescription();
+        description.name = name;
+        description.id = id;
+        description.isSolid = false;
+        snprintf(getPaletteNameBuffer(), 64, "%s", name);
+    }
+
+    static void describeSolid(CRGB color) {
+        auto &description = lastPaletteDescription();
+        description.name = "Solid";
+        description.id = -1;
+        description.solidColor = color;
+        description.isSolid = true;
+        snprintf(getPaletteNameBuffer(), 64, "Solid #%02X%02X%02X", color.r, color.g, color.b);
+    }
+
+    static const char *shaderName(ShaderMode mode) {
+        static const char *names[] = {"Solid", "Uniform Cycle", "Spatial Gradient", "Linear Flow",
+            "Noise Field", "Scatter", "Distance Field", "Hiphotic", "Distortion Waves", "Soap", "Waving Cell"};
+        static_assert(sizeof(names) / sizeof(names[0]) == SHADER_MODE_COUNT, "Every shader needs a name");
+        return names[mode];
+    }
+
+    static void logColor(const char *effect, const char *scheme, unsigned object = 0) {
+#if CUBINA_LOG_ANIMATION_COLORS
+        Serial.printf("Colors | %s | object %u | %s\n", effect, object, scheme);
+#endif
+    }
+
+    static void logTexture(const char *effect, ShaderMode shader,
+                           const PaletteDescription &color, unsigned object = 0) {
+#if CUBINA_LOG_ANIMATION_COLORS
+        Serial.printf("Colors | %s | object %u | %s | ", effect, object, shaderName(shader));
+        if (shader == MODE_HIPHOTIC) Serial.println("Native HSV");
+        else if (color.isSolid) {
+            Serial.printf("Solid #%02X%02X%02X\n", color.solidColor.r, color.solidColor.g, color.solidColor.b);
+        } else if (color.id >= 0) {
+            Serial.printf("ID %02d %s\n", color.id, color.name);
+        } else {
+            Serial.println(color.name);
+        }
+#endif
+    }
+
+    static void logTexture(const char *effect, const TexturePlan &plan, unsigned object = 0) {
+        logTexture(effect, plan.sMode, plan.color, object);
+    }
+
+#if INCLUDE_WLED_PALETTES
+    static CRGBPalette16 selectWledPalette(bool allowDark) {
+        const WledPalettes::Entry *entry = nullptr;
+        CRGBPalette16 palette = WledPalettes::selectRandom(getPaletteNameBuffer(), 64, allowDark, &entry);
+        auto &description = lastPaletteDescription();
+        description.name = entry->name;
+        description.id = entry->id;
+        description.isSolid = false;
+        return palette;
+    }
+#endif
+
     static CRGBPalette16 firePalette() {
         // PS Fire by DedeHai, adapted from WLED 16.0.1 with its Fire palette.
         static const uint8_t fireGradient[] PROGMEM = {
@@ -131,53 +211,68 @@ public:
         return "Red";
     }
 
-    static CRGBPalette16 getRandomOrganicPalette() {
-        uint8_t p = random8(4);
-        if      (p == 0) { strcpy(getPaletteNameBuffer(), "Ocean (Blues/Greens)"); return OceanColors_p; }
-        else if (p == 1) { strcpy(getPaletteNameBuffer(), "Lava (Reds/Oranges)"); return LavaColors_p; }
-        else if (p == 2) { strcpy(getPaletteNameBuffer(), "Forest (Greens/Yellows)"); return ForestColors_p; }
-        else             { strcpy(getPaletteNameBuffer(), "Party (Neon Mix)"); return PartyColors_p; }
+    static CRGBPalette16 getRandomOrganicPalette(bool allowDark = false) {
+#if INCLUDE_WLED_PALETTES
+        return selectWledPalette(allowDark);
+#else
+        return getRandomClassicOrganicPalette();
+#endif
     }
 
-    static CRGBPalette16 getRandomPalette() {
+    static CRGBPalette16 getRandomClassicOrganicPalette() {
+        uint8_t p = random8(4);
+        if      (p == 0) { describePalette("Ocean (Blues/Greens)", 9); return OceanColors_p; }
+        else if (p == 1) { describePalette("Lava (Reds/Oranges)", 8); return LavaColors_p; }
+        else if (p == 2) { describePalette("Forest (Greens/Yellows)", 10); return ForestColors_p; }
+        else             { describePalette("Party (Neon Mix)", 6); return PartyColors_p; }
+    }
+
+    static CRGBPalette16 getRandomPalette(bool allowDark = false) {
+#if INCLUDE_WLED_PALETTES
+        return selectWledPalette(allowDark);
+#else
         if (random8(5) == 0) {
-            strcpy(getPaletteNameBuffer(), "Rainbow");
+            describePalette("Rainbow", 11);
             return RainbowColors_p;
         }
         return getRandomOrganicPalette();
+#endif
     }
 
     static CRGB getRandomVibrantColor() {
         // Force max saturation and value to guarantee a bright, pretty neon color
         uint8_t hue = random8();
-        sprintf(getPaletteNameBuffer(), "Solid %s (Hue: %d)", getHueName(hue), hue);
-        return CHSV(hue, 255, 255); 
+        const CRGB color = CHSV(hue, 255, 255);
+        describeSolid(color);
+        return color;
     }
 
-    static CRGBPalette16 getSmartPalette(ShaderMode sMode) {
+    static CRGBPalette16 getSmartPalette(ShaderMode sMode, bool useFullPool = false, bool allowDark = false) {
         if (sMode == MODE_SOAP) {
-            switch (random8(4)) {
-                case 0: strcpy(getPaletteNameBuffer(), "Rainbow"); return RainbowColors_p;
-                case 1: strcpy(getPaletteNameBuffer(), "Party (Neon Mix)"); return PartyColors_p;
-                case 2: strcpy(getPaletteNameBuffer(), "Ocean (Blues/Greens)"); return OceanColors_p;
-                default: strcpy(getPaletteNameBuffer(), "Lava (Reds/Oranges)"); return LavaColors_p;
-            }
+            return getRandomPalette(allowDark);
         }
         if (sMode == MODE_WAVING_CELL) {
             if (random8(2)) {
-                strcpy(getPaletteNameBuffer(), "Party (Neon Mix)");
+                describePalette("Party (Neon Mix)", 6);
                 return PartyColors_p;
             }
-            strcpy(getPaletteNameBuffer(), "Rainbow");
+            describePalette("Rainbow", 11);
             return RainbowColors_p;
         }
-        if (sMode == MODE_SOLID || sMode == MODE_SPATIAL_GRADIENT) {
+        if (sMode == MODE_SOLID || (sMode == MODE_SPATIAL_GRADIENT && !useFullPool)) {
             return CRGBPalette16(getRandomVibrantColor());
         }
-        if (sMode == MODE_NOISE_FIELD || sMode == MODE_LINEAR_FLOW || sMode == MODE_DISTANCE_FIELD || sMode == MODE_DISTORTION_WAVES) {
-            return getRandomOrganicPalette();
+        if (useFullPool && sMode != MODE_HIPHOTIC) {
+            return getRandomPalette(allowDark);
         }
-        strcpy(getPaletteNameBuffer(), "Party (Neon Mix)");
+        if (useFullPool) {
+            describePalette("Hiphotic Native", -1);
+            return PartyColors_p;
+        }
+        if (sMode == MODE_NOISE_FIELD || sMode == MODE_LINEAR_FLOW || sMode == MODE_DISTANCE_FIELD || sMode == MODE_DISTORTION_WAVES) {
+            return getRandomOrganicPalette(allowDark);
+        }
+        describePalette("Party (Neon Mix)", 6);
         return PartyColors_p; 
     }
    
@@ -185,13 +280,19 @@ public:
         return ShaderMode(random8(MODE_UNIFORM_CYCLE, SHADER_MODE_COUNT));
     }
 
-   static TexturePlan getRandomNonSolidTexturePlan() {
+   static TexturePlan getRandomNonSolidTexturePlan(bool useFullPool = false, bool allowDark = false) {
         TexturePlan plan;
         plan.sMode = getRandomNonSolidShader();
+
+        if (useFullPool) {
+            plan.palette = getSmartPalette(plan.sMode, true, allowDark);
+            plan.color = lastPaletteDescription();
+            return plan;
+        }
         
         switch (plan.sMode) {
             case MODE_UNIFORM_CYCLE:
-                strcpy(getPaletteNameBuffer(), "Rainbow");
+                describePalette("Rainbow", 11);
                 plan.palette = RainbowColors_p; 
                 break;
             case MODE_SPATIAL_GRADIENT:
@@ -199,16 +300,17 @@ public:
             case MODE_NOISE_FIELD:
             case MODE_SCATTER:
             case MODE_DISTORTION_WAVES:
-                plan.palette = PaletteUtils::getRandomOrganicPalette();
+                plan.palette = PaletteUtils::getRandomOrganicPalette(allowDark);
                 break;
             case MODE_HIPHOTIC:
-                strcpy(getPaletteNameBuffer(), "Hiphotic Native");
+                describePalette("Hiphotic Native", -1);
                 plan.palette = PartyColors_p;
                 break;
             default:
-                plan.palette = getSmartPalette(plan.sMode);
+                plan.palette = getSmartPalette(plan.sMode, false, allowDark);
                 break;
         }
+        plan.color = lastPaletteDescription();
         return plan;
     }
 
@@ -224,22 +326,24 @@ public:
         plan.palette = plan.sMode == MODE_SOAP || plan.sMode == MODE_WAVING_CELL
             ? getSmartPalette(plan.sMode) : getRandomPalette();
         if (plan.sMode == MODE_HIPHOTIC) {
-            strcpy(getPaletteNameBuffer(), "Hiphotic Native");
+            describePalette("Hiphotic Native", -1);
         }
+        plan.color = lastPaletteDescription();
         return plan;
     }
 
-    static TexturePlan getRandomTexturePlan() {
+    static TexturePlan getRandomTexturePlan(bool useFullPool = false, bool allowDark = false) {
         // 33% Chance for a Solid Color
         if (random8(100) < 33) {
             TexturePlan plan;
             plan.sMode = MODE_SOLID; 
-            plan.palette = CRGBPalette16(CHSV(random8(), 255, 255)); 
+            plan.palette = CRGBPalette16(getRandomVibrantColor());
+            plan.color = lastPaletteDescription();
             return plan;
         } 
         
         // 67% Chance to just route directly into the flattened non-solid pool
-        return getRandomNonSolidTexturePlan();
+        return getRandomNonSolidTexturePlan(useFullPool, allowDark);
     }
 
     // Merkaba's approved component colors. Callers choose the four-color
@@ -260,7 +364,8 @@ public:
             pal[2] = CRGB::Green;
             pal[3] = CRGB::Blue;
             pal[4] = CRGB::DarkViolet;
-            strcpy(getPaletteNameBuffer(), "Solid White (Merkaba Hack)");
+            strcpy(getPaletteNameBuffer(), "Merkaba Red / Green / Blue / Dark Violet");
+            logColor("Merkaba", "Red / Green / Blue / Dark Violet");
             return pal;
         } 
         
@@ -280,6 +385,10 @@ public:
             pal[1] = c1; // Primary Component
             pal[2] = c2; // Secondary Component
             pal[3] = c3; // Accent Component (for Hemispheres)
+#if CUBINA_LOG_ANIMATION_COLORS
+            Serial.printf("Colors | Shape components | %s | #%02X%02X%02X / #%02X%02X%02X / #%02X%02X%02X\n",
+                          getPaletteNameBuffer(), c1.r, c1.g, c1.b, c2.r, c2.g, c2.b, c3.r, c3.g, c3.b);
+#endif
             return pal;
         }
         

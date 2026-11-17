@@ -99,7 +99,8 @@ private:
   static void animateWobblingDishInternal(uint32_t durationMs, float rpm, bool intersectCenter) {
     uint32_t startTime = millis(), lastFrame = millis();
 
-    TexturePlan plan = PaletteUtils::getRandomTexturePlan();
+    TexturePlan plan = PaletteUtils::getRandomTexturePlan(true);
+    PaletteUtils::logTexture("Wobbling Dish", plan);
     TextureState tex(plan.sMode, plan.palette, 1.5f);
 
     float wobbleSpeed = TWO_PI * (rpm / 60.0f); 
@@ -339,14 +340,15 @@ public:
     static void animateHyperbolicParaboloid(uint32_t durationMs, float step, Orientation axis, ShaderMode sMode, uint32_t speedMs = 0) { float sx = (axis == AXIS_X) ? step : 0.0f; float sy = (axis == AXIS_Y) ? step : 0.0f; float sz = (axis == AXIS_Z) ? step : 0.0f; animateHyperbolicParaboloidInternal(durationMs, sx, sy, sz, sMode, PaletteUtils::getSmartPalette(sMode), speedMs); }
 
     // --- Sine Waves ---
-    static void animateRockingSineWave(uint32_t durationMs, float waveSpeed) {
+    static void animateRockingSineWave(uint32_t durationMs, float waveSpeed, const CRGBPalette16 &palette,
+                                       ShaderMode shader) {
         constexpr float rockPeriodMs = 8000.0f;
         constexpr float maxTilt = 25.0f * PI / 180.0f;
         const float extent = min(RNDR_X, RNDR_Y);
         const float angleScale = 65536.0f / extent;
         // Leave vertical room for the lifted edge of the rocking sheet.
         const float amplitude = min(RNDR_CZ - 0.5f, extent * 0.28f);
-        TextureState tex(MODE_LINEAR_FLOW, RainbowColors_p, 4.0f);
+        TextureState tex(shader, palette, 4.0f);
         const uint32_t start = millis();
         uint32_t lastFrame = start;
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {

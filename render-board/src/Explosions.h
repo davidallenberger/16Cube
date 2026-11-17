@@ -235,6 +235,8 @@ public:
                                           -launchHeight / fallTime + gravity * fallTime * 0.5f}};
                         lastHue += random8(96, 161);
                         meteor.color = CHSV(lastHue, 255, 255);
+                        PaletteUtils::describeSolid(meteor.color);
+                        PaletteUtils::logTexture("PS Impact meteor and splash", MODE_SOLID, PaletteUtils::lastPaletteDescription());
                         meteor.active = true;
                         launchTicks = random16(settings.minLaunchMs, settings.maxLaunchMs + 1) * 1000UL / stepUs;
                         break;
@@ -326,6 +328,7 @@ public:
                         const float phase = random16() * (TWO_PI / 65536.0f);
                         const int lobes = random8(2, 7);
                         const uint8_t hue = random8(), hueStep = random8(24, 128);
+                        PaletteUtils::logColor("Fireworks layered", "Rainbow / tilted rings");
                         int slot = 0;
                         for (int ring = 0; ring < rings; ++ring) {
                             const auto color = ColorFromPalette(RainbowColors_p, uint8_t(hue + ring * hueStep));
@@ -344,8 +347,13 @@ public:
 
                     const bool classic = shell == ClassicShell;
                     const CRGBPalette16 explosionPal = classic ? PaletteUtils::getRandomOrganicPalette() : CRGBPalette16(RainbowColors_p);
+                    const PaletteDescription explosionColor = PaletteUtils::lastPaletteDescription();
                     const bool isConfetti = classic && random8(2) == 0;
                     const CRGB solidColor = classic ? PaletteUtils::getRandomVibrantColor() : CRGB::Black;
+                    if (classic) {
+                        PaletteUtils::logTexture("Fireworks classic", isConfetti ? MODE_LINEAR_FLOW : MODE_SOLID,
+                                                 isConfetti ? explosionColor : PaletteUtils::lastPaletteDescription());
+                    } else PaletteUtils::logColor("Fireworks loose", "Rainbow");
                     const uint8_t hue = classic ? 0 : random8();
                     int sparksToSpawn = classic ? volume / 29 : max(1, int(lroundf(random8(17, 29) * volumeScale)));
                     for (int j = pool.firstFree(); j < pool.size() && sparksToSpawn > 0;
@@ -413,6 +421,10 @@ public:
         bool keepRunning = true;
 
         CRGB colA = CHSV(random8(), 255, 255), colB = CHSV(random8(), 255, 255);
+        PaletteUtils::describeSolid(colA);
+        PaletteUtils::logTexture("Atom Smasher incoming", MODE_SOLID, PaletteUtils::lastPaletteDescription(), 1);
+        PaletteUtils::describeSolid(colB);
+        PaletteUtils::logTexture("Atom Smasher incoming", MODE_SOLID, PaletteUtils::lastPaletteDescription(), 2);
 
         while (keepRunning) {
             uint32_t now = millis(); uint32_t deltaMs = now - lastFrame;
@@ -468,6 +480,10 @@ public:
                         state = SPIRAL_IN; stateTimer = now;
                         angleA = 0.0f; angleB = PI; zA = RNDR_Z - 1.0f; zB = 0.0f; speed = TWO_PI * 0.5f;
                         colA = CHSV(random8(), 255, 255); colB = CHSV(random8(), 255, 255);
+                        PaletteUtils::describeSolid(colA);
+                        PaletteUtils::logTexture("Atom Smasher incoming", MODE_SOLID, PaletteUtils::lastPaletteDescription(), 1);
+                        PaletteUtils::describeSolid(colB);
+                        PaletteUtils::logTexture("Atom Smasher incoming", MODE_SOLID, PaletteUtils::lastPaletteDescription(), 2);
                     }
                 }
             }

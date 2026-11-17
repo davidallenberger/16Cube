@@ -89,7 +89,8 @@ public:
             RenderMode rMode = (RenderMode)random8(3);
 
             // Ask the engine for a guaranteed good aesthetic pairing
-            TexturePlan plan = PaletteUtils::getRandomTexturePlan();
+            TexturePlan plan = PaletteUtils::getRandomTexturePlan(false, rMode != RENDER_WIREFRAME);
+            PaletteUtils::logTexture("Flying Box", plan);
             TextureState tex(plan.sMode, plan.palette, 1.0f);
 
             animateFastCornerPulse(rMode, tex, travel, speedMs);
@@ -130,7 +131,8 @@ public:
             z[i] = random16(r * 10, (RNDR_Z - 1 - r) * 10) / 10.0f;
 
             // Generate a guaranteed good shader/palette pairing for each box
-            plan[i] = PaletteUtils::getRandomTexturePlan();
+            plan[i] = PaletteUtils::getRandomTexturePlan(false, true);
+            PaletteUtils::logTexture("Moving Boxes", plan[i], i + 1);
             bool reverse = (random8(2) == 0);
 
             if (i == 0) {

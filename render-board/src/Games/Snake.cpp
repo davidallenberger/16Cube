@@ -49,7 +49,7 @@ void Snake::resetGame() {
     if (random8(2) == 0) {
         snakePalette = CRGBPalette16(PaletteUtils::getRandomVibrantColor());
     } else {
-        snakePalette = PaletteUtils::getRandomOrganicPalette();
+        snakePalette = PaletteUtils::getRandomClassicOrganicPalette();
     }
 }
 

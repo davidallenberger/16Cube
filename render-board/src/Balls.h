@@ -476,8 +476,11 @@ public:
             if (i < solidCount) {
                 const uint8_t hue = solidHue + (256 * i / solidCount);
                 ball.texture = TextureState(MODE_SOLID, CRGBPalette16(CHSV(hue, 255, 255)), 1.66f);
+                PaletteUtils::describeSolid(CRGB(CHSV(hue, 255, 255)));
+                PaletteUtils::logTexture("Bouncing Ball", MODE_SOLID, PaletteUtils::lastPaletteDescription(), i + 1);
             } else {
                 const TexturePlan plan = PaletteUtils::getRandomNonSolidTexturePlan();
+                PaletteUtils::logTexture("Bouncing Ball", plan, i + 1);
                 ball.texture = TextureState(plan.sMode, plan.palette, 1.66f);
                 ball.texture.internalPhase = i * 128.0f;
                 ball.texture.phase = uint32_t(ball.texture.internalPhase);
