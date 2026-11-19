@@ -317,7 +317,7 @@ namespace GeometryEngine {
     }
 
    inline void drawHyperbolicParaboloid(int offSet, int offsetSign, float rotX, float rotY, float rotZ, const TextureState &tex) {
-        float hpOffsetSteps[32]; 
+        float hpOffsetSteps[RNDR_Z];
         float z_max = (float)(RNDR_Z - 1);
         
         for (int z = 0; z < RNDR_Z; z++) {

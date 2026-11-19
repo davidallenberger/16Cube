@@ -368,6 +368,8 @@ void setVoxel(uint8_t x, uint8_t y, uint8_t z, const CRGB& c) {
 }
 
 CRGB getVoxel(uint8_t x, uint8_t y, uint8_t z) {
+  if (x >= RNDR_X || y >= RNDR_Y || z >= RNDR_Z) return CRGB::Black;
+
   MappedPixel m = mapXYZ(x, y, z);
   if (!m.ok) return CRGB::Black;
 

@@ -42,6 +42,11 @@ inventing a private voxel-box/sphere renderer inside an audio effect.
 | `helixPoint()` | Shared parametric helix position |
 | `tumbleAngles()` / `TumbleRotation` | Common multi-axis rotation and cached transform |
 
+TextureState currently supports at most 16 samples per axis; a compile-time
+assertion rejects larger render dimensions. The paraboloid scratch array is
+sized from RNDR_Z. These checks do not establish support for larger hardware
+maps or canvases elsewhere in the engine.
+
 The engine has both smooth and discrete renderers. Calling the core library
 does not automatically enable antialiasing: choose the primitive and blending
 method appropriate to the scene. Likewise, shell and wireframe are different

@@ -397,6 +397,10 @@ public:
 };
 
 struct TextureState {
+    // Axis caches and their initialization loops below support up to 16
+    // samples per axis. Reject a larger canvas before indexing those caches.
+    static_assert(RNDR_X <= 16 && RNDR_Y <= 16 && RNDR_Z <= 16,
+                  "TextureState axis caches support render dimensions up to 16");
     ShaderMode mode;      // The Unified Engine Mode
     
     uint32_t phase;

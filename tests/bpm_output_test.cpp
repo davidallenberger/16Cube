@@ -43,6 +43,29 @@ int main() {
         STRIP0_LEN, STRIP1_LEN, STRIP2_LEN, STRIP3_LEN,
         STRIP4_LEN, STRIP5_LEN, STRIP6_LEN, STRIP7_LEN
     };
+
+    // Seed actual physical pixels, including those beyond a smaller render
+    // canvas. Reads must hide those pixels just as writes reject them.
+    const CRGB marker(123, 45, 67);
+    for (unsigned strip = 0; strip < 8; ++strip) {
+        fill_solid(strips[strip], lengths[strip], marker);
+    }
+    for (uint8_t x = 0; x < CUBE_SIZE; ++x) {
+        for (uint8_t y = 0; y < CUBE_SIZE; ++y) {
+            for (uint8_t z = 0; z < CUBE_SIZE; ++z) {
+                const auto mapped = mapXYZ(x, y, z);
+                assert(mapped.ok);
+                const bool inside = x < RNDR_X && y < RNDR_Y && z < RNDR_Z;
+                assert(getVoxel(x, y, z) == (inside ? marker : CRGB::Black));
+                setVoxel(x, y, z, CRGB::Black);
+                assert(strips[mapped.strip][mapped.index] == (inside ? CRGB::Black : marker));
+            }
+        }
+    }
+    assert(black(getVoxel(CUBE_SIZE, 0, 0)));
+    assert(black(getVoxel(0, CUBE_SIZE, 0)));
+    assert(black(getVoxel(0, 0, CUBE_SIZE)));
+
     unsigned frames = 0;
 
     for (BpmSpatialMode mode : modes) {

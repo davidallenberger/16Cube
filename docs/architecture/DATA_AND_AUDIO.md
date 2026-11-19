@@ -135,37 +135,6 @@ switches. Source calibration remains on command; artistic size/height response
 belongs on render. For example, several effects reach full size near volumeSm
 75, whereas Julia and Waverly have their own sensitivity curves.
 
-`Audio::displaySpectrum()` optionally compensates display bands, default on.
-Bands 0–3 remain unchanged; bands 4–15 subtract small floors then multiply by
-1.25…5.5 with saturation. This is an empirical display curve for the tested
-source, not a replacement FFT or a change to measured volume. Spectrum-driven
-effects call it explicitly. Drift Rose's midrange fallback deliberately uses
-its own input path. Raw and DisplayBins in diagnostics distinguish the two.
-
-[`MidrangeBoost.h`](../../render-board/src/MidrangeBoost.h) is a separate
-render-side rise detector for bands 2–9, suppressed when bass or volume is
-already strong. Waverly, Julia Volume, and Drift Rose opt in with separate
-history. The common enable defaults true; gain is `3.75/14.4` (about 0.2604).
-It augments the effect drive, not the transmitted volume or global audio state.
-
-Motion smoothing, spatial antialiasing, and framebuffer fades solve different
-problems. A level envelope reduces geometry jitter; fractional voxel coverage
-reduces spatial stepping; a short afterimage reduces abrupt visible replacement.
-They may coexist, but excessive smoothing can hide the audio response.
-
-## Implemented sources and placeholders
-
-Mic and PCM1808 are implemented. The wire names AudioBluetooth/AudioDJ refer
-to analog audio feeding that ADC. Current button selection maps unsupported
-SD/DJ demands to the ADC path. `SourceAdapters` provides weak SD/depth hooks;
-its default reads return false. The Depth-labelled physical button currently
-toggles playback Hold. A depth packet renderer and protocol exist, but a real
-camera/SD pipeline is not delivered by those stubs.
-
-For effect inventory see [the catalog](../ANIMATIONS.md); for tuning history
-see [the audio journal](../AUDIO_ANIMATIONS.md), whose older settings may be
-superseded by this snapshot.
-
 ### Display compensation is not input calibration
 
 `Audio::displaySpectrum()` copies bands and, when
@@ -178,7 +147,7 @@ its own raw-feature path. Debug output can show both `Bins` and `DisplayBins`.
 Noise admission may still check raw bins so compensation cannot promote quiet
 line noise into activity.
 
-`MidrangeBoost.h` is another, separate mechanism: a rising midrange fallback
+[`MidrangeBoost.h`](../../render-board/src/MidrangeBoost.h) is a separate mechanism: a rising midrange fallback
 when bass/volume are not already doing the work. Waverly, Julia Volume, and
 Drift Rose share the detector implementation with per-effect history; its
 switch/gain live in Audio::Controls. It augments geometric drive, not speaker
@@ -202,6 +171,11 @@ prove the source is above its noise gate. Puddle Peak, kick-colored shapes,
 post-crest Corner Burst, and clock-driven breathing respond to different
 features; a single common event throttle would change their meaning.
 
+Motion smoothing, spatial antialiasing, and framebuffer fades solve different
+problems. A level envelope reduces geometry jitter; fractional voxel coverage
+reduces spatial stepping; a short afterimage reduces abrupt visible replacement.
+They may coexist, but excessive smoothing can hide the audio response.
+
 ## Implemented sources and placeholders
 
 The wired buttons choose Animation, INMP441 Mic, PCM1808 ADC, and Game.
@@ -213,3 +187,7 @@ control path; there is no button cycling through hidden sources.
 and depth occupancy. Default SD/depth reads return false. Depth's renderer and
 512-byte transport exist, but this is not a working camera pipeline without
 an adapter implementation.
+
+For effect inventory see [the catalog](../ANIMATIONS.md); for tuning history
+see [the audio journal](../AUDIO_ANIMATIONS.md), whose older settings may be
+superseded by this snapshot.
