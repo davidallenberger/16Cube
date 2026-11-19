@@ -1,3 +1,9 @@
+> **Historical development journal.** This file records successive audio
+> experiments, including superseded settings and deck orders. For the current
+> architecture and behavior, start with [the documentation index](README.md),
+> [the audio contract](architecture/DATA_AND_AUDIO.md), and
+> [the animation catalog](ANIMATIONS.md).
+
 # Cubina audio animation handoff
 
 Work from the actual local checkout of davidallenberger/16Cube, checking HEAD
