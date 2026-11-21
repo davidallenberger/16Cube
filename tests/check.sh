@@ -47,7 +47,7 @@ stage() {
 }
 stage "$command_src" "$command_include" "$work/command" \
     main.cpp BoardConfig.h CommandState.cpp CommandState.h \
-    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h TempoTracker.h AttackDetector.h UARTSender.cpp UARTSender.h SendTiming.h \
+    SignalAcquisition.cpp SignalAcquisition.h AudioAnalysis.h TempoTracker.h AttackDetector.h HitDetector.h UARTSender.cpp UARTSender.h SendTiming.h \
     BluetoothManager.cpp BluetoothManager.h SourceAdapters.cpp SourceAdapters.h ModeButton.h
 stage "$render_src" "$render_include" "$work/render" \
     CubeCore.cpp CubeCore.h CubeSystem.cpp CubeSystem.h \

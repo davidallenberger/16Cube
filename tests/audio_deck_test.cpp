@@ -133,6 +133,18 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
+    // Temporary audition pairs play first after a flash, A before B.
+    constexpr unsigned trialCards = 9;
+    const char *trialNames[trialCards] = {
+        "Trial Corner Burst A (now)", "Trial Corner Burst B (peak-sized)",
+        "Trial Breathe A (now)", "Trial Breathe B (sound color)",
+        "Trial Frequency Planes A (now)", "Trial Frequency Planes B (rainbow + lightness)",
+        "Trial PS GEQ A (now)", "Trial PS GEQ B (liquid)", "Trial PS GEQ Nova (new)",
+    };
+    for (const char *name : trialNames) {
+        assert(std::strcmp(currentAudioRoutineName(), name) == 0);
+        requestNext(Deck::Audio);
+    }
     assert(std::strcmp(currentAudioRoutineName(), "Audio Shapes") == 0);
     requestNext(Deck::Audio);
     assert(std::strcmp(currentAudioRoutineName(), "Frequency Cubes 8 Bands Corner") == 0);
@@ -145,12 +157,13 @@ int main() {
     assert(std::strcmp(frequencyLook, "Frequency Planes") == 0 ||
            std::strcmp(frequencyLook, "Frequency Discs") == 0);
     reset(PlaybackOrder::Descending);
-    play(7);
-    assert(launches == std::vector<unsigned>({16, 15, 14, 13, 12, 11, 10}));
+    play(trialCards + 7);
+    assert(launches == std::vector<unsigned>({6, 6, 4, 4, 12, 12, 14, 14, 14,
+                                              16, 15, 14, 13, 12, 11, 10}));
     bool seenShapes[2] = {};
     for (unsigned trial = 0; trial < 32; ++trial) {
         reset(PlaybackOrder::Descending);
-        play(1);
+        play(trialCards + 1);
         seenShapes[selectedOctahedron] = true;
     }
     assert(seenShapes[0] && seenShapes[1]);
@@ -200,8 +213,14 @@ int main() {
     }
     const unsigned count = enabled.size();
     play(count + 2);
+    // Trial cards (listed after Audio Shapes, index 16) reuse their base
+    // routine's draw ID: Nova, PS GEQ B, A, Planes B, A, Breathe B, A, Burst B, A.
+    const unsigned trialDrawIds[] = {14, 14, 14, 12, 12, 4, 4, 6, 6};
+    const auto drawIdFor = [&](unsigned index) {
+        return index <= 16 ? index : trialDrawIds[index - 17];
+    };
     for (unsigned i = 0; i < launches.size(); ++i) {
-        assert(launches[i] == enabled[i % count]);
+        assert(launches[i] == drawIdFor(enabled[i % count]));
         assert(durations[i] == 50);
     }
 
@@ -256,11 +275,15 @@ int main() {
     for (unsigned cycle = 0; cycle < 3; ++cycle) {
         std::vector<unsigned> bag(launches.begin() + cycle * count, launches.begin() + (cycle + 1) * count);
         std::sort(bag.begin(), bag.end());
-        for (unsigned i = 0; i < count; ++i) {
-            assert(bag[i] == enabled[i]);
-        }
-        if (cycle > 0) {
-            assert(launches[cycle * count - 1] != launches[cycle * count]);
+        std::vector<unsigned> expectedIds;
+        for (unsigned index : enabled) expectedIds.push_back(drawIdFor(index));
+        std::sort(expectedIds.begin(), expectedIds.end());
+        assert(bag == expectedIds);
+        // Trial cards share draw IDs with their base routine, so only a
+        // unique ID proves the same card did not repeat across cycles.
+        const unsigned boundary = cycle > 0 ? launches[cycle * count] : 0;
+        if (cycle > 0 && std::count(expectedIds.begin(), expectedIds.end(), boundary) == 1) {
+            assert(launches[cycle * count - 1] != boundary);
         }
     }
 
@@ -338,6 +361,12 @@ void Audio::animateParticleGeqTiles() { draw(14); }
 void Audio::animateParticleGeqPairedBands() { draw(14); }
 void Audio::animateFunkyPlank() { draw(10); }
 void Audio::freqwave(FreqwaveShape) { draw(13); }
-void Audio::frequencyPlanes(bool) { draw(12); }
+void Audio::frequencyPlanes(bool, bool) { draw(12); }
+// Audition pair entry points (temporary trial cards).
+Audio::Controls &Audio::controls() { static Controls values; return values; }
+void Audio::cornerBurst(uint8_t, bool) { draw(6); }
+void Audio::bpm(BpmSpatialMode, float, bool) { draw(4); }
+void Audio::particleGeq(uint8_t, bool) { draw(14); }
+void Audio::animateParticleGeqNova() { draw(14); }
 void Audio::frequencyCubes() { draw(15); }
 void Audio::bouncingBalls(BouncingBallsPattern) { draw(9); }

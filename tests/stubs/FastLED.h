@@ -8,6 +8,7 @@ inline bool operator==(const CRGB &a, const CRGB &b) { return a.r == b.r && a.g 
 struct CRGBPalette16 {
     int id;
     CRGBPalette16(int value) : id(value) {}
+    CRGBPalette16(const CRGB&, const CRGB&, const CRGB&, const CRGB&) : id(0) {}
     operator int() const { return id; }
     CRGB operator[](int) const { return CRGB(255, 255, 255); }
 };

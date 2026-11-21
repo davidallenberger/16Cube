@@ -20,7 +20,10 @@ Audio::Controls &Audio::controls() {
 }
 
 bool Audio::displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]) {
-    const bool active = controls().spectrumCompensationEnabled;
+    // The boost below hand-compensated the ADC module's ~235 Hz roll-off.
+    // When the command board has already undone it, applying both would
+    // double the treble.
+    const bool active = controls().spectrumCompensationEnabled && !audio.spectrumCorrected;
     // Start with the ADC reference song and its quiet lead-in. Leave the
     // bass bins alone and lift only the signal above each higher band's floor.
     constexpr uint8_t floor[] = {3, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4};
@@ -40,6 +43,13 @@ namespace {
         return std::isfinite(gain) ? min(1.0f, max(0.0f, gain)) : Audio::Controls{}.midrangeBoostGain;
     }
 
+    // The midrange boost hand-compensated the old processing path. The new
+    // path's corrected spectrum is judged native: animations tune their own
+    // gain instead of patching the data. OLD keeps the boost for the A/B.
+    bool midrangeBoostActive(const RemoteInputs::AudioFrame &audio) {
+        return Audio::controls().midrangeBoostEnabled && !audio.spectrumCorrected;
+    }
+
     // Each renderer takes a plain callback. Reset its detector on entry.
     MidrangeBoost juliaBoost;
     MidrangeBoost driftRoseBoost;
@@ -50,10 +60,10 @@ namespace {
         const float gain = std::isfinite(settings.juliaSensitivity) ?
             min(8.0f, max(0.0f, settings.juliaSensitivity)) : 1.5f;
         const float gamma = std::isfinite(settings.juliaVolumeGamma) ?
-            min(4.0f, max(0.25f, settings.juliaVolumeGamma)) : 1.0f;
+            min(4.0f, max(0.25f, settings.juliaVolumeGamma)) : Audio::Controls{}.juliaVolumeGamma;
         uint8_t bins[16];
         Audio::displaySpectrum(audio, bins);
-        juliaBoost.update(audio, millis(), settings.midrangeBoostEnabled, bins);
+        juliaBoost.update(audio, millis(), midrangeBoostActive(audio), bins);
         const float lift = juliaBoost.lift * midrangeBoostGain();
         const float volume = min(1.0f, float(audio.volumeSm) * gain / 255.0f + lift);
         const float closure = gamma == 1.0f ? volume : powf(volume, gamma);
@@ -73,7 +83,7 @@ namespace {
         const auto audio = RemoteInputs::audio();
         const auto &settings = Audio::controls();
         const int fullVolume = max(1, int(settings.driftRoseVolumeForFullReach));
-        driftRoseBoost.update(audio, millis(), settings.midrangeBoostEnabled);
+        driftRoseBoost.update(audio, millis(), midrangeBoostActive(audio));
         const float lift = driftRoseBoost.lift * midrangeBoostGain() * midrangeMultiplier;
         const float drive = min(1.0f, float(audio.volumeSm) / fullVolume + lift);
         // VolumeSm already has attack and release smoothing. Apply it to
@@ -130,8 +140,13 @@ void Audio::animatePlasmoidMirrored() {
         }
         lastStep = sinceStep >= 2 * stepMs ? now : lastStep + stepMs;
         const auto audio = RemoteInputs::audio();
-        const unsigned cutoff = audio.volumeSm <= idleNoise ? 0 :
-            min(254u, unsigned(audio.volumeSm) * Audio::controls().plasmoidIntensity / 64);
+        // Silence keeps the same moving pattern, sparse and faint, so the cube
+        // never looks dead. Music takes over as soon as it clears the floor.
+        constexpr unsigned idleCutoff = 40;
+        constexpr uint8_t idleBrightness = 70;
+        const bool idle = audio.volumeSm <= idleNoise;
+        const unsigned cutoff = idle ? idleCutoff :
+            max(idleCutoff, min(254u, unsigned(audio.volumeSm) * Audio::controls().plasmoidIntensity / 64));
         const auto phaseStep = [now, started](unsigned cyclesPerMinute) {
             const uint32_t elapsed = (now - started) % 60000u;
             const uint8_t angle = uint8_t(elapsed * cyclesPerMinute * 256u / 60000u);
@@ -161,6 +176,7 @@ void Audio::animatePlasmoidMirrored() {
                 const uint8_t paletteIndex = uint8_t(cubicAngle + 2u * cosineAngle);
                 light[i] = ColorFromPalette(palette, paletteIndex, 255, LINEARBLEND);
                 light[i].nscale8(uint8_t(score + (255u - score) * brightnessFloor / 255u));
+                if (idle) light[i].nscale8(idleBrightness);
             }
 
             for (uint8_t y = 0; y < RNDR_Y; ++y) {
@@ -628,7 +644,39 @@ void Audio::animateBpmHelix() {
     bpm(BPM_HELIX, controls().bpmSensitivity);
 }
 
-void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
+namespace {
+// DJ-style three-band color (Rekordbox-like): deep blue for lows, amber for
+// mids, white for highs, mixed by each group's share of the display level.
+// Squaring the shares keeps the mix vivid instead of drifting to grey.
+CRGB threeBandBlend(const uint8_t (&bins)[16], float (&share)[3], float retained) {
+    const float sums[3] = {
+        float(bins[0]) + bins[1] + bins[2] + bins[3],
+        float(bins[4]) + bins[5] + bins[6] + bins[7] + bins[8] + bins[9],
+        float(bins[10]) + bins[11] + bins[12] + bins[13] + bins[14] + bins[15],
+    };
+    const float means[3] = {sums[0] / 4.0f, sums[1] / 6.0f, sums[2] / 6.0f};
+    const float squares[3] = {means[0] * means[0], means[1] * means[1], means[2] * means[2]};
+    const float total = squares[0] + squares[1] + squares[2];
+    if (total > 1.0f) {
+        for (int i = 0; i < 3; ++i) {
+            share[i] = squares[i] / total + (share[i] - squares[i] / total) * retained;
+        }
+    }
+    const CRGB anchors[3] = {CRGB(0x0830FF), CRGB(0xFF9000), CRGB(0xFFFFFF)};
+    float r = 0, g = 0, b = 0;
+    for (int i = 0; i < 3; ++i) {
+        r += anchors[i].r * share[i];
+        g += anchors[i].g * share[i];
+        b += anchors[i].b * share[i];
+    }
+    return CRGB(uint8_t(min(255.0f, r)), uint8_t(min(255.0f, g)), uint8_t(min(255.0f, b)));
+}
+}
+
+void Audio::bpm(BpmSpatialMode mode, float sensitivity, bool soundColor) {
+    constexpr uint16_t barBeats = 4;
+    float share[3] = {1.0f, 0.0f, 0.0f}; // Silence starts deep blue.
+    uint32_t lastFrame = millis();
     sensitivity = std::isfinite(sensitivity) ? max(0.0f, sensitivity) : 1.0f;
 
     // Every spatial mode uses the shared musical clock. Volume changes
@@ -638,25 +686,56 @@ void Audio::bpm(BpmSpatialMode mode, float sensitivity) {
 
     while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio();
-        Audio::debug(audio);
+        if (!soundColor) Audio::debug(audio); // B logs its color below.
 
         // Checkerboard has an adjustable beats-per-breath setting. Use the same
         // period for brightness and spatial travel so both stay in step.
         // This divides the shared clock without changing the BPM estimate.
         const uint16_t beatsPerCycle = mode == BPM_CHECKERBOARD ?
             max(uint16_t(1), controls().checkerBeatsPerCycle) : 1;
-        const float breath = 1.0f - audio.beatPulse(beatsPerCycle);
+        // beatPulse is zero on the beat, so 1 - pulse peaks ON each beat.
+        const float onBeat = 1.0f - audio.beatPulse(beatsPerCycle);
         const float cycle = audio.beatAngle(beatsPerCycle) / 6.283185307f;
-        const uint8_t beat = uint8_t(64.0f + breath * 191.0f);
+        const uint8_t beat = uint8_t(64.0f + onBeat * 191.0f);
         const uint8_t travel = uint8_t(cycle * 256.0f);
 
         // Volume remains an artistic brightness control. Zero/stale volume
         // keeps the familiar dim idle breath. Timing does not rescale volume.
         const float volume = min(255.0f, audio.volumeSm * sensitivity);
-        const float amplitude = volume > 1.0f ? 64.0f + volume * 0.6f : 48.0f;
+        const bool music = volume > 1.0f;
+        // With music, breathe once per four beats (a bar-length breath; the
+        // clock has no bar origin) and add a short accent on every beat, so
+        // breathing reads as breathing and the kick still lands. Idle keeps
+        // the slow single-beat breath of the 12 BPM idle clock.
+        float breath = onBeat;
+        if (music) {
+            const float slow = 1.0f - audio.beatPulse(barBeats);
+            const float accent = onBeat * onBeat * onBeat * onBeat;
+            breath = 0.7f * slow + 0.3f * accent;
+        }
+        const float amplitude = music ? 64.0f + volume * 0.6f : 48.0f;
         const uint8_t level = uint8_t(min(255.0f, 32.0f + amplitude * breath));
-        BpmRenderer::draw(phaseMap, RainbowColors_p, uint8_t(beat - travel),
-                          uint8_t(millis() / 40), level);
+        if (soundColor) {
+            // Audition B: the color says what is sounding. A gentle hue
+            // spread around the blend keeps the pattern's texture readable.
+            uint8_t bins[16];
+            displaySpectrum(audio, bins);
+            const uint32_t now = millis();
+            const float retained = expf(-float(uint32_t(now - lastFrame)) / 300.0f);
+            lastFrame = now;
+            const CRGB blend = threeBandBlend(bins, share, retained);
+            CRGB edge = blend;
+            edge.nscale8(170);
+            const CRGBPalette16 palette(edge, blend, blend, edge);
+            BpmRenderer::draw(phaseMap, palette, uint8_t(beat - travel), uint8_t(now / 40), level);
+            char detail[96];
+            snprintf(detail, sizeof(detail), "Breathe color share=%.2f/%.2f/%.2f rgb=%02X%02X%02X",
+                     double(share[0]), double(share[1]), double(share[2]), blend.r, blend.g, blend.b);
+            Audio::debug(audio, detail);
+        } else {
+            BpmRenderer::draw(phaseMap, RainbowColors_p, uint8_t(beat - travel),
+                              uint8_t(millis() / 40), level);
+        }
 
         showCube();
     }
@@ -715,7 +794,7 @@ void Audio::waverly(ShaderMode mode, CRGBPalette16 palette,
         const float attackReach = attackActive ?
             float(RNDR_Z) * attackFraction * (1.0f - float(attackAgeMs) / float(decayMs)) : 0.0f;
 
-        const bool fftEnabled = controls().midrangeBoostEnabled;
+        const bool fftEnabled = midrangeBoostActive(audio);
         uint8_t bins[16];
         const bool compensated = displaySpectrum(audio, bins);
         boost.update(audio, now, fftEnabled, bins);
@@ -814,13 +893,20 @@ namespace {
 
 void Audio::animateFunkyPlank() {
     constexpr uint32_t rowPeriodMs = 64;
-    // Lower bounds use the range seen in the reference ADC log.
-    constexpr uint8_t bucketStarts[] = {7, 12, 20, 28, 36, 44, 52};
+    // Lower bounds. OLD keeps the range seen in the original ADC log. NEW
+    // (corrected spectrum) uses the reference-song spread so every color is
+    // used and the top one is rare (about 10/15/15/15/15/12/10/8 percent).
+    // Provisional until the third audition song is in.
+    constexpr uint8_t oldBucketStarts[] = {7, 12, 20, 28, 36, 44, 52};
+    constexpr uint8_t newBucketStarts[] = {22, 31, 38, 44, 51, 61, 78};
+    // Stronger reads brighter: deep indigo up through warm white, so a loud
+    // moment brightens the plank and kicks scroll down as bright stripes.
+    // Classic red sits in the middle (owner: the earlier magenta read pink).
     const CRGB colors[] = {
-        CRGB::Black, CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00),
-        CRGB(0x00FF00), CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3)
+        CRGB::Black, CRGB(0x100060), CRGB(0x0030FF), CRGB(0x8000FF),
+        CRGB(0xFF0000), CRGB(0xFF4000), CRGB(0xFF9000), CRGB(0xFFFFA0)
     };
-    constexpr char bucketNames[] = "-ROYGBIV";
+    constexpr char bucketNames[] = "-IBVROAW";
     CRGB history[RNDR_Z][surroundGroups] = {};
     int newest = 0;
     uint32_t lastRowMs = millis() - rowPeriodMs;
@@ -838,6 +924,7 @@ void Audio::animateFunkyPlank() {
             for (int group = 0; group < surroundGroups; ++group) {
                 const uint8_t level = max(bins[2 * group], bins[2 * group + 1]);
                 unsigned bucket = 0;
+                const auto &bucketStarts = audio.spectrumCorrected ? newBucketStarts : oldBucketStarts;
                 for (const auto start : bucketStarts) {
                     if (level < start) break;
                     ++bucket;
@@ -888,13 +975,21 @@ void Audio::animateFrequencyPlanes() {
     frequencyPlanes(false);
 }
 
-void Audio::frequencyPlanes(bool discs) {
+void Audio::frequencyPlanes(bool discs, bool lightness) {
     constexpr int bands = 8;
     constexpr int noiseFloor = 6;
-    const CRGB colors[bands] = {
+    CRGB colors[bands] = {
         CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
         CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3), CRGB::White
     };
+    if (lightness) {
+        // Audition B, rainbow plus lightness: the rainbow hue stays, and
+        // whiteness rises with pitch at full brightness. Lows are deep and
+        // saturated, highs pale and pastel; dimness still means quiet.
+        for (int band = 0; band < bands; ++band) {
+            colors[band] = CHSV(uint8_t(band * 32), uint8_t(255 - band * 22), 255);
+        }
+    }
     const int fullAreaLevel = max(1, int(controls().frequencyPlanesLevelForFullArea));
     float visibleLevels[bands] = {};
     uint32_t lastFrame = millis();
@@ -910,14 +1005,26 @@ void Audio::frequencyPlanes(bool discs) {
                 if (audio.fftResult[bin] > noiseFloor) levels[band] = max(levels[band], int(bins[bin]));
             }
             visibleLevels[band] = trackShapeSize(visibleLevels[band], min(levels[band], fullAreaLevel), retained);
-            if (visibleLevels[band] == 0.0f) continue;
+            const int upper = RNDR_Z / 2 + band;
+            const int lower = RNDR_Z - 1 - upper;
+            if (visibleLevels[band] == 0.0f) {
+                // Silence keeps a dim center dot on every band's layer so the
+                // cube never looks dead; music grows the shape from here.
+                CRGB dot = colors[band];
+                dot.nscale8(48);
+                for (int y = (RNDR_Y - 1) / 2; y <= RNDR_Y / 2; ++y) {
+                    for (int x = (RNDR_X - 1) / 2; x <= RNDR_X / 2; ++x) {
+                        setVoxel(x, y, upper, dot);
+                        setVoxel(x, y, lower, dot);
+                    }
+                }
+                continue;
+            }
             // Width and depth grow with the square root so lit area follows
             // the band level. Fractional edge coverage softens size changes.
             const float extent = sqrtf(visibleLevels[band] / fullAreaLevel);
             const float halfWidth = RNDR_X * 0.5f * extent;
             const float halfDepth = RNDR_Y * 0.5f * extent;
-            const int upper = RNDR_Z / 2 + band;
-            const int lower = RNDR_Z - 1 - upper;
             GeometryEngine::rasterHorizontalPatch(halfWidth, halfDepth, discs,
                                                    [&](int x, int y, uint8_t coverage) {
                 CRGB color = colors[band];
@@ -927,7 +1034,7 @@ void Audio::frequencyPlanes(bool discs) {
             });
         }
         char detail[120];
-        snprintf(detail, sizeof(detail), "Frequency Planes curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
+        snprintf(detail, sizeof(detail), lightness ? "Frequency Planes lightness curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d" : "Frequency Planes curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
                  compensated ? "comp" : "raw", levels[0], levels[1], levels[2], levels[3],
                  levels[4], levels[5], levels[6], levels[7], fullAreaLevel);
         debug(audio, detail, 0, bins);
@@ -984,9 +1091,10 @@ void Audio::frequencyCubes() {
                 }
             }
         }
-        char detail[100];
-        snprintf(detail, sizeof(detail), "Frequency Shapes curve=%s bands=%d active=%d bass=%d highs=%d full=%d",
-                 compensated ? "comp" : "raw", bandCount, active, levels[0], levels[bandCount - 1], fullSize);
+        char detail[120];
+        snprintf(detail, sizeof(detail), "Frequency Shapes curve=%s active=%d levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
+                 compensated ? "comp" : "raw", active, levels[0], levels[1], levels[2], levels[3],
+                 levels[4], levels[5], levels[6], levels[7], fullSize);
         debug(audio, detail, 0, bins);
         showCube();
     }
@@ -1120,10 +1228,12 @@ void Audio::drawGeqBars(bool inward) {
         colors[group] = inward ? ColorFromPalette(RainbowColors_p, group * 16, 255, LINEARBLEND)
                                : surroundColors[group];
     }
-    // Two-deep blocks on the full cube. One-deep on the narrower cuboid
-    // keeps the corner bands unambiguous and leaves room for the sphere.
-    const int thickness = min(RNDR_X, RNDR_Y) / surroundGroups;
-    const float maxRadius = min(RNDR_CX, RNDR_CY) - thickness + 0.5f;
+    // One-deep walls on every canvas: two-deep walls hid the center bass
+    // sphere from every side. The sphere keeps its original size limit (one
+    // voxel of air inside the walls on the full cube).
+    const int thickness = 1;
+    const int sphereClearance = max(1, min(RNDR_X, RNDR_Y) / surroundGroups);
+    const float maxRadius = min(RNDR_CX, RNDR_CY) - sphereClearance + 0.5f;
     const int maxBarHeight = RNDR_Z - 1; // Top row is available for the peak.
     // Anchor the rainbow to the cube as the bass shell moves.
     const TextureState texture(MODE_SPATIAL_GRADIENT, RainbowColors_p);
@@ -1281,7 +1391,11 @@ void Audio::drawGeqBars(bool inward) {
 namespace {
 enum class CornerFront { Plane, Sphere, Box };
 
-void drawCornerBurst(CornerFront shape) {
+// trial (audition B, owner-approved 2026-11-20): launch size follows the
+// swell against the song's recent volume range, the fill discharges on
+// launch and regrows over a beat, the front crosses in about one beat, and
+// a half-beat pause separates launches. trial=false is the accepted look.
+void drawCornerBurst(CornerFront shape, bool trial = false) {
     enum class Phase { Waiting, Crest, Traveling };
     constexpr int farX = RNDR_X - 1, farY = RNDR_Y - 1, farZ = RNDR_Z - 1;
     const auto depthAt = [shape](int dx, int dy, int dz) {
@@ -1315,16 +1429,38 @@ void drawCornerBurst(CornerFront shape) {
     float releaseDepth = 0.0f;
     CRGB releaseColor;
     const uint32_t started = millis();
+    // Trial state. The range tracker follows rises and falls instantly and
+    // relaxes by 25 levels per second, so it reflects the last few seconds.
+    float rangeHigh = 0.0f, rangeLow = 255.0f;
+    float launchStrength = 1.0f;
+    float launchTravelMs = travelMs;
+    uint32_t dischargedAt = 0;
+    bool discharged = false;
+    uint32_t pauseUntil = started;
+    uint32_t lastFrameMs = started;
+    unsigned launches = 0;
 
     while (TestDemo::audioRoutineRunning()) {
         const auto audio = RemoteInputs::audio();
         const uint32_t now = millis();
         const int volume = audio.volumeSm;
-        const float fill = attachedDepth(volume);
+        const float frameSeconds = min(0.1f, uint32_t(now - lastFrameMs) / 1000.0f);
+        lastFrameMs = now;
+        rangeHigh = max(float(volume), rangeHigh - Audio::controls().cornerBurstTrialRangeRelax * frameSeconds);
+        rangeLow = min(float(volume), rangeLow + Audio::controls().cornerBurstTrialRangeRelax * frameSeconds);
+        const float range = max(16.0f, rangeHigh - rangeLow);
+        const float beatMs = 60000.0f / constrain(audio.bpm, 60.0f, 180.0f);
+        float fill = attachedDepth(volume);
+        if (trial && discharged) {
+            // Spring release: the dim body regrows from the corner over a beat.
+            fill *= min(1.0f, uint32_t(now - dischargedAt) / beatMs);
+        }
         const CRGB rainbow = CHSV(uint8_t(uint32_t(now - started) / 25), 255, 255);
         if (phase == Phase::Waiting) {
             trough = min(trough, volume);
-            if (volume - trough >= minDrop) {
+            const int swellNeeded = trial ? max(minDrop, int(lroundf(Audio::controls().cornerBurstTrialSwell * range))) : minDrop;
+            const bool paused = trial && int32_t(now - pauseUntil) < 0;
+            if (!paused && volume - trough >= swellNeeded) {
                 crest = volume;
                 confirming = false;
                 phase = Phase::Crest;
@@ -1351,19 +1487,32 @@ void drawCornerBurst(CornerFront shape) {
                 releaseDepth = front;
                 releaseColor = rainbow;
                 released = now;
+                ++launches;
+                if (trial) {
+                    // Peak size against the song's recent range: a big swell
+                    // is bright, thick and fast; a small one faint and thin.
+                    launchStrength = constrain((crest - trough) / (Audio::controls().cornerBurstTrialFullSwell * range), 0.25f, 1.0f);
+                    launchTravelMs = beatMs * (1.3f - 0.5f * launchStrength);
+                    dischargedAt = now;
+                    discharged = true;
+                }
                 confirming = false;
                 phase = Phase::Traveling;
             }
         } else if (phase == Phase::Traveling) {
-            front = releaseDepth + maxDepth * uint32_t(now - released) / travelMs;
+            const float crossingMs = trial ? launchTravelMs : travelMs;
+            front = releaseDepth + maxDepth * uint32_t(now - released) / crossingMs;
             if (front < maxDepth) {
                 frontStrength = (maxDepth - front) / (maxDepth - releaseDepth);
+                if (trial) frontStrength *= 0.35f + 0.65f * launchStrength;
                 frontColor = releaseColor;
             } else {
                 trough = volume;
                 phase = Phase::Waiting;
+                if (trial) pauseUntil = now + uint32_t(beatMs * 0.5f);
             }
         }
+        const float edgeWidth = trial && phase == Phase::Traveling ? 0.8f + 1.7f * launchStrength : 1.5f;
 
         clearAll();
         // Measure from the bottom corner 90 degrees clockwise from (0,0,0). Sum gives
@@ -1374,7 +1523,7 @@ void drawCornerBurst(CornerFront shape) {
                     const int dx = x, dy = farY - y, dz = z;
                     const float depth = depthAt(dx, dy, dz);
                     const float body = 0.15f * min(1.0f, max(0.0f, fill - depth));
-                    const float edge = frontStrength * max(0.0f, 1.0f - fabsf(depth - front) / 1.5f);
+                    const float edge = frontStrength * max(0.0f, 1.0f - fabsf(depth - front) / edgeWidth);
                     const uint8_t brightness = uint8_t(255.0f * max(body, edge));
                     if (brightness > 0) {
                         CRGB color = edge > body ? frontColor : rainbow;
@@ -1386,11 +1535,13 @@ void drawCornerBurst(CornerFront shape) {
         }
         // Keep the origin visible even after a released wave has left the cube.
         setVoxel(0, farY, 0, rainbow);
-        char detail[120];
-        snprintf(detail, sizeof(detail), "Burst phase=%s crest=%d dropMs=%lu fill=%.1f front=%.1f gain=%.2f",
+        char detail[192];
+        snprintf(detail, sizeof(detail), "Burst%s phase=%s crest=%d dropMs=%lu fill=%.1f front=%.1f gain=%.2f launches=%u strength=%.2f range=%.0f",
+                 trial ? " trial" : "",
                  phase == Phase::Traveling ? "travel" : phase == Phase::Crest ? "crest" : "waiting",
                  crest, (unsigned long)(confirming ? uint32_t(now - dropStarted) : 0),
-                 double(fill), double(front), double(volumeGain));
+                 double(fill), double(front), double(volumeGain), launches,
+                 double(trial ? launchStrength : 1.0f), double(range));
         Audio::debug(audio, detail);
         showCube();
     }
@@ -1407,4 +1558,9 @@ void Audio::animateCornerBurstSphere() {
 
 void Audio::animateCornerBurstBox() {
     drawCornerBurst(CornerFront::Box);
+}
+
+void Audio::cornerBurst(uint8_t shape, bool trial) {
+    const CornerFront fronts[] = {CornerFront::Plane, CornerFront::Sphere, CornerFront::Box};
+    drawCornerBurst(fronts[shape % 3], trial);
 }

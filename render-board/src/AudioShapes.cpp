@@ -22,12 +22,31 @@ namespace {
         return min(3.0f, 1.0f + (bpm - 120.0f) * 0.05f);
     }
 
-    void changeOctahedronColors(TextureState &texture) {
-        const CRGB first = texture.palette[1];
-        const CRGB second = texture.palette[2];
-        do {
-            texture.palette = PaletteUtils::getDynamicContrastPalette(CRGB::Gray);
-        } while (texture.palette[1] == first || texture.palette[2] == second);
+    // Center-shape color: one complementary pair (a hue and its opposite),
+    // stepping a fixed distance around the color wheel on each accepted hit
+    // so successive pairs contrast without looking random.
+    constexpr uint8_t shapeHueStep = 80;
+    CRGB shapeHue(uint8_t hue) { return CRGB(CHSV(hue, 255, 255)); }
+
+    // At most one color change per four beats (about once a bar), taken on
+    // the first bass hit once the window has passed.
+    struct ShapeColorClock {
+        uint32_t lastChangeMs = 0;
+        bool changed = false;
+        bool admit(float bpm, uint32_t now) {
+            const float beatMs = 60000.0f / max(40.0f, bpm);
+            if (changed && float(uint32_t(now - lastChangeMs)) < 4.0f * beatMs) return false;
+            lastChangeMs = now;
+            changed = true;
+            return true;
+        }
+    };
+
+    void setOctahedronColors(TextureState &texture, uint8_t hue) {
+        texture.palette = PaletteUtils::getDynamicContrastPalette(CRGB::Gray);
+        texture.palette[1] = shapeHue(hue);
+        texture.palette[2] = shapeHue(uint8_t(hue + 128));
+        texture.palette[3] = shapeHue(uint8_t(hue + 64));
     }
 }
 
@@ -78,38 +97,37 @@ struct Audio::VolumeCubes {
 struct Audio::CylinderResponse {
     VolumeCubes cubes{3};
     TextureState caps{MODE_SOLID};
-    uint8_t bodyColor = random8(rainbowColorCount);
-    uint8_t capColor = nextRainbowColor(bodyColor);
+    uint8_t hue = random8();
+    ShapeColorClock colorClock;
     uint32_t kicks = 0;
+    uint32_t changes = 0;
 
     static float update(TextureState &texture, uint32_t deltaMs, void *context) {
         auto &response = *static_cast<CylinderResponse *>(context);
         if (!texture.cylinderCaps) {
             texture.cylinderCaps = &response.caps;
-            texture.palette[0] = CRGB(rainbowColors[response.bodyColor]);
-            response.caps.palette[0] = CRGB(rainbowColors[response.capColor]);
+            texture.palette[0] = shapeHue(response.hue);
+            response.caps.palette[0] = shapeHue(uint8_t(response.hue + 128));
         }
 
         const auto audio = RemoteInputs::audio();
         if (audio.dedicatedBassKick) {
             ++response.kicks;
-            response.bodyColor = nextRainbowColor(response.bodyColor);
-            const uint8_t previousCap = response.capColor;
-            do {
-                response.capColor = nextRainbowColor(previousCap);
-            } while (response.capColor == response.bodyColor);
-            texture.palette[0] = CRGB(rainbowColors[response.bodyColor]);
-            response.caps.palette[0] = CRGB(rainbowColors[response.capColor]);
+            if (response.colorClock.admit(audio.bpm, millis())) {
+                ++response.changes;
+                response.hue += shapeHueStep;
+                texture.palette[0] = shapeHue(response.hue);
+                response.caps.palette[0] = shapeHue(uint8_t(response.hue + 128));
+            }
         }
         response.cubes.update(audio.volumeSm, deltaMs);
 
         const float rate = shapeRateForBpm(audio.bpm);
         char detail[128];
         snprintf(detail, sizeof(detail),
-                 "Cylinder rate=%.2fx kicks=%lu body=#%06lX caps=#%06lX",
-                 double(rate), (unsigned long)response.kicks,
-                 (unsigned long)rainbowColors[response.bodyColor],
-                 (unsigned long)rainbowColors[response.capColor]);
+                 "Cylinder rate=%.2fx kicks=%lu changes=%lu hue=%u cubeEdge=%.2f",
+                 double(rate), (unsigned long)response.kicks, (unsigned long)response.changes,
+                 unsigned(response.hue), double(response.cubes.edge));
         debug(audio, detail, audio.dedicatedBassKick ? response.kicks : 0);
         return rate;
     }
@@ -121,22 +139,34 @@ struct Audio::CylinderResponse {
 
 struct Audio::OctahedronResponse {
     VolumeCubes cubes{4};
+    uint8_t hue = random8();
+    bool colored = false;
+    ShapeColorClock colorClock;
     uint32_t kicks = 0;
+    uint32_t changes = 0;
 
     static float update(TextureState &texture, uint32_t deltaMs, void *context) {
         auto &response = *static_cast<OctahedronResponse *>(context);
+        if (!response.colored) {
+            setOctahedronColors(texture, response.hue);
+            response.colored = true;
+        }
         const auto audio = RemoteInputs::audio();
         if (audio.dedicatedBassKick) {
             ++response.kicks;
-            changeOctahedronColors(texture);
+            if (response.colorClock.admit(audio.bpm, millis())) {
+                ++response.changes;
+                response.hue += shapeHueStep;
+                setOctahedronColors(texture, response.hue);
+            }
         }
         response.cubes.update(audio.volumeSm, deltaMs);
 
         const float rate = shapeRateForBpm(audio.bpm);
         char detail[128];
-        snprintf(detail, sizeof(detail), "Octahedron rate=%.2fx cubeEdge=%.2f fullVol=%d kicks=%lu",
+        snprintf(detail, sizeof(detail), "Octahedron rate=%.2fx cubeEdge=%.2f fullVol=%d kicks=%lu changes=%lu",
                  double(rate), double(response.cubes.edge), max(1, int(controls().shapeVolumeForFullCube)),
-                 (unsigned long)response.kicks);
+                 (unsigned long)response.kicks, (unsigned long)response.changes);
         debug(audio, detail, audio.dedicatedBassKick ? response.kicks : 0);
         return rate;
     }

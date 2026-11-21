@@ -33,22 +33,30 @@ class Audio {
         float peakAttackSensitivity = 2.5f; // General event admission for Puddle Peak.
         uint16_t checkerBeatsPerCycle = 1;  // 1 = every beat, 2 = half tempo, 4 = quarter tempo.
         float bpmSensitivity = 1.0f;        // Brightness response; timing uses the shared beat clock.
-        float cornerBurstGain = 255.0f / 75.0f; // VolumeSm 75 reaches the attached cap.
-        float surroundGeqGain = 3.0f;     // Shared lift and frequency bar gain.
+        float cornerBurstGain = 2.7f; // VolumeSm ~94 reaches the attached cap (tuned on NEW, 3 songs: cap 4-6%).
+        float cornerBurstTrialSwell = 0.5f;      // Trial B: swell needed to launch, fraction of recent range.
+        float cornerBurstTrialFullSwell = 1.0f; // Trial B: swell for a full-strength front, fraction of range.
+        float cornerBurstTrialRangeRelax = 4.0f; // Trial B: recent-range memory, levels per second.
+        // Replay sweep (3 songs): B launches ~46-51/min vs A ~65-73, strength
+        // p10/50/90 ~0.55/0.8/1.0, fill follows volume +0.64-0.70 (A +0.9).
+        float surroundGeqGain = 2.1f;     // Shared lift and frequency bar gain (owner: 0.7x of 3.0, 2026-11-20).
         float surroundGeqBassGain = 2.5f; // Center sphere radius gain.
         float particleGeqGain = 3.0f;      // FFT gain for PS GEQ's launch speed and rate.
         float particleGeqBrightness = 2.5f; // Boost particle light before the spatial blend.
         bool spectrumCompensationEnabled = true; // Display compensation for spectrum-driven effects.
-        uint8_t frequencyPlanesLevelForFullArea = 85;
-        uint8_t frequencyShapesLevelForFullSize = 85;
-        uint8_t plasmoidIntensity = 128;    // WLED's # of pixels setting. 128 gives a cutoff of 2 * VolumeSm.
-        uint8_t driftRoseVolumeForFullReach = 75; // VolumeSm where the rose reaches its full radius.
-        uint8_t bouncingBallsVolumeForFullHeight = 75; // VolumeSm where a hop reaches the ceiling.
-        uint8_t shapeVolumeForFullCube = 75; // VolumeSm where the corner cubes reach full size.
+        uint8_t frequencyPlanesLevelForFullArea = 110; // NEW, 3 songs: worst band full <~10%.
+        uint8_t frequencyShapesLevelForFullSize = 110; // NEW, 3 songs: worst band full <~10%.
+        uint8_t plasmoidIntensity = 85;     // WLED's # of pixels setting (128 = cutoff 2 x VolumeSm). 85: ~half lit typical, full ~1%.
+        uint8_t driftRoseVolumeForFullReach = 100; // VolumeSm where the rose reaches its full radius (full reach ~3%).
+        uint8_t bouncingBallsVolumeForFullHeight = 100; // VolumeSm where a hop reaches the ceiling (~5% of hops).
+        uint8_t shapeVolumeForFullCube = 100; // VolumeSm where the corner cubes reach full size (~3% at max).
         bool midrangeBoostEnabled = true; // Shared by audio Julia, Waverly and Drift Rose.
         float midrangeBoostGain = 3.75f / 14.4f;   // Maximum lift in normalized effect drive.
-        float juliaSensitivity = 1.5f;     // Same initial volume gain as Waverly.
-        float juliaVolumeGamma = 1.0f;     // <1 boosts quiet levels; >1 favors louder levels.
+        float juliaSensitivity = 2.025f;   // Tuned 2.5 on NEW (3 songs), then -10% twice by eye (owner, 2026-11-20).
+        // <1 boosts quiet levels; >1 favors louder levels. 0.6 straightens the
+        // fractal's lit volume against loudness (measured in render_replay:
+        // lit 41%..79% bends upward, so linear closure hid quiet changes).
+        float juliaVolumeGamma = 0.6f;
         uint32_t juliaAttackMs = 100;      // Geometry smoothing time constant on volume rises; 0 bypasses.
         uint32_t juliaReleaseMs = 220;     // Geometry smoothing time constant on falls; 0 bypasses.
         uint32_t juliaStepMs = 40;         // Drawing interval; color timing stays in milliseconds.
@@ -106,7 +114,8 @@ class Audio {
     static void animateSurroundGEQ();
     static void animateFunkyPlank();
     static void animateFrequencyPlanes();
-    static void frequencyPlanes(bool discs);
+    // lightness (audition B): rainbow hue with whiteness rising with pitch.
+    static void frequencyPlanes(bool discs, bool lightness = false);
     static void frequencyCubes();
     enum class FreqwaveShape { WireframeBox, Sphere };
     static void freqwave(FreqwaveShape shape);
@@ -116,10 +125,17 @@ class Audio {
     static void animateParticleGeqClusters();
     static void animateParticleGeqTiles();
     static void animateParticleGeqPairedBands();
+    // Layout 0 clusters, 1 tiles, 2 paired bands; liquid = audition B.
+    static void particleGeq(uint8_t layout, bool liquid);
+    // Eight band hoses spraying outward from the center (new audition).
+    static void animateParticleGeqNova();
     static bool displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]);
     static void animateCornerBurst();
     static void animateCornerBurstSphere();
     static void animateCornerBurstBox();
+    // Shape 0 plane, 1 sphere, 2 box. trial selects the audition B launch
+    // behavior (peak-sized, discharging, beat-timed, paused); see Audio.cpp.
+    static void cornerBurst(uint8_t shape, bool trial);
 
     static void animateBpmSphere();
     static void animateBpmCheckerboard();
@@ -128,7 +144,8 @@ class Audio {
     // Single-dimension diagnostic: a fixed white cube flashes for accepted
     // bass/mid/high events. No tempo, random placement, or volume-driven size.
     static void animateAttackMonitor();
-    static void bpm(BpmSpatialMode mode, float sensitivity = 1.0f);
+    // soundColor (audition B): three-band blend color instead of the rainbow.
+    static void bpm(BpmSpatialMode mode, float sensitivity = 1.0f, bool soundColor = false);
 
     // General audio diagnostics; reads the same frozen frame as animations.
     // Call regularly to drain its bounded USB queue. Internal static buffers

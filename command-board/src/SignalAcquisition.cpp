@@ -14,8 +14,8 @@
  * attacks are retained between sends. The renderer chooses artistic thresholds,
  * cooldowns and visual peak holds. Tempo uses history-based phase alignment and
  * lock hysteresis, but half/double-time ambiguity and tempo ramps remain limits.
- * Both boards must use shared protocol version 3. No raw audio crosses UART;
- * AGC and automatic musical-structure/dynamics classification are not present.
+ * Both boards must use shared protocol version 4. No raw audio crosses UART;
+ * Slow AGC scales display levels only; musical-structure classification is absent.
  *
  * Animations use ONE render-side AudioFrame, not this wire payload: flat
  * volume/band values, bassKick/midAttack/highAttack and usable BPM, with
@@ -82,12 +82,20 @@
  * This gate does not identify mains hum or selectively remove a frequency.
  *
  * Let scale = 255 * masterSensitivity * sourceGain / uiFullScaleRMS.
- * volumeInputFloat = measuredRMS * scale when the gate is open, else zero.
+ * volumeInputFloat = measuredRMS * scale * AGC factor (4b) when the gate is open,
+ * else zero.
  * That diagnostic VIn is allowed above 255 so overdriving the display is visible.
  * volumeRawFloat is limited to 0..255 BEFORE smoothing for both sources.
  * There is no hidden above-255 envelope and no fabricated minimum average.
  * Increasing these gains changes the visuals, never the speakers or ADC range.
  * The old FFT-sum gain numbers have different units and cannot be copied here.
+ *
+ * 4b. AUTOMATIC GAIN CONTROL (uiAutoGain, default on)
+ *
+ * AutoGain tracks the loud end of the recent music and multiplies scale by
+ * the factor that brings it to referenceRms: fast when the source gets louder,
+ * 0.3 dB/s when it gets quieter, frozen in silence, limited to +18/-30 dB.
+ * Only volume and band DISPLAY levels use it. Kicks, attacks and tempo do not.
  *
  * 5. FREQUENCY ANALYSIS: WHAT THE FFT INDEX MEANS
  *
@@ -120,6 +128,7 @@
  * Multiply by the common scale and binEQ[band], limit to 0..255, then apply
  * uiSpectrumGamma (0.60 initially) to lift weaker display levels. Gamma is
  * display compression, not AGC; zero remains zero. Then smooth the band.
+ * AutoGain (section 4b below) multiplies the common scale for volume and bands.
  *
  * 6. SMOOTHING: WHAT THE THREE VOLUMES AND SIXTEEN BANDS REPRESENT
  *
@@ -173,7 +182,7 @@
  * mutex and records local publication time. UARTSender takes a latest-state
  * snapshot without holding that mutex during transmission. SharedProtocol
  * wraps 21 legacy display bytes, the four-byte kick count and six explicit
- * tempo bytes plus seven attack bytes in a 38-byte Audio payload (protocol version 3).
+ * tempo bytes plus seven attack bytes in a 38-byte Audio payload (protocol version 4).
  * The outer header includes version/type, demanded mode, readiness, boot
  * session, mode revision, sequence, and capturedMs. COBS frames it and CRC-16
  * checks integrity. The inner source label mode is NOT the outer Mode enum.
@@ -199,7 +208,8 @@
  * A calibrated volume floor of 5 distinguishes activity from tiny idle noise.
  * This is an experimental musical clock: half/double-time ambiguity, weak
  * percussion and rapid tempo changes remain limitations. WorkMax includes it.
- * No AGC or spectrum peak holding is implemented.
+ * AGC (AudioAnalysis::AutoGain) scales display levels only; detectors and the
+ * tempo activity floor keep the fixed scale. No spectrum peak holding exists.
  */
 
  /*
@@ -420,7 +430,9 @@ MD0/MD1 / I2S_MODE_MASTER: who drives BCK/WS, not who sends audio samples.
 use_apll: ESP32 I2S clock source, not ADC mode or LEDC routing.
 SAMPLING_FREQ: actual requested acquisition rate and analysis time scale.
 uiMasterSensitivity: visual response only, not speaker volume or ADC range.
-AGC remains disabled. This primer does not add automatic gain control.
+uiAutoGain: display-only automatic gain control; see AudioAnalysis::AutoGain.
+Temporary A/B: in an audio mode the Game button switches new processing
+(AGC + input correction) and the previous processing.
 
 References (manufacturer documentation; figures/tables are worth reading):
 TI PCM1808 Rev. B: sections 7.3.2-7.3.5, Tables 1-3, Figure 24, section 9
@@ -441,6 +453,7 @@ https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x
 #include "SignalAcquisition.h"
 #include "AudioAnalysis.h"
 #include "TempoTracker.h"
+#include "HitDetector.h"
 #include "CommandState.h"
 #include "BoardConfig.h"
 #include "BluetoothManager.h"
@@ -448,8 +461,12 @@ https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x
 #include "ModeButton.h"
 #include <esp_err.h>
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 #include <driver/i2s.h>
 #include <arduinoFFT.h>
+#include <Preferences.h>
 #define FASTLED_INTERNAL
 #include <FastLED.h>
 
@@ -504,7 +521,9 @@ float uiInputGainMic = 4.0f;
 // At unity gain, this RMS maps to 255. These are starting calibration values,
 // not measured properties of your source. Adjust source gain first.
 float uiFullScaleRMS = 0.02f;
-float uiNoiseFloorRMSADC = 0.00002f;
+// Measured 2026-11-19: Bluetooth receiver idle hiss/hum reaches ~1.3e-4 RMS;
+// the quietest musical passage at the usual volume is ~8e-4. Gate between.
+float uiNoiseFloorRMSADC = 0.0002f;
 float uiNoiseFloorRMSMic = 0.00010f;
 float uiSpectrumGamma = 0.60f;
 float uiVolumeAttackMs = 16.0f;
@@ -513,6 +532,40 @@ float uiBandAttackMs = 16.0f;
 float uiBandReleaseMs = 50.0f;
 float uiAverageMs = 800.0f;
 float binEQ[16] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+// NEW PROCESSING = AGC + input correction. The A/B switch compares it with
+// the previous fixed, uncorrected processing.
+//
+// Automatic gain control for display levels (volume and bands) only. The
+// reference is the loud-section RMS that, with the settings above, gives the
+// look the effects were tuned for. false leaves AGC out of new processing.
+bool uiAutoGain = true;
+AudioAnalysis::AutoGain::Settings uiAutoGainSettings;
+AudioAnalysis::AutoGain autoGain;
+// Corner of the ADC module's measured input low-pass (see InputCorrection).
+// Set 0 when a flat module is installed. Kicks and the silence gate always
+// use the uncorrected input.
+float uiInputCorrectionHz = 235.0f;
+AudioAnalysis::InputCorrection correctionLeft;
+AudioAnalysis::InputCorrection correctionRight;
+// TEMPORARY A/B switch: in an audio mode the Game button flips between new
+// processing (true) and the previous processing (false). Every source change
+// restarts from uiNewProcessing. AGC keeps measuring while off, so switching
+// back applies an up-to-date gain immediately. Move to the rotary encoder later.
+bool uiNewProcessing = true;
+bool newProcessingActive = true;
+
+// CALIBRATION (expedient phase): tools/audio_replay/calibrate.py drives the
+// board over USB serial and stores the results in NVS, so a hardware change
+// needs a rerun, not a reflash. These compiled values are the fallback; once a
+// hardware setup is final, write its calibrated values back here.
+struct CalibrationValues {
+    float gateRms;       // uiNoiseFloorRMSADC
+    float correctionHz;  // uiInputCorrectionHz
+    float agcReference;  // uiAutoGainSettings.referenceRms
+    float kickMinRms;    // uiKickMinRMS
+};
+AudioAnalysis::CalibrationMeter calibrationMeter;
+bool audioDebugEnabled = true;  // "debug off" pauses the 2 Hz summary during calibration.
 float volumeSmFloat = 0.0f;
 float sampleAvgFloat = 0.0f;
 float binSm[16] = {};
@@ -540,6 +593,8 @@ constexpr uint32_t AUDIO_DEBUG_INTERVAL_MS = 50;
 uint32_t attackCount = 0; // General attack events; independent of bass kicks.
 uint32_t beatCount = 0; // Monotonic during this boot, including between prints
 uint32_t lastBeatEventMs = 0;
+uint32_t lastTempoKickMs = 0; // Dedicated detector's last kick, for the tempo input only.
+uint32_t tempoKickCount = 0;
 bool beatPending = false; // Cleared after publishing the acquired block
 
 void recordKickEvent(uint32_t nowMs) {
@@ -585,10 +640,11 @@ class BassKickDetector {
     float onsetRatio = 0.0f; // Fast bass power / recent bass power; steady tone ~= 1
     float triggerRatio = 1.7f;
 
-    void begin(float fs) {
+    void begin(float fs, float lowHz = KICK_LOW_HZ, float highHz = KICK_HIGH_HZ) {
         sampleRate = fs;
-        highpass.configure(fs, KICK_LOW_HZ, true);
-        lowpass.configure(fs, KICK_HIGH_HZ, false);
+        highpass.configure(fs, lowHz, true);
+        lowpass.configure(fs, highHz, false);
+        lastRisePower = 0.0f;
         fastAlpha = 1.0f - expf(-1.0f / (fs * 0.020f));
         slowAlpha = 1.0f - expf(-1.0f / (fs * 0.350f));
         fastPower = 0.0f;
@@ -641,7 +697,19 @@ class BassKickDetector {
         return true;
     }
 
+    // Power rise since the previous call, relative to recent power (0 when
+    // steady or falling). Feeds the NEW tempo's kick-phase arbiter; it does
+    // not emit kicks and has no lockout.
+    float takeRise(float minRms) {
+        const float floorRms = max(0.0000001f, minRms);
+        const float reference = max(slowPower, floorRms * floorRms);
+        const float rise = max(0.0f, fastPower - lastRisePower) / reference;
+        lastRisePower = fastPower;
+        return samplesSeen < (uint64_t)(sampleRate * 0.5f) ? 0.0f : min(rise, 50.0f);
+    }
+
   private:
+    float lastRisePower = 0.0f;
     BassBiquad highpass, lowpass;
     float sampleRate = SAMPLING_FREQ;
     float fastAlpha = 0.0f;
@@ -657,12 +725,57 @@ class BassKickDetector {
 // channel and ORs their events once per hop; phase opposition cannot erase a kick.
 BassKickDetector kickDetector;
 BassKickDetector kickDetectorRight;
-AudioAnalysis::OverlapWindow audioWindow;
+// NEW tempo only: a narrower kick band (the kick fundamental, below most bass
+// notes) whose power rises tell beat from off-beat. Same filter class.
+constexpr float KICK_PHASE_LOW_HZ = 40.0f;
+constexpr float KICK_PHASE_HIGH_HZ = 100.0f;
+// RMS gain of AudioAnalysis::InputCorrection over each display band's FFT
+// slots, cached for the current corner. Cheap: recomputed only when the
+// corner changes (calibration profile load or serial command).
+const float *correctionBandGain(float cornerHz) {
+    static float cachedHz = -1.0f;
+    static float inverse[16];
+    if (cornerHz != cachedHz) {
+        const float pole = cornerHz > 0.0f ? expf(-6.283185307f * cornerHz / float(SAMPLING_FREQ)) : 0.0f;
+        const float scale = 1.0f / (1.0f - pole);
+        for (unsigned band = 0; band < 16; ++band) {
+            float power = 0.0f;
+            unsigned slots = 0;
+            for (unsigned slot = AudioAnalysis::BandEdges[band]; slot < AudioAnalysis::BandEdges[band + 1]; ++slot) {
+                const float w = 6.283185307f * slot / float(AudioAnalysis::WindowSamples);
+                power += scale * scale * (1.0f - 2.0f * pole * cosf(w) + pole * pole);
+                ++slots;
+            }
+            inverse[band] = sqrtf(max(1.0e-12f, power / max(1u, slots)));
+        }
+        cachedHz = cornerHz;
+    }
+    return inverse;
+}
+bool uiKickPhaseArbiter = true; // NEW tempo's beat/off-beat arbiter (replay A/B).
+float debugKickRise = 0.0f;
+float debugTempoBands[16] = {}; // Last hop's rhythm bands (host replay diagnostics). // Last hop's kick-band rise (host replay diagnostics).
+BassKickDetector kickPhaseLeft;
+BassKickDetector kickPhaseRight;
+BassBiquad gateHighpassLeft;
+BassBiquad gateHighpassRight;
+AudioAnalysis::OverlapWindow audioWindow;   // Corrected when new processing is active.
+AudioAnalysis::OverlapWindow rawWindow;     // Always uncorrected: logged InRMS and calibration fit.
+// The silence gate listens ABOVE ~150 Hz (uncorrected). Measured 2026-11-19:
+// in silence the receiver chain emits short ~60 Hz rumble bursts up to about
+// -64 dBFS that would otherwise open the gate (and wake the tempo clock),
+// while music always has content above 150 Hz, even in breakdowns.
+constexpr float GATE_HIGHPASS_HZ = 150.0f;
+AudioAnalysis::OverlapWindow gateWindow;
+float gateLeft[AUDIO_HOP_SAMPLES];
+float gateRight[AUDIO_HOP_SAMPLES];
 AudioAnalysis::SpectrumWindow spectrumWindow;
 float vReal[SAMPLES];
 float vImag[SAMPLES];
 float hopLeft[AUDIO_HOP_SAMPLES];
 float hopRight[AUDIO_HOP_SAMPLES];
+float correctedLeft[AUDIO_HOP_SAMPLES];
+float correctedRight[AUDIO_HOP_SAMPLES];
 ArduinoFFT<float> FFT(vReal, vImag, SAMPLES, SAMPLING_FREQ);
 
 // --- System State ---
@@ -670,7 +783,13 @@ enum SystemMode { MODE_ANIMATION, MODE_I2S_MIC, MODE_ADC, MODE_VIDEOGAME, MODE_M
 SystemMode currentMode = MODE_ANIMATION;
 
 bool i2sInstalled = false;
-TempoTracker tempoTracker; // Acquisition task only; fixed storage, no heap.
+// Acquisition task only; fixed storage, no heap. Both run every hop so the
+// Game A/B switch compares like with like: OLD is the original tracker,
+// NEW adds the kick-phase arbiter. The published rhythm follows the switch.
+TempoTracker tempoTracker;    // OLD
+TempoTracker tempoTrackerNew; // NEW
+HitDetector hitDetector;      // NEW published hits (see HitDetector.h)
+HitDetector::Settings uiHitSettings; // Applied on every audio reset.
 bool i2sReady = false;
 unsigned long audioReadyAt = 0;
 unsigned long lastAudioDiagnostic = 0;
@@ -679,8 +798,21 @@ bool configureI2SForMode(SystemMode mode) {
     i2sReady = false;
     // Never combine samples from different sources or across a source reset.
     audioWindow.reset();
+    rawWindow.reset();
+    gateWindow.reset();
+    gateHighpassLeft.configure(SAMPLING_FREQ, GATE_HIGHPASS_HZ, true);
+    gateHighpassRight.configure(SAMPLING_FREQ, GATE_HIGHPASS_HZ, true);
+    correctionLeft.configure(uiInputCorrectionHz);
+    correctionRight.configure(uiInputCorrectionHz);
     tempoTracker.reset();
+    tempoTrackerNew.settings.kickPhaseArbiter = uiKickPhaseArbiter;
+    tempoTrackerNew.reset();
+    hitDetector.settings = uiHitSettings;
+    hitDetector.reset();
+    tempoKickCount = 0;
     // Do not carry smoothing/AGC values from another source or a previous mode.
+    autoGain.reset(uiAutoGainSettings);
+    newProcessingActive = uiNewProcessing;
     volumeSmFloat = 0.0f;
     sampleAvgFloat = 0.0f;
     for (int i = 0; i < 16; ++i) {
@@ -688,6 +820,8 @@ bool configureI2SForMode(SystemMode mode) {
     }
     kickDetector.begin(SAMPLING_FREQ);
     kickDetectorRight.begin(SAMPLING_FREQ);
+    kickPhaseLeft.begin(SAMPLING_FREQ, KICK_PHASE_LOW_HZ, KICK_PHASE_HIGH_HZ);
+    kickPhaseRight.begin(SAMPLING_FREQ, KICK_PHASE_LOW_HZ, KICK_PHASE_HIGH_HZ);
     audioHealth = {};
     audioHealth.startedMs = millis();
     beatPending = false;
@@ -843,7 +977,8 @@ static void queueAudioDebug(const int32_t *words, size_t frames, size_t channels
                             const AudioPayload &audio, float inputLevel, float measuredRMS) {
 #if COMMAND_AUDIO_DEBUG
     const uint32_t now = millis();
-    if (audioDebugSent < audioDebugLength || uint32_t(now - lastAudioSummary) < 500) {
+    if (!audioDebugEnabled || audioDebugSent < audioDebugLength ||
+        uint32_t(now - lastAudioSummary) < 500) {
         return;
     }
     lastAudioSummary = now;
@@ -853,9 +988,11 @@ static void queueAudioDebug(const int32_t *words, size_t frames, size_t channels
     const float sourceGain = audio.mode == 1 ? uiInputGainMic : uiInputGainADC;
     int n =
         snprintf(audioDebugText, sizeof(audioDebugText),
-                 "%s: InRMS=%.7f Gain=%.3f Sens=%.2f VIn=%.1f VRaw=%u VSm=%u VAvg=%u Beats=%lu "
+                 "%s: InRMS=%.7f Gain=%.3f Sens=%.2f EQ=%d AGC=%+.1fdB VIn=%.1f VRaw=%u VSm=%u VAvg=%u Beats=%lu "
                  "BassRMS=%.5f Attacks=%lu BPM=%.1f Phase=%u Conf=%u Flags=%u Bins:[",
                  source, double(measuredRMS), double(sourceGain), double(uiMasterSensitivity),
+                 int((audio.tempoFlags & CubinaWire::SPECTRUM_CORRECTED) != 0),
+                 newProcessingActive && uiAutoGain ? double(autoGain.gainDb()) : 0.0,
                  double(inputLevel), unsigned(audio.volumeRaw), unsigned(audio.volumeSm),
                  unsigned(audio.sampleAvg), (unsigned long)beatCount, double(kickDetector.bassRms),
                  (unsigned long)audio.attackCount, double(audio.tempoBpm100) / 100.0,
@@ -896,6 +1033,34 @@ static void queueAudioDebug(const int32_t *words, size_t frames, size_t channels
 #endif
 }
 
+// Finish any partly drained debug line so a calibration reply starts cleanly.
+static void breakAudioDebugLine() {
+    if (audioDebugSent > 0 && audioDebugSent < audioDebugLength) {
+        Serial.println("");
+    }
+    audioDebugSent = 0;
+    audioDebugLength = 0;
+}
+
+// One line per measurement, all levels in dBFS. "bands" are the analysis
+// band RMS values; "bins" are the largest published display bytes.
+static void reportCalibrationMeasurement() {
+    breakAudioDebugLine();
+    Serial.printf("CAL MEASURE path=%s hops=%u rms=%.2f rmsmax=%.2f gate=%.2f gatemax=%.2f vraw=%u bands=",
+                  newProcessingActive ? "new" : "old", calibrationMeter.hops,
+                  double(calibrationMeter.rmsDb()), double(calibrationMeter.rmsMaxDb()),
+                  double(calibrationMeter.gateDb()), double(calibrationMeter.gateMaxDb()),
+                  unsigned(calibrationMeter.volumeRawMax));
+    for (size_t band = 0; band < AudioAnalysis::SpectrumBands; ++band) {
+        Serial.printf(band ? ",%.2f" : "%.2f", double(calibrationMeter.bandDb(band)));
+    }
+    Serial.printf(" bins=");
+    for (size_t band = 0; band < AudioAnalysis::SpectrumBands; ++band) {
+        Serial.printf(band ? ",%u" : "%u", unsigned(calibrationMeter.binMax[band]));
+    }
+    Serial.printf("\r\n");
+}
+
 static void acquireAudio(bool sd) {
 
     if (!sd && !i2sReady) {
@@ -917,9 +1082,19 @@ static void acquireAudio(bool sd) {
         // A gap invalidates continuous filter history; re-warm the detector.
         // Retain any event already waiting for transmission.
         audioWindow.reset();
+        rawWindow.reset();
+        gateWindow.reset();
+        gateHighpassLeft.configure(SAMPLING_FREQ, GATE_HIGHPASS_HZ, true);
+        gateHighpassRight.configure(SAMPLING_FREQ, GATE_HIGHPASS_HZ, true);
+        correctionLeft.configure(uiInputCorrectionHz);
+        correctionRight.configure(uiInputCorrectionHz);
         tempoTracker.reset();
+        tempoTrackerNew.reset();
+        hitDetector.reset();
         kickDetector.begin(SAMPLING_FREQ);
         kickDetectorRight.begin(SAMPLING_FREQ);
+        kickPhaseLeft.begin(SAMPLING_FREQ, KICK_PHASE_LOW_HZ, KICK_PHASE_HIGH_HZ);
+        kickPhaseRight.begin(SAMPLING_FREQ, KICK_PHASE_LOW_HZ, KICK_PHASE_HIGH_HZ);
         ++audioHealth.readErrors;
         volumeSmFloat = 0.0f;
         sampleAvgFloat = 0.0f;
@@ -936,6 +1111,8 @@ static void acquireAudio(bool sd) {
     if ((int32_t)(millis() - audioReadyAt) < 0) {
         // Drain reset/fade-in data without mixing it into the first window.
         audioWindow.reset();
+        rawWindow.reset();
+        gateWindow.reset();
         return;
     }
 
@@ -952,26 +1129,56 @@ static void acquireAudio(bool sd) {
         hopLeft[i] = float(words[i * channels]) / 2147483648.0f;
         hopRight[i] = channels == 2 ? float(words[i * channels + 1]) / 2147483648.0f : hopLeft[i];
         kickDetector.processSample(hopLeft[i]);
+        kickPhaseLeft.processSample(hopLeft[i]);
         if (channels == 2) {
             kickDetectorRight.processSample(hopRight[i]);
+            kickPhaseRight.processSample(hopRight[i]);
         }
+        // Run the correction continuously so its one-sample history is valid
+        // the moment the A/B switch turns it on.
+        correctedLeft[i] = correctionLeft.process(hopLeft[i]);
+        correctedRight[i] = channels == 2 ? correctionRight.process(hopRight[i]) : correctedLeft[i];
+        gateLeft[i] = gateHighpassLeft.process(hopLeft[i]);
+        gateRight[i] = channels == 2 ? gateHighpassRight.process(hopRight[i]) : gateLeft[i];
     }
     const bool kickLeft = kickDetector.finishBlock(uiKickSensitivity, uiKickMinRMS);
     const bool kickRight =
         channels == 2 && kickDetectorRight.finishBlock(uiKickSensitivity, uiKickMinRMS);
     const bool tempoKick = (kickLeft || kickRight) &&
-        (beatCount == 0 || uint32_t(millis() - lastBeatEventMs) >= KICK_MIN_INTERVAL_MS);
+        (tempoKickCount == 0 || uint32_t(millis() - lastTempoKickMs) >= KICK_MIN_INTERVAL_MS);
     if (tempoKick) {
+        ++tempoKickCount;
+        lastTempoKickMs = millis();
+    }
+    // OLD publishes the dedicated detector's kicks; NEW publishes the
+    // unified detector's low-group hits instead (below). The tempo always
+    // uses the dedicated kicks.
+    if (tempoKick && !newProcessingActive) {
         // Two channel detections of one hit remain ONE transported event.
         recordKickEvent(millis());
     }
-    if (!audioWindow.appendHop(hopLeft, hopRight, channels == 2)) {
+    const bool correcting = newProcessingActive && uiInputCorrectionHz > 0.0f;
+    rawWindow.appendHop(hopLeft, hopRight, channels == 2);
+    gateWindow.appendHop(gateLeft, gateRight, channels == 2);
+    if (!audioWindow.appendHop(correcting ? correctedLeft : hopLeft,
+                               correcting ? correctedRight : hopRight, channels == 2)) {
         return;
     }
 
     // RMS uses BOTH channel powers. The spectrum uses one intact dominant
     // channel per complete window, so we still perform only one float FFT.
-    const float measuredRMS = audioWindow.copyForFFT(vReal, vImag);
+    // The FFT always runs on the UNCORRECTED window; NEW applies the treble
+    // correction to the display bands as a per-band gain (below). Rhythm,
+    // attacks and calibration then see the same spectrum in both A/B
+    // positions. (Running the FFT on the corrected window changed which
+    // channel was dominant and jittered bands +/-20-30% per frame, which cut
+    // NEW BPM accuracy on the replay: Lay Low 99% -> 82%, Levels 88% -> 76%.)
+    // Gate and activity floor use the uncorrected input: the correction lifts
+    // high-frequency hiss by up to ~30 dB, which must not open the gate.
+    const float inputRMS = rawWindow.copyForFFT(vReal, vImag);
+    // Volume and AGC keep the corrected (flat-response) loudness in NEW.
+    const float measuredRMS = correcting ? audioWindow.rms() : inputRMS;
+    const float gateLevelRMS = gateWindow.rms();
     spectrumWindow.apply(vReal);
     FFT.compute(FFTDirection::Forward);
     FFT.complexToMagnitude();
@@ -983,16 +1190,24 @@ static void acquireAudio(bool sd) {
     const float sensitivity = max(0.0f, uiMasterSensitivity) * max(0.0f, inputGain);
     const float scale = 255.0f * sensitivity / max(0.000001f, uiFullScaleRMS);
     const bool audible =
-        (!isnan(measuredRMS) && !isinf(measuredRMS)) && measuredRMS > max(0.0f, gateRMS);
-    const float volumeInputFloat = audible ? measuredRMS * scale : 0.0f;
+        (!isnan(measuredRMS) && !isinf(measuredRMS)) && gateLevelRMS > max(0.0f, gateRMS);
+    // AGC scales DISPLAY levels only. Detectors below keep the fixed scale.
+    // Always track, so the A/B switch can turn AGC on without a settling delay.
+    const float trackedGain =
+        autoGain.update(measuredRMS, audible, AudioAnalysis::HopSeconds, uiAutoGainSettings);
+    const float autoGainFactor = newProcessingActive && uiAutoGain ? trackedGain : 1.0f;
+    const float displayScale = scale * autoGainFactor;
+    const float volumeInputFloat = audible ? measuredRMS * displayScale : 0.0f;
     const float volumeRawFloat = AudioAnalysis::boundedLevel(volumeInputFloat);
 
     AudioPayload payload = {}; // Complete summary for our shared binary contract.
     payload.mode = sd ? 3 : (adcMode ? 2 : 1);
     float tempoBands[16] = {};
+    const float *correction = correcting ? correctionBandGain(uiInputCorrectionHz) : nullptr;
     for (unsigned band = 0; band < 16; ++band) {
         tempoBands[band] = spectrumWindow.bandRMS(vReal, band);
-        float level = audible ? tempoBands[band] * scale * max(0.0f, binEQ[band]) : 0.0f;
+        const float bandRms = correction ? tempoBands[band] * correction[band] : tempoBands[band];
+        float level = audible ? bandRms * displayScale * max(0.0f, binEQ[band]) : 0.0f;
         level = AudioAnalysis::boundedLevel(level);
         if (level > 0.0f) {
             level = 255.0f * powf(level / 255.0f, max(0.1f, uiSpectrumGamma));
@@ -1004,9 +1219,31 @@ static void acquireAudio(bool sd) {
     }
     // Rhythm uses pre-EQ/pre-gamma bands. A modest calibrated activity floor
     // keeps a tiny electrical baseline from counting as music during silence.
-    const TempoTracker::Result rhythm = tempoTracker.process(
-        tempoBands, audible && volumeRawFloat >= 5.0f, AudioAnalysis::HopSeconds, tempoKick);
-    if (rhythm.attack.event) {
+    // The activity floor uses the FIXED calibration, as before AGC existed.
+    const bool rhythmAudible = audible && inputRMS * scale >= 5.0f;
+    const float kickRise = channels == 2 ?
+        0.5f * (kickPhaseLeft.takeRise(uiKickMinRMS) + kickPhaseRight.takeRise(uiKickMinRMS)) :
+        kickPhaseLeft.takeRise(uiKickMinRMS);
+    debugKickRise = kickRise;
+    for (unsigned band = 0; band < 16; ++band) debugTempoBands[band] = tempoBands[band];
+    const TempoTracker::Result rhythmOld = tempoTracker.process(
+        tempoBands, rhythmAudible, AudioAnalysis::HopSeconds, tempoKick);
+    const TempoTracker::Result rhythmNew = tempoTrackerNew.process(
+        tempoBands, rhythmAudible, AudioAnalysis::HopSeconds, tempoKick, kickRise);
+    const TempoTracker::Result &rhythm = newProcessingActive ? rhythmNew : rhythmOld;
+    // Run continuously in both positions so switching A/B needs no settling.
+    const HitDetector::Result hit = hitDetector.process(tempoBands, rhythmAudible, AudioAnalysis::HopSeconds);
+    if (newProcessingActive) {
+        // NEW: the unified hit detector is the only source of published hits.
+        if (hit.event) {
+            ++attackCount;
+            payload.attackStrength = uint8_t(lroundf(hit.strength * 255.0f));
+            payload.attackBands = hit.bands();
+            if (hit.groups & 1u) {
+                recordKickEvent(millis());
+            }
+        }
+    } else if (rhythm.attack.event) {
         ++attackCount;
         payload.attackStrength = uint8_t(lroundf(rhythm.attack.strength * 255.0f));
         payload.attackBands = rhythm.attack.bands;
@@ -1015,7 +1252,8 @@ static void acquireAudio(bool sd) {
     payload.tempoBpm100 = uint16_t(lroundf(rhythm.bpm * 100.0f));
     payload.tempoPhase = uint16_t(rhythm.phase * 65536.0f);
     payload.tempoConfidence = uint8_t(lroundf(rhythm.confidence * 255.0f));
-    payload.tempoFlags = (rhythm.active ? CubinaWire::AUDIO_ACTIVE : 0) |
+    payload.tempoFlags = (correcting ? CubinaWire::SPECTRUM_CORRECTED : 0) |
+                         (rhythm.active ? CubinaWire::AUDIO_ACTIVE : 0) |
                          (rhythm.locked ? CubinaWire::TEMPO_LOCKED : 0);
 
     volumeSmFloat =
@@ -1041,8 +1279,11 @@ static void acquireAudio(bool sd) {
     }
 
     // Fixed color zones: 1-4 blue, 5-8 green, 9-11 yellow, 12-14 red.
+    // A/B test: the whole bar is purple while AGC is switched off.
     for (int i = 0; i < litLeds; i++) {
-        if (i < 4) {
+        if (!newProcessingActive) {
+            leds[i] = CRGB::Purple;
+        } else if (i < 4) {
             leds[i] = CRGB::Blue;
         } else if (i < 8) {
             leds[i] = CRGB::Green;
@@ -1064,7 +1305,11 @@ static void acquireAudio(bool sd) {
     // the latest complete result at a nominal 60 Hz. No UART work under this mutex.
     CommandState::publishAudio(payload, beatCount);
     beatPending = false;
-    queueAudioDebug(words, AUDIO_HOP_SAMPLES, channels, payload, volumeInputFloat, measuredRMS);
+    if (calibrationMeter.add(inputRMS, gateLevelRMS, tempoBands, payload.volumeRaw, payload.fftResult,
+                             AudioAnalysis::HopSeconds)) {
+        reportCalibrationMeasurement();
+    }
+    queueAudioDebug(words, AUDIO_HOP_SAMPLES, channels, payload, volumeInputFloat, inputRMS);
     // Includes FFT, tempo analysis, display, publication, and diagnostics, but not
     // the blocking I2S read or the task's outside polling/yield operations.
     audioHealth.maxDSPUs = max(audioHealth.maxDSPUs, uint32_t(micros() - dspStart));
@@ -1080,6 +1325,8 @@ namespace {
     };
     Mode selected = Mode::Animation;
     uint32_t lastDepthRead = 0;
+    extern char activeProfile[];
+    void activateSourceProfile();
     void demand(Mode m) {
         // Only the two physical audio inputs are exposed by this build.
         // AudioBluetooth is the existing wire value 2 for the PCM1808 path;
@@ -1111,12 +1358,259 @@ namespace {
         configureI2SForMode(MODE_ANIMATION);
         currentMode = MODE_ANIMATION;
         bool ready = SourceAdapters::select(m);
+        activeProfile[0] = '\0';
         if (m == Mode::AudioMic || m == Mode::AudioBluetooth) {
             currentMode = m == Mode::AudioMic ? MODE_I2S_MIC : MODE_ADC;
+            activateSourceProfile();  // This hardware configuration's calibration.
             ready = ready && configureI2SForMode(currentMode);
         }
         CommandState::setReady(ready && !CubinaWire::audioMode(m) && m != Mode::Depth);
         Serial.printf("Demand mode: %s (%u)\r\n", modeName(m), unsigned(m));
+    }
+    void toggleNewProcessing() {
+        if (audioDebugSent > 0 && audioDebugSent < audioDebugLength) {
+            Serial.println("");
+        }
+        audioDebugSent = 0;
+        audioDebugLength = 0;
+        newProcessingActive = !newProcessingActive;
+        Serial.printf("A/B: %s\r\n", newProcessingActive ? "NEW (AGC + treble correction)"
+                                                         : "OLD (fixed gain, uncorrected)");
+    }
+    // ---- Calibration profiles and commands over USB serial ----
+    //
+    // A PROFILE describes one hardware configuration: an audio source feeding
+    // a digitizer (e.g. "bt-pcm1808": Bluetooth receiver into this PCM1808
+    // module; "mic-inmp441"; later "dj-pcm1808"). Each physical input (ADC,
+    // Mic) is assigned one profile; selecting the input loads it. Profiles are
+    // measured by tools/audio_replay/calibrate.py and stored in NVS under
+    // "cal-<name>". Correct per-profile data lets ONE visual tuning serve
+    // every configuration. Expedient phase: once a configuration is final,
+    // copy its values into compiledDefaults() below.
+    //
+    // One command per line; every reply starts with "CAL ":
+    //   ping | mode adc|mic|anim | ab new|old | debug on|off | get
+    //   set gate|corr_hz|agc_ref|kick_min VALUE | measure SECONDS
+    //   profile | profile use NAME | save | load | defaults | forget
+    constexpr const char *AssignmentNamespace = "cubina-audio";
+    constexpr size_t ProfileNameBytes = 12;  // NVS namespaces are <= 15 chars with "cal-".
+    char activeProfile[ProfileNameBytes] = "";
+
+    bool micSource() {
+        return currentMode == MODE_I2S_MIC;
+    }
+    // Compiled fallback values per physical input, used when a profile has
+    // never been saved. ADC: the 2026-11-19 PCM1808 module (low-pass measured
+    // at 201 Hz by calibrate.py). Mic: INMP441, assumed flat.
+    CalibrationValues compiledDefaults(bool mic) {
+        return mic ? CalibrationValues{0.00010f, 0.0f, 0.0055f, 0.0003f}
+                   : CalibrationValues{0.0002f, 235.0f, 0.0055f, 0.0003f};
+    }
+    const char *defaultProfileName(bool mic) {
+        return mic ? "mic-inmp441" : "bt-pcm1808";
+    }
+    CalibrationValues currentCalibration() {
+        return {micSource() ? uiNoiseFloorRMSMic : uiNoiseFloorRMSADC, uiInputCorrectionHz,
+                uiAutoGainSettings.referenceRms, uiKickMinRMS};
+    }
+    void applyCalibration(const CalibrationValues &v) {
+        (micSource() ? uiNoiseFloorRMSMic : uiNoiseFloorRMSADC) = v.gateRms;
+        uiInputCorrectionHz = v.correctionHz;
+        uiAutoGainSettings.referenceRms = v.agcReference;
+        uiKickMinRMS = v.kickMinRms;
+        correctionLeft.configure(uiInputCorrectionHz);
+        correctionRight.configure(uiInputCorrectionHz);
+    }
+    void printCalibration(const char *what) {
+        breakAudioDebugLine();
+        const CalibrationValues v = currentCalibration();
+        Serial.printf("CAL %s profile=%s source=%s gate=%.7f corr_hz=%.1f agc_ref=%.6f kick_min=%.7f\r\n",
+                      what, activeProfile[0] ? activeProfile : "-", micSource() ? "mic" : "adc",
+                      double(v.gateRms), double(v.correctionHz), double(v.agcReference),
+                      double(v.kickMinRms));
+    }
+    void profileNamespace(const char *name, char (&out)[16]) {
+        snprintf(out, sizeof(out), "cal-%s", name);
+    }
+    // Load NAME's stored values, or the compiled values for this input.
+    bool loadProfile(const char *name) {
+        char space[16];
+        profileNamespace(name, space);
+        CalibrationValues v = compiledDefaults(micSource());
+        Preferences prefs;
+        const bool stored = prefs.begin(space, true);
+        if (stored) {
+            v.gateRms = prefs.getFloat("gate", v.gateRms);
+            v.correctionHz = prefs.getFloat("corr_hz", v.correctionHz);
+            v.agcReference = prefs.getFloat("agc_ref", v.agcReference);
+            v.kickMinRms = prefs.getFloat("kick_min", v.kickMinRms);
+            prefs.end();
+        }
+        snprintf(activeProfile, sizeof(activeProfile), "%s", name);
+        applyCalibration(v);
+        return stored;
+    }
+    // Called by demand() before an audio input is configured.
+    void activateSourceProfile() {
+        const char *key = micSource() ? "mic" : "adc";
+        char name[ProfileNameBytes] = "";
+        Preferences prefs;
+        if (prefs.begin(AssignmentNamespace, true)) {
+            prefs.getString(key, name, sizeof(name));
+            prefs.end();
+        }
+        if (!name[0]) {
+            snprintf(name, sizeof(name), "%s", defaultProfileName(micSource()));
+        }
+        printCalibration(loadProfile(name) ? "LOADED" : "COMPILED");
+    }
+    void assignProfile(const char *name) {
+        Preferences prefs;
+        if (prefs.begin(AssignmentNamespace, false)) {
+            prefs.putString(micSource() ? "mic" : "adc", name);
+            prefs.end();
+        }
+    }
+    void saveCalibration() {
+        char space[16];
+        profileNamespace(activeProfile, space);
+        Preferences prefs;
+        if (!activeProfile[0] || !prefs.begin(space, false)) {
+            breakAudioDebugLine();
+            Serial.printf("CAL ERR save failed (select an audio input first)\r\n");
+            return;
+        }
+        const CalibrationValues v = currentCalibration();
+        prefs.putFloat("gate", v.gateRms);
+        prefs.putFloat("corr_hz", v.correctionHz);
+        prefs.putFloat("agc_ref", v.agcReference);
+        prefs.putFloat("kick_min", v.kickMinRms);
+        prefs.end();
+        assignProfile(activeProfile);
+        printCalibration("SAVED");
+    }
+    void reply(const char *text, const char *arg = "") {
+        breakAudioDebugLine();
+        Serial.printf("CAL %s %s\r\n", text, arg);
+    }
+    bool validProfileName(const char *name) {
+        const size_t length = strlen(name);
+        if (length == 0 || length >= ProfileNameBytes) {
+            return false;
+        }
+        for (size_t i = 0; i < length; ++i) {
+            const char c = name[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) {
+                return false;
+            }
+        }
+        return true;
+    }
+    void handleCalibrationCommand(const char *line) {
+        char command[16] = {};
+        char argument[24] = {};
+        char third[24] = {};
+        const int fields = sscanf(line, "%15s %23s %23s", command, argument, third);
+        if (fields < 1) {
+            return;
+        }
+        const float value = fields >= 3 ? float(atof(third)) : 0.0f;
+        const auto is = [](const char *a, const char *b) { return strcmp(a, b) == 0; };
+        const bool audioInput = CubinaWire::audioMode(selected) && activeProfile[0];
+        if (is(command, "ping")) {
+            reply("OK", "ping");
+        } else if (is(command, "mode")) {
+            if (is(argument, "adc")) {
+                demand(Mode::AudioBluetooth);
+            } else if (is(argument, "mic")) {
+                demand(Mode::AudioMic);
+            } else if (is(argument, "anim")) {
+                demand(Mode::Animation);
+            } else {
+                reply("ERR mode", argument);
+                return;
+            }
+            reply("OK mode", argument);
+        } else if (is(command, "ab") && (is(argument, "new") || is(argument, "old"))) {
+            newProcessingActive = is(argument, "new");
+            reply("OK ab", argument);
+        } else if (is(command, "debug") && (is(argument, "on") || is(argument, "off"))) {
+            audioDebugEnabled = is(argument, "on");
+            reply("OK debug", argument);
+        } else if (is(command, "get") || (is(command, "profile") && fields == 1)) {
+            printCalibration("VALUES");
+        } else if (!audioInput && (is(command, "set") || is(command, "profile") || is(command, "save") ||
+                                   is(command, "load") || is(command, "defaults") || is(command, "forget"))) {
+            reply("ERR", "select an audio input first (mode adc|mic)");
+        } else if (is(command, "profile") && is(argument, "use") && fields == 3) {
+            if (!validProfileName(third)) {
+                reply("ERR profile name (a-z, 0-9, '-', at most 11)", third);
+                return;
+            }
+            assignProfile(third);
+            printCalibration(loadProfile(third) ? "LOADED" : "COMPILED");
+        } else if (is(command, "set") && fields == 3 && isfinite(value)) {
+            CalibrationValues v = currentCalibration();
+            if (is(argument, "gate")) {
+                v.gateRms = constrain(value, 1.0e-6f, 0.01f);
+            } else if (is(argument, "corr_hz")) {
+                v.correctionHz = constrain(value, 0.0f, 15000.0f);
+            } else if (is(argument, "agc_ref")) {
+                v.agcReference = constrain(value, 1.0e-5f, 0.5f);
+            } else if (is(argument, "kick_min")) {
+                v.kickMinRms = constrain(value, 1.0e-6f, 0.05f);
+            } else {
+                reply("ERR set", argument);
+                return;
+            }
+            applyCalibration(v);
+            printCalibration("VALUES");
+        } else if (is(command, "measure")) {
+            const float seconds = float(atof(argument));
+            if (!CubinaWire::audioMode(selected) || !i2sReady || !(seconds > 0.0f)) {
+                reply("ERR measure", "needs an audio mode and seconds > 0");
+                return;
+            }
+            calibrationMeter.start(constrain(seconds, 0.05f, 60.0f));
+            reply("OK measure", argument);
+        } else if (is(command, "save")) {
+            saveCalibration();
+        } else if (is(command, "load")) {
+            printCalibration(loadProfile(activeProfile) ? "LOADED" : "COMPILED");
+        } else if (is(command, "defaults")) {
+            applyCalibration(compiledDefaults(micSource()));
+            printCalibration("VALUES");
+        } else if (is(command, "forget")) {
+            char space[16];
+            profileNamespace(activeProfile, space);
+            Preferences prefs;
+            if (prefs.begin(space, false)) {
+                prefs.clear();
+                prefs.end();
+            }
+            reply("OK forget", activeProfile);
+        } else {
+            reply("ERR unknown", line);
+        }
+    }
+    void pollSerialCommands() {
+        static char line[64];
+        static size_t length = 0;
+        while (Serial.available() > 0) {
+            const int c = Serial.read();
+            if (c < 0) {
+                break;
+            }
+            if (c == '\n' || c == '\r') {
+                if (length > 0) {
+                    line[length] = '\0';
+                    length = 0;
+                    handleCalibrationCommand(line);
+                }
+            } else if (length < sizeof(line) - 1) {
+                line[length++] = char(c);
+            }
+        }
     }
     void pollButtons() {
         for (unsigned i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i) {
@@ -1135,7 +1629,13 @@ namespace {
                     demand(Mode::AudioBluetooth);
                     break;
                 case 3:
-                    demand(Mode::Game);
+                    // TEMPORARY A/B test: in an audio mode, Game flips new/old processing.
+                    // Elsewhere it still selects Game mode.
+                    if (CubinaWire::audioMode(selected)) {
+                        toggleNewProcessing();
+                    } else {
+                        demand(Mode::Game);
+                    }
                     break;
                 case 4:
                     // Temporary debugging: Depth is now a Hold toggle.
@@ -1165,6 +1665,7 @@ namespace {
         demand(Mode::Animation);
         for (;;) {
             serviceAudioDebug();
+            pollSerialCommands();
             BluetoothManager::update();
             pollButtons();
             if (CubinaWire::audioMode(selected)) {

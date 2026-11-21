@@ -15,14 +15,33 @@ class TempoTracker {
         float confidence = 0.0f;
         bool active = false;
         bool locked = false;
+        unsigned phaseFlips = 0; // Kick-phase arbiter half-beat corrections (NEW).
         AttackDetector::Result attack;
     };
 
+    // Defaults reproduce the original (OLD) tracker exactly.
+    struct Settings {
+        // NEW (2026-11-20): decide beat vs off-beat from where kick-band
+        // (40-100 Hz) energy rises land on the beat grid, accumulated over
+        // ~6 s. Off-beat hi-hats and off-beat bass notes otherwise pulled the
+        // phase half a beat off for whole sections (replay: about half the
+        // time on Levels). Once that evidence exists, single kicks and the
+        // all-band onset fit may still fine-tune the phase but never jump it
+        // by half a beat; only the arbiter does, at most once per 3 s.
+        bool kickPhaseArbiter = false;
+    };
+    Settings settings;
+
     void reset() {
+        const Settings keep = settings;
         *this = TempoTracker();
+        settings = keep;
     }
 
-    Result process(const float *bands, bool audible, float seconds, bool bassKick = false) {
+    // kickRise: kick-band power rise this hop relative to recent kick-band
+    // power (0 when steady). Used only by the kick-phase arbiter.
+    Result process(const float *bands, bool audible, float seconds, bool bassKick = false,
+                   float kickRise = 0.0f) {
         phase = wrap(phase + seconds * bpm / 60.0f);
         updateKickClock(bassKick, seconds);
         quietSeconds = audible ? 0.0f : quietSeconds + seconds;
@@ -75,6 +94,13 @@ class TempoTracker {
         if (audible) {
             quietReset = false;
         }
+        if (quietReset) {
+            arbiterReal = arbiterImaginary = arbiterWeight = 0.0f;
+            evidenceSeconds = 0.0f;
+        }
+        if (settings.kickPhaseArbiter && audible && haveTempo) {
+            arbitrate(fmaxf(0.0f, kickRise), seconds);
+        }
 
         Result result;
         result.bpm = haveTempo ? bpm : 0.0f;
@@ -87,6 +113,7 @@ class TempoTracker {
             lockHeld = true;
         }
         result.locked = result.active && lockHeld;
+        result.phaseFlips = phaseFlips;
         result.attack = attack;
         return result;
     }
@@ -175,8 +202,11 @@ class TempoTracker {
         // syncopated kick must not drag every subsequent beat off the grid.
         float error = -phase;
         error -= floorf(error + 0.5f);
-        if (acquiring || fabsf(error) < 0.20f) {
-            phase = wrap(phase + error * (acquiring ? 1.0f : 0.5f));
+        // With kick-phase evidence, one kick (perhaps an off-beat bass note)
+        // must not move the grid by half a beat; the arbiter decides that.
+        const bool mayJump = acquiring && !arbiterInformed();
+        if (mayJump || fabsf(error) < (arbiterInformed() && acquiring ? 0.25f : 0.20f)) {
+            shiftPhase(error * (acquiring ? 1.0f : 0.5f));
         }
     }
 
@@ -257,7 +287,76 @@ class TempoTracker {
                                   (256.0f / 31250.0f) * bpm / 60.0f);
         float error = target - phase;
         error -= floorf(error + 0.5f);
-        phase = wrap(phase + error * (acquiring ? 1.0f : 0.5f));
+        // All-band onsets include off-beat hats: with kick-phase evidence,
+        // allow only fine corrections here.
+        if (arbiterInformed() && fabsf(error) > 0.25f) {
+            return;
+        }
+        shiftPhase(error * (acquiring ? 1.0f : 0.5f));
+    }
+
+    // Kick-phase arbiter state: a decaying phasor of kick-band rises at the
+    // tracker's phase. Angle near 0 = kicks on the beat, near 0.5 cycle = off.
+    float arbiterReal = 0.0f;
+    float arbiterImaginary = 0.0f;
+    float arbiterWeight = 0.0f;
+    float evidenceSeconds = 0.0f;
+    float sinceFlip = 10.0f;
+    unsigned phaseFlips = 0;
+
+  public:
+    // Exposed for replay sweeps; firmware uses these defaults.
+    static inline float ArbiterConcentration = 0.25f;
+    static inline float ArbiterSnap = 0.15f;
+    static inline float ArbiterMemorySeconds = 6.0f;
+    static inline float ArbiterPullSeconds = 0.5f;
+    // Last arbiter reading (host replay diagnostics only).
+    static inline float debugKickPhase = 0.0f;
+    static inline float debugConcentration = 0.0f;
+  private:
+    bool arbiterInformed() const {
+        return settings.kickPhaseArbiter && evidenceSeconds >= 4.0f;
+    }
+
+    // Every deliberate phase change also rotates the evidence, so evidence
+    // stays expressed relative to the current grid.
+    void shiftPhase(float delta) {
+        phase = wrap(phase + delta);
+        if (settings.kickPhaseArbiter && delta != 0.0f) {
+            const float angle = 6.28318530718f * delta;
+            const float c = cosf(angle), s = sinf(angle);
+            const float real = arbiterReal * c - arbiterImaginary * s;
+            arbiterImaginary = arbiterReal * s + arbiterImaginary * c;
+            arbiterReal = real;
+        }
+    }
+
+    void arbitrate(float rise, float seconds) {
+        const float keep = expf(-seconds / ArbiterMemorySeconds);
+        const float angle = 6.28318530718f * phase;
+        arbiterReal = arbiterReal * keep + rise * cosf(angle);
+        arbiterImaginary = arbiterImaginary * keep + rise * sinf(angle);
+        arbiterWeight = arbiterWeight * keep + rise;
+        evidenceSeconds += seconds;
+        sinceFlip += seconds;
+        const float concentration = sqrtf(arbiterReal * arbiterReal + arbiterImaginary * arbiterImaginary) /
+                                    fmaxf(arbiterWeight, 1.0e-9f);
+        // Where kicks land relative to the grid, -0.5..0.5 of a beat.
+        const float kickPhase = atan2f(arbiterImaginary, arbiterReal) / 6.28318530718f;
+        debugKickPhase = kickPhase;
+        debugConcentration = concentration;
+        if (evidenceSeconds < 4.0f || concentration <= ArbiterConcentration) {
+            return;
+        }
+        if (sinceFlip >= 3.0f && fabsf(kickPhase) > ArbiterSnap) {
+            shiftPhase(-kickPhase);
+            sinceFlip = 0.0f;
+            ++phaseFlips;
+        } else if (ArbiterPullSeconds > 0.0f) {
+            // Gentle continuous pull toward where the kicks land, so small
+            // BPM errors cannot drift the grid off the kick between fits.
+            shiftPhase(-kickPhase * fminf(1.0f, seconds / ArbiterPullSeconds));
+        }
     }
 
     void chooseTempo() {

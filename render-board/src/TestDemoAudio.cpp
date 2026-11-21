@@ -133,6 +133,34 @@ namespace {
         else Audio::animateOctahedron();
     }
 
+    // AUDITION PAIRS (2026-11-20). A = the accepted look, B = the trial.
+    // Both cards of a pair use the same shape/pattern: A picks it on entry
+    // and B reuses it, so pressing Next from A to B changes only the trial.
+    // Listed last so descending playback starts with them, A before B.
+    int auditionVariant[4] = {-1, -1, -1, -1};
+
+    uint8_t auditionPick(int pair, long choices, bool fresh) {
+        if (fresh || auditionVariant[pair] < 0) auditionVariant[pair] = int(random(choices));
+        return uint8_t(auditionVariant[pair]);
+    }
+
+    void drawCornerBurstA() { Audio::cornerBurst(auditionPick(0, 3, true), false); }
+    void drawCornerBurstB() { Audio::cornerBurst(auditionPick(0, 3, false), true); }
+
+    const BpmSpatialMode breatheModes[] = {BPM_SPHERE, BPM_CHECKERBOARD, BPM_DIAGONAL, BPM_HELIX};
+    void drawBreatheA() {
+        Audio::bpm(breatheModes[auditionPick(1, 4, true)], Audio::controls().bpmSensitivity, false);
+    }
+    void drawBreatheB() {
+        Audio::bpm(breatheModes[auditionPick(1, 4, false)], Audio::controls().bpmSensitivity, true);
+    }
+
+    void drawFrequencyColorA() { Audio::frequencyPlanes(auditionPick(2, 2, true) == 1, false); }
+    void drawFrequencyColorB() { Audio::frequencyPlanes(auditionPick(2, 2, false) == 1, true); }
+
+    void drawParticleGeqA() { Audio::particleGeq(auditionPick(3, 3, true), false); }
+    void drawParticleGeqB() { Audio::particleGeq(auditionPick(3, 3, false), true); }
+
     const AudioRoutine audioRoutines[] = {
         {true, "Julia Volume", &Audio::animateJulia},
         {true, "Waverly", &drawWaverly},
@@ -152,6 +180,18 @@ namespace {
         {true, "PS GEQ", &drawRandomParticleGeq},
         {true, "Frequency Cubes 8 Bands Corner", &Audio::frequencyCubes},
         {true, "Audio Shapes", &drawRandomAudioShape},
+
+        // Audition pairs, in reverse because descending playback starts at
+        // the end: Corner Burst A, B, Breathe A, B, ... then Nova.
+        {true, "Trial PS GEQ Nova (new)", &Audio::animateParticleGeqNova},
+        {true, "Trial PS GEQ B (liquid)", &drawParticleGeqB},
+        {true, "Trial PS GEQ A (now)", &drawParticleGeqA},
+        {true, "Trial Frequency Planes B (rainbow + lightness)", &drawFrequencyColorB},
+        {true, "Trial Frequency Planes A (now)", &drawFrequencyColorA},
+        {true, "Trial Breathe B (sound color)", &drawBreatheB},
+        {true, "Trial Breathe A (now)", &drawBreatheA},
+        {true, "Trial Corner Burst B (peak-sized)", &drawCornerBurstB},
+        {true, "Trial Corner Burst A (now)", &drawCornerBurstA},
     };
     constexpr size_t AUDIO_ROUTINE_COUNT = sizeof(audioRoutines) / sizeof(audioRoutines[0]);
     TestDemo::Detail::IndexDeck<AUDIO_ROUTINE_COUNT> audioDeck;

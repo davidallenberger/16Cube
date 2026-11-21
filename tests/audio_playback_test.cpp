@@ -14,6 +14,8 @@ void Audio::animateOctahedron() {}
 void Audio::animateParticleGeqClusters() {}
 void Audio::animateParticleGeqTiles() {}
 void Audio::animateParticleGeqPairedBands() {}
+void Audio::particleGeq(uint8_t, bool) {}
+void Audio::animateParticleGeqNova() {}
 
 SerialStub Serial;
 SerialStub Serial2;
@@ -351,6 +353,17 @@ static void addAttack(unsigned at, uint16_t bands, uint8_t strength = 128) {
 int main() {
     TestDemo::audioPlayback().order = TestDemo::PlaybackOrder::Sequential;
     // Artist-tuned defaults in Audio.h must not change this test fixture.
+    // These full-scale values are the fixture's original (pre-NEW) tuning.
+    Audio::controls().cornerBurstGain = 255.0f / 75.0f;
+    Audio::controls().surroundGeqGain = 3.0f;
+    Audio::controls().frequencyPlanesLevelForFullArea = 85;
+    Audio::controls().frequencyShapesLevelForFullSize = 85;
+    Audio::controls().plasmoidIntensity = 128;
+    Audio::controls().driftRoseVolumeForFullReach = 75;
+    Audio::controls().bouncingBallsVolumeForFullHeight = 75;
+    Audio::controls().shapeVolumeForFullCube = 75;
+    Audio::controls().juliaSensitivity = 1.5f;
+    Audio::controls().juliaVolumeGamma = 1.0f;
     Audio::controls().puddlesSensitivity = 1.0f;
     Audio::controls().peakAttackSensitivity = 1.0f;
     Audio::controls().puddlePeakDensity = 1.0f;
@@ -414,11 +427,21 @@ int main() {
     makeStream(1);
     input[0].values.volumeSm = 1;
     render(&Audio::animatePlasmoidMirrored);
-    assert(writeCounts[0] == 0);
+    // Silence keeps a sparse, faint copy of the pattern alive.
+    const unsigned idlePlasmoid = writeCounts[0];
+    assert(idlePlasmoid > 0);
+    for (uint8_t z = 0; z < RNDR_Z; ++z) {
+        for (uint8_t y = 0; y < RNDR_Y; ++y) {
+            for (uint8_t x = 0; x < RNDR_X; ++x) {
+                const CRGB idle = getVoxel(x, y, z);
+                assert(max(idle.r, max(idle.g, idle.b)) <= 70);
+            }
+        }
+    }
     input[0].values.volumeSm = 25;
     render(&Audio::animatePlasmoidMirrored);
     const unsigned quietPlasmoid = writeCounts[0];
-    assert(quietPlasmoid > 0);
+    assert(quietPlasmoid >= idlePlasmoid);
     input[0].values.volumeSm = 128;
     render(&Audio::animatePlasmoidMirrored);
     assert(writeCounts[0] > quietPlasmoid);
@@ -676,18 +699,24 @@ int main() {
     for (auto& sample : input) {
         for (auto& band : sample.values.fftResult) band = 0;
     }
-    input[0].values.fftResult[1] = 28; // The second bin drives the first pair green.
-    input[4].values.fftResult[0] = 11; // Top of the red bucket.
-    input[4].values.fftResult[2] = 12; // Start of the orange bucket.
+    input[0].values.fftResult[1] = 28; // The second bin drives the first pair red.
+    input[4].values.fftResult[0] = 11; // Top of the indigo bucket (OLD thresholds).
+    input[4].values.fftResult[2] = 12; // Start of the blue bucket.
     render(&Audio::animateFunkyPlank);
-    assert(getVoxel(0, 0, RNDR_Z - 2).g == 255);
-    assert(getVoxel(RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 2).g == 255);
+    const auto isRed = [](CRGB c) { return c.r == 255 && c.g == 0 && c.b == 0; };
+    assert(isRed(getVoxel(0, 0, RNDR_Z - 2)));
+    assert(isRed(getVoxel(RNDR_X - 1, RNDR_Y - 1, RNDR_Z - 2)));
     assert(getVoxel(RNDR_X - 1, 0, RNDR_Z - 2).r == 0);
-    const auto red = getVoxel(0, 0, RNDR_Z - 1);
-    assert(red.r == 255 && red.g == 0 && red.b == 0);
-    const auto orange = getVoxel((RNDR_X + 7) / 8, 0, RNDR_Z - 1);
-    assert(orange.r == 255 && orange.g == 128 && orange.b == 0);
+    const auto indigo = getVoxel(0, 0, RNDR_Z - 1);
+    assert(indigo.r == 0x10 && indigo.g == 0 && indigo.b == 0x60);
+    const auto blue = getVoxel((RNDR_X + 7) / 8, 0, RNDR_Z - 1);
+    assert(blue.r == 0 && blue.g == 0x30 && blue.b == 255);
     assert(getVoxel(1, 1, RNDR_Z - 2).r == 0);
+    // NEW (corrected) frames use the rebalanced thresholds: 28 is indigo.
+    for (auto &sample : input) sample.values.tempoFlags |= CubinaWire::SPECTRUM_CORRECTED;
+    render(&Audio::animateFunkyPlank);
+    const auto corrected = getVoxel(0, 0, RNDR_Z - 2);
+    assert(corrected.r == 0x10 && corrected.g == 0 && corrected.b == 0x60);
 
     // One mirrored pair at partial area, a second pair at full area, and
     // a high bin at the raw noise floor that stays dark after compensation.
@@ -707,7 +736,18 @@ int main() {
                 const CRGB second = getVoxel(x, y, z);
                 assert(second.r == 255 && second.g == 128 && second.b == 0);
             }
-            assert(getVoxel(x, y, RNDR_Z - 1).r == 0 && getVoxel(x, y, 0).r == 0);
+            // Silent bands keep only a dim center dot on their layers. (The
+            // host CRGB::White stub is black, so check band 6's violet layer.)
+            const bool center = x >= (RNDR_X - 1) / 2 && x <= RNDR_X / 2 &&
+                                y >= (RNDR_Y - 1) / 2 && y <= RNDR_Y / 2;
+            for (int z : {RNDR_Z - 1, 0}) {
+                if (!center) assert(getVoxel(x, y, z).r == 0);
+            }
+            for (int z : {RNDR_Z - 2, 1}) {
+                const CRGB violet = getVoxel(x, y, z);
+                if (center) assert(violet.b > 0 && violet.b <= 48);
+                else assert(violet.b == 0);
+            }
         }
     }
     assert(getVoxel(0, 0, middle).r == 0);
@@ -727,7 +767,10 @@ int main() {
         render(drawPlanes);
         assert(writeCounts[0] > writeCounts[1]);
         assert(writeCounts[1] > 0);
-        assert(writeCounts.back() == 0);
+        // Fully decayed: only the silence dots remain, two layers per band.
+        const unsigned dots = unsigned(RNDR_X / 2 - (RNDR_X - 1) / 2 + 1) *
+                              unsigned(RNDR_Y / 2 - (RNDR_Y - 1) / 2 + 1) * 2 * 8;
+        assert(writeCounts.back() == dots);
     }
 
     // Silence leaves one fully lit anchor in each tile. An active band
@@ -843,6 +886,12 @@ int main() {
     assert(compensatedSphere.r == rawSphere.r && compensatedSphere.g == rawSphere.g &&
            compensatedSphere.b == rawSphere.b);
     Audio::controls().spectrumCompensationEnabled = true;
+    // When the command board already restored the treble, the boost is skipped
+    // even with compensation enabled, so it is never applied twice.
+    RemoteInputs::AudioFrame correctedSpectrum = quietSpectrum;
+    correctedSpectrum.spectrumCorrected = true;
+    assert(!Audio::displaySpectrum(correctedSpectrum, displayBins));
+    assert(std::equal(idleBins, idleBins + 16, displayBins));
 
     // The filled-bar audition repeats the same band at the same position in
     // every block. Silence retains the one-row floor of the normal GEQ.
@@ -1117,7 +1166,19 @@ int main() {
             assert(writeCounts == quietWrites);
         }
     }
+    // NEW processing marks its spectrum corrected. The boost is a patch for the
+    // old path only, so a corrected frame must leave FFT-only rises invisible.
     Audio::controls().midrangeBoostEnabled = true;
+    auto correctedStream = [&fftStream] (bool rise) {
+        fftStream(rise, 20, 8);
+        for (auto &item : input) item.values.tempoFlags |= CubinaWire::SPECTRUM_CORRECTED;
+    };
+    correctedStream(false);
+    render(&drawWaverly);
+    const auto correctedQuiet = writeCounts;
+    correctedStream(true);
+    render(&drawWaverly);
+    assert(writeCounts == correctedQuiet);
     checkWaverly = false;
 
     const char *names[] = {

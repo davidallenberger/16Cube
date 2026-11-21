@@ -163,6 +163,32 @@ int main() {
 
     // Production clock: ten beats take five seconds at 120 BPM. Once locked,
     // check the FULL multi-beat cycle, not ten repetitions of one beat phase.
+    // v4 flag reaches the flat frame only while the audio is fresh.
+    {
+        AudioFrameClock flagClock;
+        AudioPayload corrected = payload;
+        corrected.tempoFlags = SPECTRUM_CORRECTED;
+        assert(flagClock.update(corrected, true, 0, 0).spectrumCorrected);
+        assert(!flagClock.update(corrected, false, 20, 20).spectrumCorrected);
+        corrected.tempoFlags = 0;
+        assert(!flagClock.update(corrected, true, 40, 40).spectrumCorrected);
+    }
+    // NEW frames: the command board's unified hit detector already decided,
+    // so any published group hit is admitted at every positive sensitivity
+    // (no render-side re-thresholding); 0 still turns hits off. OLD frames
+    // keep the relative-strength threshold.
+    {
+        RemoteInputs::AudioFrame newFrame;
+        newFrame.spectrumCorrected = true;
+        const uint8_t weak[3] = {1, 0, 1};
+        for (float sensitivity : {0.25f, 1.0f, 4.0f}) {
+            const auto hits = AudioFrameClock::withEvents(newFrame, false, weak, sensitivity);
+            assert(hits.bassKick && !hits.midAttack && hits.highAttack);
+        }
+        assert(!AudioFrameClock::withEvents(newFrame, false, weak, 0.0f).hasAttack());
+        RemoteInputs::AudioFrame oldFrame;
+        assert(!AudioFrameClock::withEvents(oldFrame, false, weak, 1.0f).hasAttack());
+    }
     AudioFrameClock tempo;
     payload.tempoBpm100 = 12000;
     payload.tempoFlags = AUDIO_ACTIVE | TEMPO_LOCKED;

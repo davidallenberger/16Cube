@@ -60,6 +60,12 @@ int main(){
     assert(timing.tempoConfidence == 207 && timing.tempoFlags == 3);
     assert(timing.attackCount == 0xfffffff0u);
     assert(timing.attackStrength == 201 && timing.attackBands == 0x9101);
+    p.payload[30] = AUDIO_ACTIVE | SPECTRUM_CORRECTED;   // v4 flag is valid alone or combined.
+    assert(valid(p));
+    p.payload[30] = SPECTRUM_CORRECTED;
+    assert(valid(p));
+    p.payload[30] = 8;                                    // Unknown bits stay invalid.
+    assert(!valid(p));
     p.payload[30] = 128;
     assert(!valid(p));
     p.payload[30] = TEMPO_LOCKED;

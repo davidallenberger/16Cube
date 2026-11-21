@@ -62,6 +62,7 @@ namespace RemoteInputs {
                     for (unsigned band = 0; band < 16; ++band) {
                         frame.fftResult[band] = payload.fftResult[band];
                     }
+                    frame.spectrumCorrected = (payload.tempoFlags & CubinaWire::SPECTRUM_CORRECTED) != 0;
                 }
                 frame.bpm = rate;
                 frame.wholeBeats = beats;
@@ -82,8 +83,18 @@ namespace RemoteInputs {
                 if (sensitivity <= 0.0f) {
                     return frame;
                 }
-                const float threshold = 32.0f / sensitivity;
                 frame.dedicatedBassKick = kick;
+                if (frame.spectrumCorrected) {
+                    // NEW: the command board's unified hit detector already
+                    // decided (song-relative strength, refractory). Every
+                    // routine sees the same hits; sensitivity only enables
+                    // them. Its low-group hits arrive as the kick.
+                    frame.bassKick = kick || strength[0] > 0;
+                    frame.midAttack = strength[1] > 0;
+                    frame.highAttack = strength[2] > 0;
+                    return frame;
+                }
+                const float threshold = 32.0f / sensitivity;
                 frame.bassKick = kick || (strength[0] > 0 && strength[0] >= threshold);
                 frame.midAttack = strength[1] > 0 && strength[1] >= threshold;
                 frame.highAttack = strength[2] > 0 && strength[2] >= threshold;

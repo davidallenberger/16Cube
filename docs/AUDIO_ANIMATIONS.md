@@ -64,7 +64,8 @@ At 120 BPM this cycle takes five seconds. The shared clock handles estimate
 smoothing, phase correction and slow idle fallback. Helpers do not draw or
 apply volume. Multi-beat origins are arbitrary, not bar/downbeat detection.
 Tempo remains heuristic, with half/double-time and tempo-ramp limitations.
-No AGC or semantic instrument/speech recognition is implemented.
+Display levels have slow automatic gain control (see DATA_AND_AUDIO.md); no
+semantic instrument/speech recognition is implemented.
 
 ## Adding and playing effects
 

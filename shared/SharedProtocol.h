@@ -19,7 +19,8 @@ struct AudioPayload {
     uint16_t tempoBpm100;    // BPM * 100; 0 means no estimate yet.
     uint16_t tempoPhase;     // 0..65535 maps to one predicted beat cycle.
     uint8_t tempoConfidence; // 0..255; confidence is not volume.
-    uint8_t tempoFlags;      // bit 0: audio active; bit 1: rhythm locked.
+    uint8_t tempoFlags;      // bit 0: audio active; bit 1: rhythm locked;
+                             // bit 2: input low-pass already undone (spectrum flat).
     uint32_t attackCount;   // Cumulative general attacks during this command-board boot.
     uint8_t attackStrength; // Strongest pending attack, 0..255.
     uint16_t attackBands;   // Bit mask of contributing frequency bands.
@@ -28,7 +29,9 @@ static_assert(offsetof(AudioPayload, fftResult) == 5, "Legacy audio offsets chan
 
 namespace CubinaWire {
     constexpr uint32_t BAUD = 921600;
-    constexpr uint8_t VERSION = 3; // General attack fields: update and flash BOTH boards.
+    // v4 (2026-11-19): SPECTRUM_CORRECTED audio flag. v3 added general attack
+    // fields. Any change: update and flash BOTH boards.
+    constexpr uint8_t VERSION = 4;
     enum class Mode : uint8_t {
         Animation = 0,
         AudioMic = 1,
@@ -50,6 +53,9 @@ namespace CubinaWire {
     constexpr size_t AUDIO_BYTES = 38;
     constexpr uint8_t AUDIO_ACTIVE = 1;
     constexpr uint8_t TEMPO_LOCKED = 2;
+    // The command board restored the ADC module's lost treble, so fftResult
+    // is already flat: the renderer must not add its own high-band boost.
+    constexpr uint8_t SPECTRUM_CORRECTED = 4;
     constexpr size_t GAMEPAD_BYTES = 38;
     // Header fields use explicit little-endian encoding. Never transmit sizeof a
     // C++ struct: bool, padding and compiler layout are not wire specifications.
@@ -111,7 +117,7 @@ namespace CubinaWire {
             return p.length == 0;
         case Type::Audio:
             return audioMode(p.mode) && p.length == AUDIO_BYTES && p.payload[1] <= 1 &&
-                   (p.payload[30] & ~uint8_t(AUDIO_ACTIVE | TEMPO_LOCKED)) == 0 &&
+                   (p.payload[30] & ~uint8_t(AUDIO_ACTIVE | TEMPO_LOCKED | SPECTRUM_CORRECTED)) == 0 &&
                    (get16(p.payload + 25) == 0 ||
                     (get16(p.payload + 25) >= 6000 && get16(p.payload + 25) <= 20000)) &&
                    (!(p.payload[30] & TEMPO_LOCKED) ||

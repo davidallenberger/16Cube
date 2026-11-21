@@ -24,7 +24,7 @@ window. Multiple attacks between frames can coalesce into one visible event.
 ## Wire format and event semantics
 
 [`SharedProtocol.h`](../../shared/SharedProtocol.h) is the only wire-format
-source. Current version is **3**. Packet fields use explicit little-endian
+source. Current version is **4** (v4 added the `SPECTRUM_CORRECTED` audio flag). Packet fields use explicit little-endian
 serialization; sending `sizeof(AudioPayload)` would include layout-dependent
 padding and is prohibited.
 
@@ -95,10 +95,65 @@ Command defaults in `SignalAcquisition.cpp`:
 | `uiMasterSensitivity` | 1.0 | Shared visual input scale |
 | `uiInputGainADC` / `uiInputGainMic` | 1.0 / 4.0 | Source calibration |
 | `uiFullScaleRMS` | 0.02 | RMS corresponding to full level at unity scale |
-| ADC / mic raw RMS floor | 0.00002 / 0.00010 | Noise gate before artistic response |
+| ADC / mic raw RMS floor | 0.0002 / 0.00010 | Noise gate before artistic response (ADC raised 2026-11-19 above receiver idle hiss) |
 | `uiSpectrumGamma` | 0.60 | Lifts weaker spectral display levels |
 | Volume and band attack / release | 16 / 50 ms | Exponential level smoothing |
 | Average time | 800 ms | Longer-term volume reference |
+| `uiAutoGain` | true | Automatic gain control for display levels (below) |
+
+### Hardware calibration profiles
+
+A profile describes one hardware configuration: source plus digitizer
+(`bt-pcm1808`, `mic-inmp441`, later e.g. `dj-pcm1808`). It holds the silence
+gate, the input-correction corner, the AGC reference and the kick floor.
+Each physical input remembers its assigned profile in NVS and loads it when
+selected; unsaved profiles fall back to compiled per-input values (the mic
+uses no correction). `tools/audio_replay/calibrate.py` measures and saves a
+profile over USB serial (`CAL ...` commands, see SignalAcquisition.cpp).
+Correct per-profile data is what lets one visual tuning serve every source.
+Expedient phase: profiles live in NVS; when a configuration is final, copy
+its values into the compiled defaults.
+
+The silence gate listens to the uncorrected input above about 150 Hz. In
+silence the receiver chain emits short ~60 Hz rumble bursts up to about
+-64 dBFS; ignoring them let the measured gate drop from -64 to about
+-84 dBFS while silence stays dark.
+
+### Input correction (ADC module low-pass)
+
+The 2026-11-19 PCM1808 module has a first-order low-pass at 203 Hz (measured by `calibrate.py`; 235 Hz was the first estimate)
+(-6 dB/octave, about -28 dB at 13 kHz relative to 400 Hz), measured with
+`tools/audio_replay/tone_steps.py` and isolated to the module.
+`AudioAnalysis::InputCorrection` applies the exact inverse,
+`x[n] = (y[n] - p*y[n-1]) / (1-p)` with `p = exp(-2*pi*fc/fs)`, to every
+sample before the overlap window, so RMS volume, bands, attacks and tempo all
+see a flat spectrum. The active profile's `corr_hz` sets the corner (0 for a
+flat module). Kicks keep the uncorrected input, and the silence gate and
+tempo activity floor measure the uncorrected input too (the gate above 150 Hz), because the
+correction lifts high-frequency hiss by up to ~30 dB. While correcting, the
+audio payload sets `SPECTRUM_CORRECTED`; the renderer's `displaySpectrum`
+then skips its hand-tuned high-band boost so treble is not lifted twice.
+
+### Automatic gain control (display levels only)
+
+`AudioAnalysis::AutoGain` multiplies the fixed calibration scale for
+`volumeRaw/Sm/Avg` and `fftResult` so that the loud end of the recent music
+lands at `referenceRms` (0.0055, calibrated from a board capture at the usual
+listening volume, where AGC reads about 0 dB). It follows a 0.4 s loudness:
+the ceiling rises with a 300 ms time constant and falls 0.3 dB/s, limited to
++18/-30 dB. Turning the source up is undone in a few seconds; turning it down,
+in 20-35 s. The slow fall is deliberate: it cannot tell a lowered volume knob
+from a breakdown, and it keeps about two-thirds of a song's section contrast.
+Silence, levels more than 40 dB below the ceiling, and anything below
+`minAdaptRms` (about -68 dBFS) freeze it, so idle hiss cannot raise the gain. Kicks,
+attacks, tempo and the tempo activity floor use the fixed scale and are
+unchanged. The board's debug line prints the current gain as `AGC=`.
+Temporary A/B switch: in an audio mode the Game button flips NEW processing
+(AGC + input correction) and the previous fixed, uncorrected processing
+(the command board's volume bar turns purple for the previous processing;
+serial prints `A/B: NEW ...` or `A/B: OLD ...`). Outside audio, Game selects Game mode as before. Every
+source change restarts with AGC on.
+`tools/audio_replay` measures all of this offline (see its README).
 
 The dedicated kick detector runs on PCM in roughly 35–180 Hz, comparing fast
 and reference power (20/350 ms). Default sensitivity 1.0 means about 1.7×

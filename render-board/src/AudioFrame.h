@@ -18,6 +18,10 @@ namespace RemoteInputs {
         uint8_t volumeSm = 0;  // Smoothed level: the usual artistic control.
         uint8_t volumeAvg = 0; // Longer-term average level, 0..255.
         uint8_t fftResult[16] = {}; // Low to high frequency, each 0..255.
+        // True when the command board already restored the ADC module's lost
+        // treble, so fftResult is flat. Audio::displaySpectrum then skips its
+        // own high-band boost. Most effects never need to read this.
+        bool spectrumCorrected = false;
 
         // Usable, smoothly changing motion speed. Silence/disconnection uses
         // a slow 12 BPM; audible music without an estimate starts at 60 BPM.

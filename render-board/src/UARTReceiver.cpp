@@ -13,7 +13,7 @@
  * framing, version, lengths and CRC-16 before accepting a packet. Ordering
  * checks reject old/duplicate sequences, old revisions, and contradictory
  * modes within one revision. A new session/revision clears source caches.
- * The binary protocol is version 3; its 38-byte audio payload is explicitly
+ * The binary protocol is version 4; its 38-byte audio payload is explicitly
  * encoded in shared/SharedProtocol.h. Never transmit sizeof(AudioPayload).
  *
  * The receive task only caches input. It never draws, advances the musical
