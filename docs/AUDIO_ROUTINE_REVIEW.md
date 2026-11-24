@@ -288,18 +288,18 @@ Replay (3 songs, vs kick-aligned librosa reference):
   (blue/amber/white), ember, rainbow plus lightness.
 - Future idea: a better frequency geometry than the eight cubes clustered at
   the center.
-- PS GEQ: liquid look (continuous emission, gentle turbulence, slightly
-  wider spread; small lateral motion only, no floor splash); tune in the
-  replay first.
-- PS GEQ Nova: rebuild as eight 45-degree hoses from the center.
+- PS GEQ: liquid look tried as an audition pair and dropped 2026-11-20
+  (owner: hard to see a difference; keep the existing look).
+- PS GEQ Nova: tried and dropped 2026-11-24.
 
 ## Audition pairs (built and flashed 2026-11-20)
 
-Nine temporary cards play first after a flash (descending order), A then B,
-so one Next press compares them. A is the accepted look; B is the trial. Both
-cards of a pair share the shape/pattern (A picks, B reuses). Remove the cards
-when a pair is decided. Code: `TestDemoAudio.cpp` (cards), `Audio.cpp`,
-`ParticleEffects.h`.
+Two temporary trial cards, each immediately before its existing routine in
+descending order (2026-11-24; the duplicate "A (now)" cards are gone). Below,
+A means the existing routine and B the trial. A trial and its existing
+routine share the shape/pattern in both directions, so Next and Previous
+change only the trial. Remove a card when it is decided. Code:
+`TestDemoAudio.cpp` (cards), `Audio.cpp`.
 
 1. Corner Burst A / B (fix list item 7). B: launch strength = swell vs the
    recent volume range (`cornerBurstTrialSwell` 0.5 to launch,
@@ -313,17 +313,13 @@ when a pair is decided. Code: `TestDemoAudio.cpp` (cards), `Audio.cpp`,
 2. Breathe A / B (item 8, color). B: color from a three-band blend (deep blue
    lows, amber mids, white highs, by squared share of display level, 300 ms
    smoothing) instead of the rainbow. Breath timing and depth unchanged.
-3. Frequency Planes A / B (color experiments). B: rainbow plus lightness
-   (hue by band, saturation falls with pitch, full brightness). Geometry and
-   metrics identical to A, as intended.
-4. PS GEQ A / B (liquid). B: afterimage 150 (streams join between launches),
-   speed jitter 25% (was 15%), lateral drift x0.6 plus a half-voxel sway,
-   rising particles 0.75 radius. No splash or deflection. Replay: fill
-   37-40% -> 46-51%, same height/volume tracking.
-5. PS GEQ Nova (new). Eight hoses at the center, 45 degrees apart, band
-   pairs, spraying outward and slightly up with mild gravity; long trails;
-   dim nozzle ring in silence. Replay: ~11% lit, follows volume +0.24-0.74,
-   particle pool never starved (priority rotates).
+3. Frequency Planes A / B (rainbow + lightness colors): dropped 2026-11-24;
+   the owner kept the existing colors and the code is removed.
+4. PS GEQ A / B (liquid): dropped 2026-11-20. B (longer trails, more speed
+   jitter, a small sway) was hard to tell apart; the existing look stays and
+   the code is removed.
+5. PS GEQ Nova: dropped 2026-11-24 after the owner saw the corner-aimed
+   version on the cube ("doesn't work"); the code is removed.
 
 ## 1. Audio Shapes
 
@@ -845,6 +841,8 @@ and double smoothing at 25 fps blurs the rest.
   songs; target Waverly-like numbers (light vs volume ~+0.85, loud/soft ~2x).
 
 ## Idea: PS GEQ Nova (new routine, replaces the failed attempt)
+
+**Dropped 2026-11-24** (tried twice on the cube; code removed). Kept as a record.
 
 Use the PS Spray "particle hose": eight hoses from the center at 45 degree
 steps, each its own color (band), spraying outward. Gravity bends the streams

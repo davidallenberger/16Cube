@@ -114,8 +114,7 @@ class Audio {
     static void animateSurroundGEQ();
     static void animateFunkyPlank();
     static void animateFrequencyPlanes();
-    // lightness (audition B): rainbow hue with whiteness rising with pitch.
-    static void frequencyPlanes(bool discs, bool lightness = false);
+    static void frequencyPlanes(bool discs);
     static void frequencyCubes();
     enum class FreqwaveShape { WireframeBox, Sphere };
     static void freqwave(FreqwaveShape shape);
@@ -125,10 +124,7 @@ class Audio {
     static void animateParticleGeqClusters();
     static void animateParticleGeqTiles();
     static void animateParticleGeqPairedBands();
-    // Layout 0 clusters, 1 tiles, 2 paired bands; liquid = audition B.
-    static void particleGeq(uint8_t layout, bool liquid);
     // Eight band hoses spraying outward from the center (new audition).
-    static void animateParticleGeqNova();
     static bool displaySpectrum(const RemoteInputs::AudioFrame& audio, uint8_t (&bins)[16]);
     static void animateCornerBurst();
     static void animateCornerBurstSphere();

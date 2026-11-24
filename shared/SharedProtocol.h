@@ -29,9 +29,9 @@ static_assert(offsetof(AudioPayload, fftResult) == 5, "Legacy audio offsets chan
 
 namespace CubinaWire {
     constexpr uint32_t BAUD = 921600;
-    // v4 (2026-11-19): SPECTRUM_CORRECTED audio flag. v3 added general attack
-    // fields. Any change: update and flash BOTH boards.
-    constexpr uint8_t VERSION = 4;
+    // v5 (2026-11-20): PLAYBACK_BACK flag. v4 added SPECTRUM_CORRECTED, v3
+    // general attack fields. Any change: update and flash BOTH boards.
+    constexpr uint8_t VERSION = 5;
     enum class Mode : uint8_t {
         Animation = 0,
         AudioMic = 1,
@@ -44,6 +44,9 @@ namespace CubinaWire {
     enum class Type : uint8_t { Status = 0, Audio = 1, Gamepads = 2, Depth = 3 };
     constexpr uint8_t SOURCE_READY = 1;
     constexpr uint8_t PLAYBACK_HOLD = 2; // Temporary Depth-button debug latch.
+    // The latest same-mode demand (revision step) asked for the PREVIOUS
+    // routine rather than the next. Temporary: the Game button sends it.
+    constexpr uint8_t PLAYBACK_BACK = 4;
     constexpr size_t DEPTH_BYTES = 16 * 16 * 16 / 8; // one occupancy BIT per voxel
     constexpr size_t HEADER_BYTES = 22;
     constexpr size_t MAX_PAYLOAD = DEPTH_BYTES;
@@ -109,7 +112,7 @@ namespace CubinaWire {
     }
     // Reject inconsistent types, lengths, or field values before publishing input.
     inline bool valid(const Packet &p) {
-        if (!validMode(uint8_t(p.mode)) || (p.flags & ~(SOURCE_READY | PLAYBACK_HOLD))) {
+        if (!validMode(uint8_t(p.mode)) || (p.flags & ~(SOURCE_READY | PLAYBACK_HOLD | PLAYBACK_BACK))) {
             return false;
         }
         switch (p.type) {

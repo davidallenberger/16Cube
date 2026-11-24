@@ -27,6 +27,7 @@ namespace RemoteInputs {
         bool linked = false;
         bool ready = false;
         bool playbackHeld = false;
+        bool stepBack = false; // The latest revision step asked for the previous routine.
         CubinaWire::Mode mode = CubinaWire::Mode::Animation;
         uint32_t session = 0;
         uint32_t revision = 0;

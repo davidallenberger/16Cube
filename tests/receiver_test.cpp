@@ -14,6 +14,7 @@ unsigned long millis(){return clockMs;}uint32_t micros(){return clockMs*1000;}
 void clearAll(){}void showCube(){}void initAppMemory(){}void setVoxel(uint8_t,uint8_t,uint8_t,const CRGB&){}
 static unsigned audioAdvanceRequests = 0;
 static unsigned animationAdvanceRequests = 0;
+static unsigned audioRetreatRequests = 0;
 namespace TestDemo {
     void runEngine(bool) {}
     void runHardwareWiringTest() {}
@@ -27,6 +28,7 @@ namespace TestDemo {
             ++animationAdvanceRequests;
         }
     }
+    void requestPrevious() { ++audioRetreatRequests; }
 }
 void Audio::renderIcon(TextureState&){}
 void Depth::run(){}
@@ -235,6 +237,28 @@ int main(){
     accept(p);
     CubeSystem::frameCheckpoint();
     assert(audioAdvanceRequests == 1);
+
+    // PLAYBACK_BACK on a revision step asks for the previous routine instead,
+    // once; heartbeats repeating the flag do nothing more.
+    const uint8_t forwardFlags = p.flags;
+    p.flags = forwardFlags | PLAYBACK_BACK;
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
+    assert(RemoteInputs::control().stepBack);
+    CubeSystem::frameCheckpoint();
+    assert(audioRetreatRequests == 1 && audioAdvanceRequests == 1);
+    ++p.sequence;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioRetreatRequests == 1);
+    p.flags = forwardFlags;
+    ++p.sequence;
+    ++p.modeRevision;
+    accept(p);
+    CubeSystem::frameCheckpoint();
+    assert(audioRetreatRequests == 1 && audioAdvanceRequests == 2);
+    audioAdvanceRequests = 1;
 
     // Changing sources preserves the visualization instead of advancing it.
     ++p.sequence;

@@ -431,8 +431,10 @@ use_apll: ESP32 I2S clock source, not ADC mode or LEDC routing.
 SAMPLING_FREQ: actual requested acquisition rate and analysis time scale.
 uiMasterSensitivity: visual response only, not speaker volume or ADC range.
 uiAutoGain: display-only automatic gain control; see AudioAnalysis::AutoGain.
-Temporary A/B: in an audio mode the Game button switches new processing
-(AGC + input correction) and the previous processing.
+NEW processing (AGC + input correction) is the reference from 2026-11-20;
+the serial command "ab old" still selects the previous processing for
+debugging. Temporary: in an audio mode the Game button steps back one
+audio routine (Mic/BT pressed again steps forward).
 
 References (manufacturer documentation; figures/tables are worth reading):
 TI PCM1808 Rev. B: sections 7.3.2-7.3.5, Tables 1-3, Figure 24, section 9
@@ -1367,16 +1369,6 @@ namespace {
         CommandState::setReady(ready && !CubinaWire::audioMode(m) && m != Mode::Depth);
         Serial.printf("Demand mode: %s (%u)\r\n", modeName(m), unsigned(m));
     }
-    void toggleNewProcessing() {
-        if (audioDebugSent > 0 && audioDebugSent < audioDebugLength) {
-            Serial.println("");
-        }
-        audioDebugSent = 0;
-        audioDebugLength = 0;
-        newProcessingActive = !newProcessingActive;
-        Serial.printf("A/B: %s\r\n", newProcessingActive ? "NEW (AGC + treble correction)"
-                                                         : "OLD (fixed gain, uncorrected)");
-    }
     // ---- Calibration profiles and commands over USB serial ----
     //
     // A PROFILE describes one hardware configuration: an audio source feeding
@@ -1629,10 +1621,17 @@ namespace {
                     demand(Mode::AudioBluetooth);
                     break;
                 case 3:
-                    // TEMPORARY A/B test: in an audio mode, Game flips new/old processing.
-                    // Elsewhere it still selects Game mode.
+                    // TEMPORARY: in an audio mode, Game steps back one routine so
+                    // adjacent cards can be compared. Elsewhere it selects Game mode.
                     if (CubinaWire::audioMode(selected)) {
-                        toggleNewProcessing();
+                        if (!i2sReady) break;  // Source not up yet: ignore.
+                        if (audioDebugSent > 0 && audioDebugSent < audioDebugLength) {
+                            Serial.println("");
+                        }
+                        audioDebugSent = 0;
+                        audioDebugLength = 0;
+                        CommandState::repeatModeDemand(true);
+                        Serial.printf("Demand previous audio routine: %s\r\n", modeName(selected));
                     } else {
                         demand(Mode::Game);
                     }

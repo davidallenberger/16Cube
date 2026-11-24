@@ -41,7 +41,8 @@ namespace {
         packet.sequence = sequence;
         packet.capturedMs = state.capturedMs;
         packet.flags = (state.ready ? SOURCE_READY : 0) |
-                       (state.playbackHeld ? PLAYBACK_HOLD : 0);
+                       (state.playbackHeld ? PLAYBACK_HOLD : 0) |
+                       (state.stepBack ? PLAYBACK_BACK : 0);
 
         // Every packet carries mode authority. The first packet for a new
         // demand can be a Status packet; the next data packet follows on

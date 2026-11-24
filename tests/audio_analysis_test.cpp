@@ -116,8 +116,10 @@ static void pressButton(int pin) {
 }
 void CommandState::togglePlaybackHold() {
 }
-void CommandState::repeatModeDemand() {
+static bool lastRepeatBack = false;
+void CommandState::repeatModeDemand(bool back) {
     ++modeRepeats;
+    lastRepeatBack = back;
 }
 void CommandState::setReady(bool) {
 }
@@ -489,10 +491,10 @@ int main () {
         uiInputCorrectionHz = 235.0f;
     }
     {
-        // Temporary A/B switch: in an audio mode, Game flips AGC without a
-        // source change; the volume bar turns purple while AGC is off.
-        // Outside audio, Game still selects Game mode. A source change
-        // restores the uiNewProcessing default.
+        // NEW is the reference: Game no longer flips processing. In an audio
+        // mode it asks for the previous routine (no source change); outside
+        // audio it still selects Game mode. The serial "ab" command and
+        // uiNewProcessing still choose the path for debugging.
         uiNewProcessing = true;
         demand(Mode::AudioBluetooth);
         assert(newProcessingActive);
@@ -504,19 +506,14 @@ int main () {
         for (unsigned i = 0; i < 200; ++i) {
             hop();
         }
+        const unsigned repeatsBefore = modeRepeats;
         pressButton(COMMAND_BTN_GAME);
-        assert(!newProcessingActive);
+        assert(newProcessingActive && modeRepeats == repeatsBefore + 1 && lastRepeatBack);
         assert(installs == installsBefore && modeSelections == selectionsBefore);
         hop();
-        assert(leds[0].r == CRGB::Purple.r && leds[0].g == CRGB::Purple.g && leds[0].b == CRGB::Purple.b);
-        pressButton(COMMAND_BTN_GAME);
-        assert(newProcessingActive);
-        hop();
         assert(leds[0].r == CRGB::Blue.r && leds[0].g == CRGB::Blue.g && leds[0].b == CRGB::Blue.b);
-        pressButton(COMMAND_BTN_GAME);
-        assert(!newProcessingActive);
         pressButton(COMMAND_BTN_ADC);   // Same source again: Next, not a reset.
-        assert(!newProcessingActive);
+        assert(modeRepeats == repeatsBefore + 2 && !lastRepeatBack);
         pressButton(COMMAND_BTN_ANIMATION);
         assert(newProcessingActive && lastSelectedMode == Mode::Animation);
         pressButton(COMMAND_BTN_GAME);
@@ -653,8 +650,8 @@ int main () {
     puts("Calibration profiles passed: per-input defaults, set/clamp, save/load per profile, mic without correction, second configuration on one input, A/B, timed measurement.");
     puts("Input correction passed: exact inverse of the module low-pass, pass-through at 0 Hz, "
          "treble restored through acquisition, flag on the wire.");
-    puts("A/B switch passed: Game toggles new/old processing in audio modes without a source reset, purple bar while off, "
-         "Game mode still reachable, source change restores the default.");
+    puts("Game button passed: previous routine in audio modes without a source reset or processing change, "
+         "Game mode still reachable, uiNewProcessing still selects the path.");
     puts("AGC passed: settles to reference, fast cut, slow recovery, silence freeze, limits; "
          "display level independent of input level; detectors unchanged.");
     puts("Acquisition dispatch passed: repeat preserves I2S and levels, Mic/ADC pins, single PCM source, failed-setup retry.");

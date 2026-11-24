@@ -198,7 +198,8 @@ void CubeSystem::frameCheckpoint() {
                 // TestDemo selects once and ends the old effect at its next
                 // loop boundary. No OS restart is needed for an audio
                 // routine change. The revision above is already acknowledged.
-                TestDemo::requestNext(TestDemo::Deck::Audio);
+                if (c.stepBack) TestDemo::requestPrevious();
+                else TestDemo::requestNext(TestDemo::Deck::Audio);
                 return;
             }
 

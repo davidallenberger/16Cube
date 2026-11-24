@@ -55,6 +55,11 @@ int main () {
     assert(heldPacket.flags == (CubinaWire::SOURCE_READY | CubinaWire::PLAYBACK_HOLD));
     assert(heldPacket.mode == source.mode && heldPacket.modeRevision == source.revision);
     assert(CubinaWire::valid(heldPacket));
+    source.stepBack = true;
+    const auto backPacket = makePacket(source, false, false, 2);
+    assert(backPacket.flags & CubinaWire::PLAYBACK_BACK);
+    assert(CubinaWire::valid(backPacket));
+    source.stepBack = false;
     source.playbackHeld = false;
     source.audio.mode = 2;
     source.audio.beat = 0;

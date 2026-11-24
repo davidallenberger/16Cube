@@ -24,6 +24,7 @@ void CommandState::selectMode(CubinaWire::Mode m) {
     xSemaphoreTake(mutex, portMAX_DELAY);
     state.mode = m;
     ++state.revision;
+    state.stepBack = false;
     state.ready = false;
     state.audio = {};
     state.pads[0] = GamepadState();
@@ -41,12 +42,13 @@ void CommandState::setReady(bool r) {
     state.ready = r;
     xSemaphoreGive(mutex);
 }
-void CommandState::repeatModeDemand() {
+void CommandState::repeatModeDemand(bool back) {
     // This is a control event, not a source change. UARTSender sees the new
     // revision, while SignalAcquisition keeps filling the same audio stream.
     // Do not refresh capturedMs here: only new samples make old data fresh.
     xSemaphoreTake(mutex, portMAX_DELAY);
     ++state.revision;
+    state.stepBack = back;
     xSemaphoreGive(mutex);
 }
 void CommandState::publishAudio(const AudioPayload &a, uint32_t b) {

@@ -975,21 +975,13 @@ void Audio::animateFrequencyPlanes() {
     frequencyPlanes(false);
 }
 
-void Audio::frequencyPlanes(bool discs, bool lightness) {
+void Audio::frequencyPlanes(bool discs) {
     constexpr int bands = 8;
     constexpr int noiseFloor = 6;
-    CRGB colors[bands] = {
+    const CRGB colors[bands] = {
         CRGB(0xFF0000), CRGB(0xFF8000), CRGB(0xFFFF00), CRGB(0x00FF00),
         CRGB(0x0000FF), CRGB(0x4B0082), CRGB(0x9400D3), CRGB::White
     };
-    if (lightness) {
-        // Audition B, rainbow plus lightness: the rainbow hue stays, and
-        // whiteness rises with pitch at full brightness. Lows are deep and
-        // saturated, highs pale and pastel; dimness still means quiet.
-        for (int band = 0; band < bands; ++band) {
-            colors[band] = CHSV(uint8_t(band * 32), uint8_t(255 - band * 22), 255);
-        }
-    }
     const int fullAreaLevel = max(1, int(controls().frequencyPlanesLevelForFullArea));
     float visibleLevels[bands] = {};
     uint32_t lastFrame = millis();
@@ -1034,7 +1026,7 @@ void Audio::frequencyPlanes(bool discs, bool lightness) {
             });
         }
         char detail[120];
-        snprintf(detail, sizeof(detail), lightness ? "Frequency Planes lightness curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d" : "Frequency Planes curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
+        snprintf(detail, sizeof(detail), "Frequency Planes curve=%s levels=%d/%d/%d/%d/%d/%d/%d/%d full=%d",
                  compensated ? "comp" : "raw", levels[0], levels[1], levels[2], levels[3],
                  levels[4], levels[5], levels[6], levels[7], fullAreaLevel);
         debug(audio, detail, 0, bins);

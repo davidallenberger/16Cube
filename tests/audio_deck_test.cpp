@@ -133,37 +133,27 @@ int main() {
     using namespace TestDemo;
     assert(audioPlayback().order == PlaybackOrder::Descending);
     reset(PlaybackOrder::Descending);
-    // Temporary audition pairs play first after a flash, A before B.
-    constexpr unsigned trialCards = 9;
-    const char *trialNames[trialCards] = {
-        "Trial Corner Burst A (now)", "Trial Corner Burst B (peak-sized)",
-        "Trial Breathe A (now)", "Trial Breathe B (sound color)",
-        "Trial Frequency Planes A (now)", "Trial Frequency Planes B (rainbow + lightness)",
-        "Trial PS GEQ A (now)", "Trial PS GEQ B (liquid)", "Trial PS GEQ Nova (new)",
+    // Each trial plays immediately before its existing routine.
+    const char *descendingNames[] = {
+        "Audio Shapes", "Frequency Cubes 8 Bands Corner",
+        "PS GEQ",
+        "Freqwave",
     };
-    for (const char *name : trialNames) {
+    for (const char *name : descendingNames) {
         assert(std::strcmp(currentAudioRoutineName(), name) == 0);
         requestNext(Deck::Audio);
     }
-    assert(std::strcmp(currentAudioRoutineName(), "Audio Shapes") == 0);
-    requestNext(Deck::Audio);
-    assert(std::strcmp(currentAudioRoutineName(), "Frequency Cubes 8 Bands Corner") == 0);
-    requestNext(Deck::Audio);
-    assert(std::strcmp(currentAudioRoutineName(), "PS GEQ") == 0);
-    requestNext(Deck::Audio);
-    assert(std::strcmp(currentAudioRoutineName(), "Freqwave") == 0);
-    requestNext(Deck::Audio);
     const char *frequencyLook = currentAudioRoutineName();
     assert(std::strcmp(frequencyLook, "Frequency Planes") == 0 ||
            std::strcmp(frequencyLook, "Frequency Discs") == 0);
     reset(PlaybackOrder::Descending);
-    play(trialCards + 7);
-    assert(launches == std::vector<unsigned>({6, 6, 4, 4, 12, 12, 14, 14, 14,
-                                              16, 15, 14, 13, 12, 11, 10}));
+    play(16);
+    assert(launches == std::vector<unsigned>({16, 15, 14, 13, 12, 11, 10,
+                                              9, 8, 7, 6, 6, 4, 4, 3, 2}));
     bool seenShapes[2] = {};
     for (unsigned trial = 0; trial < 32; ++trial) {
         reset(PlaybackOrder::Descending);
-        play(trialCards + 1);
+        play(1);
         seenShapes[selectedOctahedron] = true;
     }
     assert(seenShapes[0] && seenShapes[1]);
@@ -202,8 +192,41 @@ int main() {
     for (bool seen : patternsSeen) {
         assert(seen);
     }
+    // The Breathe trial follows in table order and keeps the pattern both
+    // ways; leaving the pair on either side releases it.
+    const auto pairPattern = breathePattern;
     requestNext(Deck::Audio);
+    assert(std::strcmp(currentAudioRoutineName(), "Trial Breathe (sound color)") == 0);
+    assert(breathePatternSelected && breathePattern == pairPattern);
+    requestPrevious();
+    assert(breathePatternSelected && breathePattern == pairPattern);
+    requestPrevious();
     assert(!breathePatternSelected);
+    requestNext(Deck::Audio);
+    currentAudioRoutineName();
+    assert(breathePatternSelected);
+    requestNext(Deck::Audio);
+    requestNext(Deck::Audio);
+    assert(std::strcmp(currentAudioRoutineName(), "Corner Burst") == 0 && !breathePatternSelected);
+    // The Corner Burst pair holds and releases the same way; a routine
+    // without a trial releases at once.
+    const auto walkTo = [](const char *name) {
+        for (unsigned i = 0; i < AUDIO_ROUTINE_COUNT; ++i) {
+            if (std::strncmp(currentAudioRoutineName(), name, std::strlen(name)) == 0) return;
+            requestNext(Deck::Audio);
+        }
+        assert(false && "card not found");
+    };
+    const uint8_t shape = pickCornerBurstShape();
+    requestNext(Deck::Audio);
+    assert(cornerBurstShape == int(shape));
+    requestNext(Deck::Audio);
+    assert(cornerBurstShape < 0);
+    walkTo("Frequency ");
+    const int look = frequencyPlaneLook;
+    assert(look >= 0);
+    requestNext(Deck::Audio);
+    assert(frequencyPlaneLook < 0);
     reset();
     std::vector<unsigned> enabled;
     for (unsigned i = 0; i < AUDIO_ROUTINE_COUNT; ++i) {
@@ -213,12 +236,11 @@ int main() {
     }
     const unsigned count = enabled.size();
     play(count + 2);
-    // Trial cards (listed after Audio Shapes, index 16) reuse their base
-    // routine's draw ID: Nova, PS GEQ B, A, Planes B, A, Breathe B, A, Burst B, A.
-    const unsigned trialDrawIds[] = {14, 14, 14, 12, 12, 4, 4, 6, 6};
-    const auto drawIdFor = [&](unsigned index) {
-        return index <= 16 ? index : trialDrawIds[index - 17];
-    };
+    // Trial cards sit right after their base routine and reuse its draw ID.
+    const unsigned drawIds[] = {0, 1, 2, 3, 4, 4, 5, 6, 6, 7, 8, 9, 10, 11, 12,
+                                13, 14, 15, 16};
+    static_assert(sizeof(drawIds) / sizeof(drawIds[0]) == AUDIO_ROUTINE_COUNT, "draw ID per card");
+    const auto drawIdFor = [&](unsigned index) { return drawIds[index]; };
     for (unsigned i = 0; i < launches.size(); ++i) {
         assert(launches[i] == drawIdFor(enabled[i % count]));
         assert(durations[i] == 50);
@@ -286,6 +308,22 @@ int main() {
             assert(launches[cycle * count - 1] != boundary);
         }
     }
+
+    // Previous (Game button) steps back one card, wrapping at the start.
+    reset();
+    requestNext(Deck::Audio);
+    requestNext(Deck::Audio);
+    assert(std::strcmp(currentAudioRoutineName(), "Puddles") == 0);
+    requestPrevious();
+    assert(std::strncmp(currentAudioRoutineName(), "Waverly ", 8) == 0);
+    requestPrevious();
+    assert(std::strcmp(currentAudioRoutineName(), "Julia Volume") == 0);
+    requestPrevious();
+    assert(std::strcmp(currentAudioRoutineName(), "Audio Shapes") == 0);
+    reset(PlaybackOrder::Descending);
+    requestNext(Deck::Audio);
+    requestPrevious();
+    assert(std::strcmp(currentAudioRoutineName(), "Audio Shapes") == 0);
 
     // Changing order preserves the selected entry rather than jumping to 0.
     reset();
@@ -361,12 +399,10 @@ void Audio::animateParticleGeqTiles() { draw(14); }
 void Audio::animateParticleGeqPairedBands() { draw(14); }
 void Audio::animateFunkyPlank() { draw(10); }
 void Audio::freqwave(FreqwaveShape) { draw(13); }
-void Audio::frequencyPlanes(bool, bool) { draw(12); }
+void Audio::frequencyPlanes(bool) { draw(12); }
 // Audition pair entry points (temporary trial cards).
 Audio::Controls &Audio::controls() { static Controls values; return values; }
 void Audio::cornerBurst(uint8_t, bool) { draw(6); }
 void Audio::bpm(BpmSpatialMode, float, bool) { draw(4); }
-void Audio::particleGeq(uint8_t, bool) { draw(14); }
-void Audio::animateParticleGeqNova() { draw(14); }
 void Audio::frequencyCubes() { draw(15); }
 void Audio::bouncingBalls(BouncingBallsPattern) { draw(9); }

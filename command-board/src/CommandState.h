@@ -11,6 +11,7 @@ struct CommandSnapshot {
     uint32_t beats = 0;
     bool ready = false;
     bool playbackHeld = false;
+    bool stepBack = false; // The latest revision step was "previous routine".
     AudioPayload audio = {};
     GamepadState pads[2];
     uint32_t presses[2] = {};
@@ -21,7 +22,8 @@ namespace CommandState {
     void selectMode(CubinaWire::Mode mode); // increments demand revision, clears stale data
     // Request the next visual in the SAME mode, preserving live acquisition data,
     // readiness, capture time, and pending input events. Acquisition task only.
-    void repeatModeDemand();
+    // back = previous routine instead of next.
+    void repeatModeDemand(bool back = false);
     void setReady(bool ready);
     void togglePlaybackHold(); // Keeps the selected source and demand revision.
     void publishAudio(const AudioPayload &, uint32_t beatCount);

@@ -14,8 +14,6 @@ void Audio::animateOctahedron() {}
 void Audio::animateParticleGeqClusters() {}
 void Audio::animateParticleGeqTiles() {}
 void Audio::animateParticleGeqPairedBands() {}
-void Audio::particleGeq(uint8_t, bool) {}
-void Audio::animateParticleGeqNova() {}
 
 SerialStub Serial;
 SerialStub Serial2;
@@ -1181,20 +1179,24 @@ int main() {
     assert(writeCounts == correctedQuiet);
     checkWaverly = false;
 
+    // Table entries 2..6; the Breathe trial sits right after Breathe.
     const char *names[] = {
-        "Puddles", "Puddle Peak", "Breathe Sphere", "Attack Monitor"
+        "Puddles", "Puddle Peak", "Breathe Sphere",
+        "Trial Breathe (sound color)", "Attack Monitor"
     };
+    constexpr unsigned nameCount = sizeof(names) / sizeof(names[0]);
     while (std::strcmp(TestDemo::currentAudioRoutineName(), names[0]) != 0) {
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
-    for (unsigned entry = 0; entry < 4; ++entry) {
+    for (unsigned entry = 0; entry < nameCount; ++entry) {
         if (!audioRoutines[entry + 2].enabled) {
             continue;
         }
         makeStream();
         assert(std::strcmp(TestDemo::currentAudioRoutineName(), names[entry]) == 0);
         render(&TestDemo::runAudio);
-        assert((entry == 1 || entry == 3) ? lineFrames.empty() : !lineFrames.empty());
+        const bool drawsNoLines = entry == 1 || entry == nameCount - 1;
+        assert(drawsNoLines ? lineFrames.empty() : !lineFrames.empty());
         TestDemo::requestNext(TestDemo::Deck::Audio);
     }
     assert(std::strcmp(TestDemo::currentAudioRoutineName(), "Corner Burst") == 0);

@@ -12,11 +12,6 @@ namespace ParticleEffects {
         GeqLayout layout = GeqLayout::Clusters;
         float inputGain = 1.0f;
         float brightnessGain = 1.0f;
-        // Audition B (owner-approved 2026-11-20): a more liquid stream with
-        // longer trails joining successive launches, more speed jitter, a
-        // small sway instead of straight drift, and slightly wider streams.
-        // Lateral motion stays small so the 16 columns do not interfere.
-        bool liquid = false;
     };
 
     inline void animateGeq(uint32_t durationMs, const GeqSettings& settings = {},
@@ -39,14 +34,12 @@ namespace ParticleEffects {
         const float brightnessGain = std::isfinite(settings.brightnessGain) ? constrain(settings.brightnessGain, 0.0f, 8.0f) : 1.0f;
         constexpr float geqStep = 1.0f / 42.0f;
         constexpr unsigned batchInterval = 6; // Simultaneous launches every ~143 ms.
-        // Under 4% after two display frames; liquid keeps ~59% per frame so
-        // launches ~143 ms apart join into one stream.
-        const uint8_t afterimageRetention = settings.liquid ? 150 : 48;
-        const bool liquid = settings.liquid;
+        // Under 4% after two display frames.
+        const uint8_t afterimageRetention = 48;
         static uint8_t frameCoverage[(RNDR_X * RNDR_Y * RNDR_Z + 7) / 8];
         unsigned geqFrame = 0;
         int gravityRemainder = 0;
-        const auto speedSpread = [liquid](int speed) { return speed * (liquid ? 25 : 15) / 100; };
+        const auto speedSpread = [](int speed) { return speed * 15 / 100; };
         const auto tileNozzle = [](int bin, int nozzle) -> Point3 {
             // Swap bands 7/16 and 9/15 to give the center two active mids.
             constexpr uint8_t placement[] = {0, 1, 2, 3, 4, 5, 15, 7, 14, 9, 10, 11, 12, 13, 8, 6};
@@ -191,7 +184,7 @@ namespace ParticleEffects {
                 const uint8_t brightness = lroundf(min(255.0f, light * brightnessGain) * fade);
                 if (brightness == 0) return;
                 const CRGB color = ColorFromPalette(palette, hue, brightness);
-                drawBall(p, liquid && !falling ? 0.75f : 0.55f, color, xSide == Side::Wrap, true, 1.0f,
+                drawBall(p, 0.55f, color, xSide == Side::Wrap, true, 1.0f,
                          falling ? ParticleBlend::EmptyOnly : ParticleBlend::Brightest, frameCoverage);
                 measure(p, falling);
             };
@@ -220,16 +213,8 @@ namespace ParticleEffects {
                             // Constant horizontal velocity with open sides. Derive
                             // it from the launch seed to keep the current pool size.
                             const uint32_t spray = uint32_t(variation) * 0x9E3779B1u;
-                            const float drift = liquid ? 0.6f : 1.0f;
-                            copy.x += drift * lateralSpeed(spray & 255u, (spray >> 8) & 255u) * ageSeconds;
-                            copy.y += drift * lateralSpeed((spray >> 16) & 255u, spray >> 24) * ageSeconds;
-                        }
-                        if (liquid) {
-                            // Gentle churn: half a voxel of sway at ~1.5 Hz,
-                            // phased per copy so the stream edge is ragged.
-                            const float phase = (variation & 1023u) * (6.2831853f / 1024.0f);
-                            copy.x += 0.5f * sinf(ageSeconds * 9.4f + phase);
-                            copy.y += 0.5f * cosf(ageSeconds * 7.1f + phase * 1.7f);
+                            copy.x += lateralSpeed(spray & 255u, (spray >> 8) & 255u) * ageSeconds;
+                            copy.y += lateralSpeed((spray >> 16) & 255u, spray >> 24) * ageSeconds;
                         }
                         // Ease in over two updates and taper across the last voxel
                         // at open boundaries where flight can end before lifetime.
@@ -253,8 +238,7 @@ namespace ParticleEffects {
             }
             const uint32_t now = millis();
             if (uint32_t(now - lastReport) >= 500) {
-                snprintf(detail, sizeof(detail), liquid ? "PS GEQ liquid curve=%s gain=%.1f light=%.1f rawPeak=%d drivePeak=%d clips=%u "
-                         "launchPeak=%.1f zPeak=%.1f flightPeak=%.1f falling=%u lightPeak=%d spawned=%u poolFullSteps=%u cap=%d" : "PS GEQ curve=%s gain=%.1f light=%.1f rawPeak=%d drivePeak=%d clips=%u "
+                snprintf(detail, sizeof(detail), "PS GEQ curve=%s gain=%.1f light=%.1f rawPeak=%d drivePeak=%d clips=%u "
                          "launchPeak=%.1f zPeak=%.1f flightPeak=%.1f falling=%u lightPeak=%d spawned=%u poolFullSteps=%u cap=%d",
                          compensated ? "comp" : "raw", double(inputGain), double(brightnessGain), peaks.raw, peaks.driven, peaks.clipped,
                          double(peaks.launch * wledVelocity * verticalScale), double(peaks.height),
@@ -264,114 +248,6 @@ namespace ParticleEffects {
                 lastReport = now;
             }
             Audio::debug(audio, detail, 0, displayBins);
-        }, keepDrawing);
-    }
-
-    // PS GEQ Nova (owner idea, 2026-11-20): eight particle hoses at the
-    // cube's center, 45 degrees apart, one per band pair (bass first). Each
-    // sprays outward a little above horizontal; louder bands spray farther,
-    // denser and brighter. Mild gravity bends the streams so the lower half
-    // stays readable. Silence leaves a dim colored nozzle ring at the center.
-    inline void animateNova(const CRGBPalette16& palette, float inputGain, float brightnessGain,
-                            bool (*keepDrawing)() = nullptr) {
-        using namespace ParticleEffectSupport;
-        constexpr int hoses = 8;
-        constexpr float lifeSeconds = 0.9f;
-        constexpr float gravityPerSecond = 5.0f * verticalScale;
-        constexpr float tilt = 0.25f; // Rise per unit of outward speed.
-        struct NovaParticle {
-            Motion motion;
-            float age;
-            uint8_t hose;
-            bool active;
-        };
-        using NovaPool = ParticlePool<NovaParticle>;
-        NovaPool pool(NovaPool::capacity);
-        inputGain = std::isfinite(inputGain) ? constrain(inputGain, 0.0f, 8.0f) : 1.0f;
-        brightnessGain = std::isfinite(brightnessGain) ? constrain(brightnessGain, 0.0f, 8.0f) : 1.0f;
-        const float reach = min(RNDR_CX, RNDR_CY) + 0.5f;
-        RemoteInputs::AudioFrame audio{};
-        uint8_t bins[16] = {};
-        float levels[hoses] = {};
-        float emitDebt[hoses] = {};
-        unsigned spawned = 0, blocked = 0;
-        char detail[160] = "PS GEQ Nova measuring";
-        uint32_t lastReport = millis();
-        unsigned firstHose = 0;
-        // Long trails (~67% retained per frame) join particles into streams.
-        run(0, 170, [&](uint32_t) {
-            audio = RemoteInputs::audio();
-            Audio::displaySpectrum(audio, bins);
-            int nextSlot = 0;
-            // Rotate priority so a full pool never starves the same hoses.
-            firstHose = (firstHose + 1) % hoses;
-            for (int step = 0; step < hoses; ++step) {
-                const int hose = int((firstHose + step) % hoses);
-                const int level = min(255, int(lroundf(max(bins[2 * hose], bins[2 * hose + 1]) * inputGain)));
-                levels[hose] = level / 255.0f;
-                if (level < 12) { emitDebt[hose] = 0.0f; continue; }
-                // Sized to the pool: about 256 live particles over 0.9 s.
-                emitDebt[hose] += 0.2f + 0.6f * levels[hose];
-                const float angle = hose * (6.2831853f / hoses);
-                const float dx = cosf(angle), dy = sinf(angle);
-                // Outward speed so the stream's reach follows the level.
-                const float speed = (0.25f + 0.75f * levels[hose]) * reach / (lifeSeconds * 0.8f);
-                while (emitDebt[hose] >= 1.0f) {
-                    emitDebt[hose] -= 1.0f;
-                    nextSlot = pool.firstFree(nextSlot);
-                    if (nextSlot == pool.size()) { ++blocked; emitDebt[hose] = 0.0f; break; }
-                    const float jitter = sample(0.85f, 1.15f);
-                    const float spreadX = sample(-0.2f, 0.2f), spreadY = sample(-0.2f, 0.2f);
-                    const Point3 velocity{(dx + spreadX) * speed * jitter, (dy + spreadY) * speed * jitter,
-                                          (tilt + sample(-0.08f, 0.08f)) * speed};
-                    const Point3 origin{RNDR_CX + dx * 0.6f, RNDR_CY + dy * 0.6f, RNDR_CZ};
-                    pool[nextSlot++] = {{origin, velocity}, 0.0f, uint8_t(hose), true};
-                    ++spawned;
-                }
-            }
-            for (int i = 0; i < pool.size(); ++i) {
-                auto& particle = pool[i];
-                if (!particle.active) continue;
-                particle.age += dt;
-                auto& p = particle.motion.position;
-                auto& v = particle.motion.velocity;
-                v.z -= gravityPerSecond * dt;
-                p.x += v.x * dt; p.y += v.y * dt; p.z += v.z * dt;
-                particle.active = particle.age < lifeSeconds &&
-                    p.x > -1.0f && p.x < RNDR_X && p.y > -1.0f && p.y < RNDR_Y && p.z > -1.0f && p.z < RNDR_Z;
-            }
-        }, [&] {
-            for (int i = 0; i < pool.size(); ++i) {
-                const auto& particle = pool[i];
-                if (!particle.active) continue;
-                const float remaining = 1.0f - particle.age / lifeSeconds;
-                const float light = (0.35f + 0.65f * levels[particle.hose]) * min(1.0f, remaining * 2.0f);
-                const uint8_t brightness = uint8_t(min(255.0f, 255.0f * light * min(1.0f, brightnessGain * 0.5f)));
-                if (brightness == 0) continue;
-                const CRGB color = ColorFromPalette(palette, uint8_t(particle.hose * (256 / hoses)), brightness);
-                drawBall(particle.motion.position, 1.0f, color, false, true, 1.0f, ParticleBlend::Brightest);
-            }
-            // Nozzle ring: always visible, brighter with each band's level.
-            for (int hose = 0; hose < hoses; ++hose) {
-                const float angle = hose * (6.2831853f / hoses);
-                const int x = constrain(int(lroundf(RNDR_CX + cosf(angle))), 0, RNDR_X - 1);
-                const int y = constrain(int(lroundf(RNDR_CY + sinf(angle))), 0, RNDR_Y - 1);
-                const uint8_t z = uint8_t(lroundf(RNDR_CZ));
-                const CRGB color = ColorFromPalette(palette, uint8_t(hose * (256 / hoses)),
-                                                    uint8_t(48 + 207 * levels[hose]));
-                setVoxel(x, y, min(int(z), RNDR_Z - 1), color);
-            }
-            const uint32_t now = millis();
-            if (uint32_t(now - lastReport) >= 500) {
-                snprintf(detail, sizeof(detail),
-                         "PS GEQ Nova levels=%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f spawned=%u poolFull=%u cap=%d",
-                         double(levels[0]), double(levels[1]), double(levels[2]), double(levels[3]),
-                         double(levels[4]), double(levels[5]), double(levels[6]), double(levels[7]),
-                         spawned, blocked, pool.size());
-                spawned = blocked = 0;
-                lastReport = now;
-            }
-            Audio::debug(audio, detail, 0, bins);
         }, keepDrawing);
     }
 }

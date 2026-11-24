@@ -183,6 +183,7 @@ void accept(const Packet &p) {
     ctl.revision = p.modeRevision;
     ctl.ready = p.flags & SOURCE_READY;
     ctl.playbackHeld = p.flags & PLAYBACK_HOLD;
+    ctl.stepBack = p.flags & PLAYBACK_BACK;
     lastPacket = millis();
     lastSequence = p.sequence;
     haveSequence = true;

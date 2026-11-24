@@ -55,6 +55,8 @@ namespace TestDemo {
     // Audio advances once, then its effect returns at the next loop boundary.
     // Normal animation keeps its existing same-task OS escape mechanism.
     void requestNext(Deck deck);
+    // Temporary (Game button in audio modes): step back one audio routine.
+    void requestPrevious();
 
     // Used by each audio effect's drawing loop. TestDemo alone interprets the
     // deadline/button flag; the effect just returns when it becomes false.
@@ -155,6 +157,14 @@ namespace TestDemo {
                         }
                     }
                 }
+            }
+
+            // One step back in the current visiting order (no reshuffle).
+            void retreat() {
+                if (empty()) {
+                    return;
+                }
+                position = position == 0 ? count - 1 : position - 1;
             }
 
           private:
