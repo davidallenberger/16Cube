@@ -71,7 +71,7 @@ identical defaults or uses the full palette catalog.
 ## Disabled versus deleted
 
 Preserved disabled ambient cards: Ovoid, Torus, Icons CCW, Text Israel, Noise
-Clouds, Meteor 3D, Palette Audition. Attack Monitor is disabled in audio.
+Clouds, Meteor 3D, Palette Audition, and Fractal Sculpture. Attack Monitor is disabled in audio.
 Enabling a card is a deliberate deck decision, separate from whether its
 function exists.
 
@@ -89,3 +89,51 @@ a targeted palette-policy harness. These are historical results of that source
 change, not new tests run by writing this documentation. The development guide
 lists repeatable checked-in commands and their scope. Physical visual
 acceptance is recorded separately from compile/test success.
+
+
+## Ambient animation checkpoint — 2026-11-25
+
+The deck has 80 ambient concepts: 72 enabled and eight disabled. Ordered
+playback still runs in descending order and begins with Box. The new ambient
+code leaves the audio-processing and audio-deck changes in their existing
+commits; its acceptance and settings are summarized here. See
+[the animation catalog](ANIMATIONS.md) for the full order and implementation.
+
+| Animation | Current behavior and acceptance |
+| --- | --- |
+| Fractal Cavern | Accepted after physical audition. An open Mandelbox window travels and rotates in 3D at 3x the original rate, with an eight-second Rainbow lap. Plays immediately after Julia 3D. |
+| Recursive Cube | Eight mirrored, synchronized mice start immediately on crisp, one-voxel recursive cube paths. On 16³, three levels have sides 15, 5 and about 1.67 voxels. Trails span 141 voxels. Speed increases with cubical depth: 36 voxels/second at the faces, about 84 on the one-third inner cube, toward a 108-voxel/second center limit. A small-step midpoint integrator preserves continuous, frame-independent travel. Still an audition. |
+| Fibonacci Scaffold / Spiral | One entry-time coin flip chooses the angular golden-ratio scaffold or Fibonacci quarter-circle spiral for the whole invocation. Each eight-second sweep turns 45 degrees per voxel and leaves stationary fading impressions, with four/eight-plane trail footprints. Entry images fade once rather than repeatedly re-entering. Shuffled ±X/±Y starting faces visit all four without consecutive repeats. Still an audition. |
+| Coprime Weave | Three curved ribbons deform over 2.5/3.5/5.5-second periods and tumble together around the fixed cube center at 10/16/6 degrees per second. Width vectors rotate with the curves; material cycles through Rainbow over 18 seconds. Still an audition. |
+| Prime Symmetry | Three-, five- and seven-arm figures rotate simultaneously over 2.5/3.5/5.5 seconds. Shared tumble matches the weave, and outer reach matches Pinwheel's half-canvas-diagonal radius so arms reach the faces. Full material brightness and SDF coverage. Still an audition. |
+| Pinwheel Arms comparison | The existing progressive 4/6/8/10-arm effect is auditioned with a 3.5-second main spin, the same tumble, 18-second hue lap and full-brightness SDF rendering. Normal Wu rendering, radial dimming and frame persistence remain available through comparison=false. Layout-transition fades remain in both modes. |
+
+Actual playback neighborhoods are:
+
+- Atomic Orbits → Coprime Weave → Prime Symmetry → Pinwheel Arms → Atom Smasher.
+- Pipes → Recursive Cube → Wild Mouse → PS Spray. Wild Mouse itself is unchanged.
+- DNA Spiral → Fibonacci Scaffold / Spiral → Chunchun (Liss).
+
+Shared additions live in GeometryEngine (fields, coverage, recursive paths,
+crisp points, plane/spiral/ribbon geometry) and TextureEngine (full-brightness
+cycling palette sampler). TestDemo::ArmComparison owns the common comparison
+timing. No extra framebuffer, particle pool or task is introduced.
+
+Fractal Sculpture, the rejected Mandelbulb, remains callable but disabled.
+The previous recursive scale/tumble cube renderer is retained for comparison;
+it is not the played mouse routine. Sierpinski Octahedron and Pendulum Wave
+trials were discarded; neither has an enabled card or retained effect body.
+The old Fibonacci branches, simultaneous inward/outward layers and delayed
+moving-copy trails were replaced by the current plane-impression sweep.
+
+The new host regression covers both 16³ and 10×10×16 canvases: bounds, shared
+geometry, clock wrap/Hold, independent colors, connected deeper paths,
+frame-independent mouse acceleration, direction shuffling, fixed entrance
+fading, retained coin choices, and both Pinwheel rendering modes. These
+checks establish implementation behavior, not physical visual acceptance.
+
+Validation for this animation checkpoint on 2026-11-25: the complete host suite
+passed with AddressSanitizer/UndefinedBehaviorSanitizer and UBSan halt-on-error;
+production animation checks cover both 16³ and 10×10×16 canvases. The render
+firmware PlatformIO build also passed. These checks establish code behavior
+and bounds, not additional physical visual acceptance.

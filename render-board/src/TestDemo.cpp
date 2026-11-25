@@ -132,6 +132,10 @@ namespace {
         CONCEPT_SCENE_PLASMA_ARMS,
         CONCEPT_SCENE_AURORA,
         CONCEPT_SCENE_PALETTE_AUDITION,
+        CONCEPT_SCENE_FRACTAL_CAVERN, CONCEPT_SCENE_FRACTAL_SCULPTURE,
+        CONCEPT_SCENE_RECURSIVE_CUBE,
+        CONCEPT_SCENE_FIBONACCI,
+        CONCEPT_SCENE_COPRIME_WEAVE, CONCEPT_SCENE_PRIME_SYMMETRY,
         CONCEPT_COUNT
     };
 
@@ -184,8 +188,10 @@ namespace {
         CONCEPT_SCENE_FIREWORKS,
         CONCEPT_SCENE_ATOM_SMASHER,
         // Swirls
-        CONCEPT_SCENE_ATOMIC_ORBITS,
         CONCEPT_SCENE_PINWHEEL_ARMS,
+        CONCEPT_SCENE_PRIME_SYMMETRY,
+        CONCEPT_SCENE_COPRIME_WEAVE,
+        CONCEPT_SCENE_ATOMIC_ORBITS,
         CONCEPT_SCENE_TORNADO,
         CONCEPT_SCENE_CYCLONE,
         CONCEPT_SCENE_PS_ATTRACTOR,
@@ -198,17 +204,20 @@ namespace {
         CONCEPT_SCENE_COMETS,
         CONCEPT_SCENE_PS_SPRAY,
         CONCEPT_SCENE_WILD_MOUSE,
+        CONCEPT_SCENE_RECURSIVE_CUBE,
         CONCEPT_SCENE_PIPES,
         CONCEPT_SCENE_HULA,
         CONCEPT_SCENE_PS_GHOST_RIDER,
         CONCEPT_SCENE_CHUNCHUN_SERP,
         CONCEPT_SCENE_CHUNCHUN_LISSAJOUS,
+        CONCEPT_SCENE_FIBONACCI, // After DNA Spiral in descending playback.
         CONCEPT_SCENE_DNA_SPIRAL,
         CONCEPT_SCENE_HELIX,
         CONCEPT_SCENE_VERT_STREAMER,
         // Surfaces
         CONCEPT_SCENE_AURORA,
         CONCEPT_SCENE_WOBBLING_DISH,
+        CONCEPT_SCENE_FRACTAL_CAVERN,
         CONCEPT_SCENE_JULIA,
         CONCEPT_SCENE_SINE_WAVE,
         CONCEPT_SCENE_SADDLE,
@@ -229,6 +238,8 @@ namespace {
         CONCEPT_SHAPE_SPHERE,
         CONCEPT_SHAPE_BOX,
         CONCEPT_SCENE_PALETTE_AUDITION,
+        // Retained disabled audition.
+        CONCEPT_SCENE_FRACTAL_SCULPTURE,
     };
     static_assert(sizeof(orderedConcepts) / sizeof(orderedConcepts[0]) == TOTAL_CONCEPTS,
                   "Ordered deck must contain every concept");
@@ -289,7 +300,13 @@ namespace {
         /* Bouncing Ball */ { true, 1 },
         /* Plasma Arms */ { true, 1 },
         /* Aurora */ { true, 1 },
-        /* Palette Audition */ { false, 0 } // Enable for a palette review.
+        /* Palette Audition */ { false, 0 }, // Enable for a palette review.
+        /* Fractal Cavern */ { true, 1 },
+        /* Fractal Sculpture */ { false, 1 }, // Rejected bulb; preserve for comparison only.
+        /* Recursive Cube */ { true, 1 },
+        /* Fibonacci Scaffold / Spiral */ { true, 1 },
+        /* Coprime Weave */ { true, 1 },
+        /* Prime Symmetry */ { true, 1 }
     };
 
     static const char* sceneNames[] = {
@@ -312,7 +329,8 @@ namespace {
         "PS Attractor", "PS Waterfall",
         "PS Volcano", "PS Fire", "Pinwheel Arms",
         "Eye of Sauron", "Black Hole", "PS Galaxy", "Bouncing Ball",
-        "Plasma Arms", "Aurora", "Palette Audition"
+        "Plasma Arms", "Aurora", "Palette Audition", "Fractal Cavern", "Fractal Sculpture",
+        "Recursive Cube", "Fibonacci Scaffold / Spiral", "Coprime Weave", "Prime Symmetry"
     };
 
     static_assert(sizeof(SCENE_RULES) / sizeof(SCENE_RULES[0]) == TOTAL_CONCEPTS - NUM_SHAPES,
@@ -416,6 +434,27 @@ namespace {
             case CONCEPT_SCENE_PS_IMPACT: displayColor = "Random HSV per meteor / matching splash"; break;
             case CONCEPT_SCENE_PS_FIRE: displayColor = "Fire gradient / heat mapped"; break;
             case CONCEPT_SCENE_EYE_OF_SAURON: displayColor = "Radial Fire / black pupil / blue removed"; break;
+            case CONCEPT_SCENE_FRACTAL_CAVERN:
+                displayShader = "Fractal contours";
+                displayColor = "Rainbow / 8s continuous cycle";
+                break;
+            case CONCEPT_SCENE_FRACTAL_SCULPTURE:
+                displayShader = "Fractal contours";
+                displayColor = "Rainbow / 24s continuous cycle";
+                break;
+            case CONCEPT_SCENE_RECURSIVE_CUBE:
+                displayShader = "Synchronized edge trails";
+                displayColor = "8 mirrored mice / cycling Rainbow";
+                break;
+            case CONCEPT_SCENE_FIBONACCI:
+                displayShader = "Sweeping golden plane";
+                displayColor = "Rainbow / 18s continuous cycle";
+                break;
+            case CONCEPT_SCENE_COPRIME_WEAVE:
+            case CONCEPT_SCENE_PRIME_SYMMETRY:
+                displayShader = "Synchronized geometry";
+                displayColor = "Rainbow / 18s continuous cycle";
+                break;
             case CONCEPT_SCENE_PINWHEEL_ARMS: displayColor = "Rainbow / paired arms cycling"; break;
             case CONCEPT_SCENE_PS_BOX: displayColor = "C9 New (ID 53) per ball / 250ms fade"; break;
             case CONCEPT_SCENE_PS_WATERFALL: displayColor = "Ocean (ID 9) / four face copies"; break;
@@ -597,6 +636,12 @@ namespace {
                 case CONCEPT_SCENE_SMASHING_PLANES:      Planes::animateSmashingPlanes(durationMs); break;
                 case CONCEPT_SCENE_PLASMA_ARMS:     Streamers::animatePlasmaArms(durationMs); break;
                 case CONCEPT_SCENE_AURORA:    Surfaces::animateAurora(durationMs); break;
+                case CONCEPT_SCENE_FRACTAL_CAVERN: Surfaces::animateFractalCavern(durationMs); break;
+                case CONCEPT_SCENE_FRACTAL_SCULPTURE: Surfaces::animateFractalSculpture(durationMs); break;
+                case CONCEPT_SCENE_RECURSIVE_CUBE: Surfaces::animateRecursiveCube(durationMs); break;
+                case CONCEPT_SCENE_FIBONACCI: Surfaces::animateFibonacci(durationMs); break;
+                case CONCEPT_SCENE_COPRIME_WEAVE: Surfaces::animateCoprimeWeave(durationMs); break;
+                case CONCEPT_SCENE_PRIME_SYMMETRY: Surfaces::animatePrimeSymmetry(durationMs); break;
 #if INCLUDE_WLED_PALETTES
                 case CONCEPT_SCENE_PALETTE_AUDITION:
                     Shapes::animateStatic(SHAPE_BOX, durationMs, RENDER_SOLID,
@@ -674,7 +719,7 @@ namespace {
                 case CONCEPT_SCENE_BPM_CHECKERBOARD:   Patterns::animateBpmVolumetric(durationMs, pal, SPEED_SCENE_BPM_CHECKERBOARD, BPM_CHECKERBOARD); break;
                 case CONCEPT_SCENE_BOUNCING_BALLS:    Balls::animateBouncingBalls(durationMs, pal); break;
                 case CONCEPT_SCENE_PINWHEEL_ARMS:
-                    Swirls::animatePinwheelArms(max(durationMs, Swirls::pinwheelArmsCycleMs), SPEED_SCENE_PINWHEEL_ARMS);
+                    Swirls::animatePinwheelArms(max(durationMs, Swirls::pinwheelArmsCycleMs), SPEED_SCENE_PINWHEEL_ARMS, true);
                     break;
                 case CONCEPT_SCENE_BLACKHOLE:      Swirls::animateBlackHole(durationMs); break;
 

@@ -491,7 +491,7 @@ public:
     static constexpr uint32_t pinwheelArmHoldMs = 7000;
     static constexpr uint32_t pinwheelArmsCycleMs = 4 * pinwheelArmHoldMs;
 
-    static void animatePinwheelArms(uint32_t durationMs, uint8_t effectSpeed) {
+    static void animatePinwheelArms(uint32_t durationMs, uint8_t effectSpeed, bool comparison = false) {
         using GeometryEngine::Point3;
         constexpr float diagonal = 0.57735027f;
         constexpr float ringRadius = 0.89442719f;
@@ -530,12 +530,13 @@ public:
         while (TestDemo::routineTimeRemaining(uint32_t(millis() - start), durationMs)) {
             const uint32_t now = millis();
             const uint32_t deltaMs = now - lastFrame;
-            if (deltaMs < 15) { yield(); continue; }
+            if (deltaMs < (comparison ? TestDemo::ArmComparison::frameMs : 15u)) { yield(); continue; }
             lastFrame = now;
             const uint32_t elapsed = now - start;
             const int layout = (elapsed % pinwheelArmsCycleMs) / pinwheelArmHoldMs;
             const int arms = 4 + 2 * layout;
-            const uint8_t hue = uint8_t(elapsed * uint64_t(21) / 1000); // 21 hue steps per second.
+            const uint8_t hue = comparison ? uint8_t(uint64_t(elapsed)*256/TestDemo::ArmComparison::colorCycleMs) :
+                                            uint8_t(elapsed * uint64_t(21) / 1000);
             const auto armColor = [&](int arm, int count) {
                 return ColorFromPalette(palette, uint8_t(hue + (arm / 2) * 256 / (count / 2)));
             };
@@ -586,25 +587,38 @@ public:
             }
             const float pulse = (sin16(uint16_t(elapsed * effectSpeed / 24)) + 32768) / 65536.0f;
             const uint32_t speed = uint32_t((20 + effectSpeed / 3) * (1.0f + 0.10f * pulse) * deltaMs / 15.0f);
-            rotationPhase += speed;
-            spin += 20 * speed;
+            if (comparison) spin=uint16_t(uint64_t(elapsed)*65536/TestDemo::ArmComparison::spinMs);
+            else { rotationPhase += speed; spin += 20 * speed; }
             constexpr float degreesPerStep = 360.0f / 65536.0f;
             const float angle = rotationPhase * degreesPerStep;
-            const GeometryEngine::TumbleRotation tumble({angle, 2 * angle, 3 * angle});
+            const GeometryEngine::TumbleRotation tumble(comparison ?
+                GeometryEngine::tumbleAngles(elapsed*.001f*TestDemo::ArmComparison::tumblePhaseRate,1.0f) : Point3{angle,2*angle,3*angle});
             const float bend = 1000.0f + 29000.0f * pulse * pulse;
 
-            fadeAll(155);
-            for (float radius = 0; radius <= maxRadius; radius += 0.125f) {
+            if (comparison) clearAll(); else fadeAll(155);
+            const float radiusStep=comparison ? .5f : .125f;
+            for (float radius = 0; radius <= maxRadius; radius += radiusStep) {
                 const uint16_t twist = spin - uint16_t(bend * radius / maxRadius);
                 const float sine = sin16(twist) / 32768.0f, cosine = cos16(twist) / 32768.0f;
-                const uint8_t brightness = min(255, 64 + int(radius * 30));
+                const uint8_t brightness = comparison ? 255 : min(255, 64 + int(radius * 30));
                 for (int arm = 0; arm < frameArms; ++arm) {
                     const auto& dir = frameDirections[arm];
                     const auto p = tumble.apply({radius * (dir.x * cosine - dir.y * sine),
                                                  radius * (dir.x * sine + dir.y * cosine), radius * dir.z});
                     CRGB color = frameColors[arm];
-                    color.nscale8(brightness);
-                    GeometryEngine::drawWuVoxel(lroundf(256 * (RNDR_CX + p.x)),
+                    if(brightness<255) color.nscale8(brightness);
+                    if (comparison) {
+                        // Match the other audition's full material brightness,
+                        // coverage, and whole-hue overlaps. Normal Pinwheel's
+                        // Wu accumulation/radial dimming remain available.
+                        const float previousRadius=max(0.0f,radius-radiusStep);
+                        const uint16_t previousTwist=spin-uint16_t(bend*previousRadius/maxRadius);
+                        const float a=sin16(previousTwist)/32768.0f,b=cos16(previousTwist)/32768.0f;
+                        const auto previous=tumble.apply({previousRadius*(dir.x*b-dir.y*a),
+                            previousRadius*(dir.x*a+dir.y*b),previousRadius*dir.z});
+                        GeometryEngine::drawSdfLine3D(RNDR_CX+previous.x,RNDR_CY+previous.y,RNDR_CZ+previous.z,
+                            RNDR_CX+p.x,RNDR_CY+p.y,RNDR_CZ+p.z,.24f,color,false,true);
+                    } else GeometryEngine::drawWuVoxel(lroundf(256 * (RNDR_CX + p.x)),
                                                 lroundf(256 * (RNDR_CY + p.y)),
                                                 lroundf(256 * (RNDR_CZ + p.z)), color);
                 }

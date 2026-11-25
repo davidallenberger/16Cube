@@ -7,6 +7,13 @@
 // not own approved lists, selected indices, shuffles or mode-button policy.
 // Everything below is owned by the render task. No UART task calls it.
 namespace TestDemo {
+    // Shared temporary controls for the adjacent arm-shape auditions.
+    struct ArmComparison {
+        static constexpr float tumblePhaseRate=20.0f;
+        static constexpr uint32_t spinMs=3500;
+        static constexpr uint32_t colorCycleMs=18000;
+        static constexpr uint32_t frameMs=40;
+    };
     // Temporary debug latch, owned by the render task. Holding keeps motion
     // and live audio running; only a routine's automatic exit is suppressed.
     // Manual next and mode changes remain available. Releasing an expired

@@ -142,6 +142,16 @@ namespace GeometryEngine {
 
     struct Point3 { float x, y, z; };
 
+    // Explicit one-voxel point for crisp grid-aligned paths. Round once, with
+    // no fractional halo; retain a whole hue when samples share the voxel.
+    inline void drawCrispVoxel(Point3 p, CRGB color) {
+        const int x=lroundf(p.x),y=lroundf(p.y),z=lroundf(p.z);
+        if (x<0 || x>=RNDR_X || y<0 || y>=RNDR_Y || z<0 || z>=RNDR_Z) return;
+        const CRGB existing=getVoxel(x,y,z);
+        if (max(color.r,max(color.g,color.b)) > max(existing.r,max(existing.g,existing.b)))
+            setVoxel(x,y,z,color);
+    }
+
     // A cross section of a helix at the caller's phase and axial offset.
     inline Point3 helixPoint(Point3 center, float radius, float phase, float axialOffset) {
         return {center.x + cosf(phase) * radius, center.y + sinf(phase) * radius,
@@ -172,6 +182,238 @@ namespace GeometryEngine {
             return {cz * xx - sz * yy, sz * xx + cz * yy, -sy * p.x + cy * zz};
         }
     };
+
+    struct FractalSample {
+        float distance; // Finite-iteration distance estimate; negative is inside.
+        float orbitTrap; // Material contour: closest orbit radius or recursive scale.
+    };
+
+    // Tom Lowe's Mandelbox construction: box fold, sphere fold, then scale
+    // and add the original point. Four folds intentionally retain features
+    // large enough for a 16-voxel axis. This is a distance-field sample, not
+    // a camera-dependent ray march; any face sees the same physical volume.
+    inline FractalSample mandelboxField(Point3 point, float scale = 2.8f) {
+        Point3 p = point;
+        float derivative = 1.0f;
+        float trap = 100.0f;
+        for (unsigned iteration = 0; iteration < 4; ++iteration) {
+            p.x = 2.0f * constrain(p.x, -1.0f, 1.0f) - p.x;
+            p.y = 2.0f * constrain(p.y, -1.0f, 1.0f) - p.y;
+            p.z = 2.0f * constrain(p.z, -1.0f, 1.0f) - p.z;
+            const float radiusSq = p.x*p.x + p.y*p.y + p.z*p.z;
+            trap = min(trap, radiusSq);
+            const float fold = radiusSq < 0.25f ? 4.0f :
+                               (radiusSq < 1.0f ? 1.0f / radiusSq : 1.0f);
+            p = {p.x * fold * scale + point.x,
+                 p.y * fold * scale + point.y,
+                 p.z * fold * scale + point.z};
+            derivative = derivative * fold * fabsf(scale) + 1.0f;
+        }
+        const float radius = sqrtf(p.x*p.x + p.y*p.y + p.z*p.z);
+        const float absoluteScale = fabsf(scale);
+        const float finiteCorrection = 1.0f / (absoluteScale * absoluteScale * absoluteScale);
+        return {(radius - fabsf(scale - 1.0f)) / derivative - finiteCorrection,
+                sqrtf(trap)};
+    }
+
+    // White/Nylander power-eight Mandelbulb. Three angle doublings evaluate
+    // sin/cos(8 theta/phi) algebraically: no per-iteration atan/acos/pow/trig.
+    // Only resolved coarse lobes are requested; deeper iterations at this
+    // resolution mostly add flicker and CPU cost.
+    inline FractalSample mandelbulbField(Point3 point) {
+        Point3 p = point;
+        float derivative = 1.0f;
+        float trap = 100.0f;
+        for (unsigned iteration = 0; iteration < 5; ++iteration) {
+            const float radiusSq = p.x*p.x + p.y*p.y + p.z*p.z;
+            const float radius = sqrtf(radiusSq);
+            if (radiusSq > 4.0f) {
+                return {0.5f * logf(radius) * radius / derivative, sqrtf(trap)};
+            }
+            trap = min(trap, radiusSq);
+            const float horizontal = sqrtf(p.x*p.x + p.y*p.y);
+            float st = radius > 0.000001f ? horizontal / radius : 0.0f;
+            float ct = radius > 0.000001f ? p.z / radius : 1.0f;
+            float sp = horizontal > 0.000001f ? p.y / horizontal : 0.0f;
+            float cp = horizontal > 0.000001f ? p.x / horizontal : 1.0f;
+            for (unsigned doubling = 0; doubling < 3; ++doubling) {
+                const float nextSt = 2.0f * st * ct;
+                ct = ct*ct - st*st;
+                st = nextSt;
+                const float nextSp = 2.0f * sp * cp;
+                cp = cp*cp - sp*sp;
+                sp = nextSp;
+            }
+            const float radius4 = radiusSq * radiusSq;
+            const float radius8 = radius4 * radius4;
+            derivative = (radius > 0.000001f ? 8.0f * radius8 / radius : 0.0f) * derivative + 1.0f;
+            p = {radius8 * st * cp + point.x,
+                 radius8 * st * sp + point.y,
+                 radius8 * ct + point.z};
+        }
+        const float radiusSq = p.x*p.x + p.y*p.y + p.z*p.z;
+        if (radiusSq > 4.0f) {
+            const float radius = sqrtf(radiusSq);
+            return {0.5f * logf(radius) * radius / derivative, sqrtf(trap)};
+        }
+        return {-1.0f, sqrtf(trap)};
+    }
+
+    // Coarse recursive architecture with a continuous scale conveyor. Each
+    // large frame contains smaller corner copies, not just another
+    // concentric outline. Cache scale/visibility once per frame. New tiny
+    // generations enter below visibility and oversized generations fade out
+    // before the scale index wraps, so the cycle has no geometric reset.
+    struct RecursiveScaffoldField {
+        float unitsPerVoxel;
+        float radius[5], coordinate[5];
+
+        RecursiveScaffoldField(float cycle, float units)
+            : unitsPerVoxel(units) {
+            for (int layer = 0; layer < 5; ++layer) {
+                coordinate[layer] = cycle + layer - 3;
+                radius[layer] = powf(3.0f, coordinate[layer]);
+            }
+        }
+
+        static float cubeEdgeDistance(Point3 p, float r) {
+            const float x = fabsf(p.x) - r, y = fabsf(p.y) - r, z = fabsf(p.z) - r;
+            const float xx = x*x, yy = y*y, zz = z*z;
+            const float ax = max(0.0f, x), ay = max(0.0f, y), az = max(0.0f, z);
+            return sqrtf(min(ax*ax + yy + zz, min(xx + ay*ay + zz, xx + yy + az*az)));
+        }
+
+
+        FractalSample operator()(Point3 point) const {
+            FractalSample closest{100.0f, 0.0f};
+            const float feather = 0.65f * unitsPerVoxel;
+            for (unsigned layer = 0; layer < 5; ++layer) {
+                // A fixed endpoint fade is also what makes scale wrap seamless.
+                const float outerFade = constrain((3.0f - radius[layer]) / 1.0f, 0.0f, 1.0f);
+                if (outerFade <= 0.0f) continue;
+                float r = radius[layer];
+                Point3 p = point;
+                for (unsigned depth = 0; depth < 3u; ++depth) {
+                    const float visibility = outerFade * constrain(r / unitsPerVoxel - 1.0f, 0.0f, 1.0f);
+                    if (visibility <= 0.0f) break;
+                    const float edge = cubeEdgeDistance(p, r);
+                    const float distance = max(0.0f, edge - 0.28f * unitsPerVoxel) +
+                                           (1.0f - visibility) * feather;
+                    if (distance < closest.distance) {
+                        closest = {distance, (coordinate[layer] - depth) * 0.36f};
+                    }
+                    // Eight one-third-scale children at the cube corners.
+                    const float shift = r * (2.0f / 3.0f);
+                    p = {fabsf(p.x) - shift, fabsf(p.y) - shift, fabsf(p.z) - shift};
+                    r /= 3.0f;
+                }
+            }
+            return closest;
+        }
+    };
+
+    // Closed edge walk over a cube, its eight corner children and center copy.
+    // The center connects at the inner vertex of the first corner child, just
+    // as in the visible initial RecursiveScaffoldField. Each edge
+    // is visited; four edges are retraced to close the walk without jumping.
+    // Arclength is measured in canvas voxels, so rectangular canvases and
+    // differently sized generations all retain the same travel speed.
+    struct RecursiveCubePath {
+        // Keep descending while a child rectangle still spans one voxel.
+        static unsigned levelsForSpan(Point3 span) {
+            float size=min(span.x,min(span.y,span.z));
+            unsigned levels=1;
+            while(size/3>=1 && levels<5) { size/=3;++levels; }
+            return levels;
+        }
+        static float length(Point3 span,unsigned levels=0) {
+            return rawLength(span,levels ? levels : levelsForSpan(span));
+        }
+        static Point3 point(float distance,Point3 span,unsigned levels=0) {
+            levels=levels ? levels : levelsForSpan(span);
+            const float total=rawLength(span,levels);
+            if(total<=0) return {0,0,0};
+            distance=fmodf(distance,total);if(distance<0) distance+=total;
+            return sample(distance,span,levels);
+        }
+    private:
+        static float rawLength(Point3 span,unsigned levels) {
+            if(!levels) return 0;
+            return 8*span.x+4*span.y+4*span.z+
+                   9*rawLength({span.x/3,span.y/3,span.z/3},levels-1);
+        }
+        static Point3 sample(float distance,Point3 span,unsigned levels) {
+            static const uint8_t corners[]={0,4,6,7,6,2,3,7,5,4,5,1,3,2,0,1,0};
+            const Point3 child{span.x/3,span.y/3,span.z/3};
+            const float childLength=rawLength(child,levels-1);
+            if(levels>1) {
+                // Reach the opposite vertex of the first corner child, then
+                // walk the center copy attached there. All deeper copies use
+                // this same connected walk, with no jumps between generations.
+                const float join=child.x+child.y+child.z+
+                    4*rawLength({child.x/3,child.y/3,child.z/3},levels-2);
+                if(distance>=join && distance<join+childLength) {
+                    const auto p=sample(distance-join,child,levels-1);
+                    return {p.x+child.x,p.y+child.y,p.z+child.z};
+                }
+                if(distance>=join+childLength) distance-=childLength;
+            }
+            unsigned visited=0;
+            for(unsigned edge=0;edge<16;++edge) {
+                const unsigned a=corners[edge],b=corners[edge+1];
+                const Point3 from{a&1?span.x:0,a&2?span.y:0,a&4?span.z:0};
+                if(!(visited&(1u<<a))) {
+                    visited|=1u<<a;
+                    if(distance<childLength) {
+                        const auto p=sample(distance,child,levels-1);
+                        return {from.x+(a&1?-p.x:p.x),from.y+(a&2?-p.y:p.y),from.z+(a&4?-p.z:p.z)};
+                    }
+                    distance-=childLength;
+                }
+                const unsigned axis=a^b;
+                const float edgeLength=axis==1?span.x:axis==2?span.y:span.z;
+                if(distance<edgeLength) {
+                    const float t=distance/max(.00001f,edgeLength);
+                    return {from.x+((b&1?span.x:0)-from.x)*t,
+                            from.y+((b&2?span.y:0)-from.y)*t,
+                            from.z+((b&4?span.z:0)-from.z)*t};
+                }
+                distance-=edgeLength;
+            }
+            return {0,0,0};
+        }
+    };
+
+    // Shared volumetric rasterizer for fractal fields. The same world scale
+    // applies on every axis, including the narrower cuboid. Feather only the
+    // exterior boundary; interiors retain the material's full brightness.
+    // The field/material callbacks own no framebuffers or physical LED maps.
+    template <typename Field, typename Material>
+    inline unsigned rasterFractalVolume(float unitsPerVoxel, float featherVoxels,
+                                        Field field, Material material) {
+        if (unitsPerVoxel <= 0.0f || featherVoxels <= 0.0f) return 0;
+        const float inverseWidth = 1.0f / (unitsPerVoxel * featherVoxels);
+        unsigned lit = 0;
+        for (uint8_t z = 0; z < RNDR_Z; ++z) {
+            for (uint8_t y = 0; y < RNDR_Y; ++y) {
+                for (uint8_t x = 0; x < RNDR_X; ++x) {
+                    const Point3 point{(x - RNDR_CX) * unitsPerVoxel,
+                                       (y - RNDR_CY) * unitsPerVoxel,
+                                       (z - RNDR_CZ) * unitsPerVoxel};
+                    const FractalSample sample = field(point);
+                    if (!isfinite(sample.distance) || !isfinite(sample.orbitTrap)) continue;
+                    float coverage = constrain(1.0f - max(0.0f, sample.distance) * inverseWidth, 0.0f, 1.0f);
+                    if (coverage <= 0.0f) continue;
+                    coverage *= coverage * (3.0f - 2.0f * coverage);
+                    CRGB color = material(sample, point);
+                    color.nscale8(uint8_t(lroundf(coverage * 255.0f)));
+                    setVoxel(x, y, z, color);
+                    ++lit;
+                }
+            }
+        }
+        return lit;
+    }
 
     // Draw an ellipse centered at center. Orthogonal semi-axis vectors set
     // its radii and plane. The reveal fraction advances in parameter angle.
@@ -232,7 +474,7 @@ namespace GeometryEngine {
     // ==========================================
     // 3D SDF LINE (Mathematically Perfect Capsule)
     // ==========================================
-    inline void drawSdfLine3D(float x0, float y0, float z0, float x1, float y1, float z1, float radius, CRGB col, bool additive = true) {
+    inline void drawSdfLine3D(float x0, float y0, float z0, float x1, float y1, float z1, float radius, CRGB col, bool additive = true, bool preserveColor = false) {
         // 1. Line segment vector and squared length
         float dx = x1 - x0;
         float dy = y1 - y0;
@@ -306,6 +548,13 @@ namespace GeometryEngine {
                             // Curved polylines can use max blending to avoid
                             // repeatedly brightening shared segment endpoints.
                             CRGB existing = getVoxel(x, y, z);
+                            if (!additive && preserveColor) {
+                                // Retain a whole incoming hue, rather than
+                                // adding/maxing different channels into white.
+                                if (max(drawn.r, max(drawn.g, drawn.b)) >
+                                    max(existing.r, max(existing.g, existing.b))) setVoxel(x, y, z, drawn);
+                                continue;
+                            }
                             setVoxel(x, y, z, additive ? existing + drawn : CRGB(
                                 max(existing.r, drawn.r), max(existing.g, drawn.g),
                                 max(existing.b, drawn.b)));
@@ -313,6 +562,88 @@ namespace GeometryEngine {
                     }
                 }
             }
+        }
+    }
+
+    // Orthonormal plane frame shared by the two Fibonacci path renderers.
+    // Directors move/rotate the frame; paths remain ordinary plane geometry.
+    struct PlaneFrame3D {
+        Point3 center,u,v;
+        Point3 point(float x,float y) const {
+            return {center.x+u.x*x+v.x*y,center.y+u.y*x+v.y*y,center.z+u.z*x+v.z*y};
+        }
+    };
+
+    inline unsigned drawGoldenScaffoldPlane(const PlaneFrame3D &plane,float halfU,float halfV,
+                                             const TextureState &texture,uint8_t brightness=255) {
+        unsigned segments=0;
+        for(unsigned arm=0;arm<4;++arm) {
+            float x=-1,y=-1,length=2;
+            for(unsigned step=0;step<5;++step) {
+                float endX=x,endY=y;
+                if(step%4==0) endX+=length;
+                else if(step%4==1) endY+=length;
+                else if(step%4==2) endX-=length;
+                else endY-=length;
+                auto quarter=[&](float a,float b) -> Point3 {
+                    if(arm==0) return plane.point(a*halfU,b*halfV);
+                    if(arm==1) return plane.point(-b*halfU,a*halfV);
+                    if(arm==2) return plane.point(-a*halfU,-b*halfV);
+                    return plane.point(b*halfU,-a*halfV);
+                };
+                const auto from=quarter(x,y),to=quarter(endX,endY);
+                CRGB color=texture.getFlowColor(uint8_t(step*36));
+                if(brightness<255) color.nscale8(brightness);
+                drawSdfLine3D(from.x,from.y,from.z,to.x,to.y,to.z,0,color,false,true);
+                ++segments;x=endX;y=endY;length*=.618034f;
+            }
+        }
+        return segments;
+    }
+
+    // A Fibonacci spiral built from tangent quarter-circles of radii
+    // 1,1,2,3,5,8,13. Its 21x13 rectangle is centered and fitted without
+    // stretching, so the recognizable spiral survives on rectangular faces.
+    inline unsigned drawFibonacciSpiral3D(const PlaneFrame3D &plane,float halfU,float halfV,
+                                           const TextureState &texture,uint8_t brightness=255) {
+        const float scale=min(2*halfU/21,2*halfV/13);
+        const unsigned radii[]={1,1,2,3,5,8,13};
+        const int forwardX[]={1,0,-1,0},forwardY[]={0,1,0,-1};
+        float x=0,y=0,travelled=0;
+        unsigned segments=0;
+        for(unsigned arc=0;arc<7;++arc) {
+            const float r=radii[arc];
+            const float fx=forwardX[arc%4],fy=forwardY[arc%4],lx=-fy,ly=fx;
+            const float cx=x+lx*r,cy=y+ly*r;
+            const unsigned samples=max(4u,unsigned(ceilf(PI*.5f*r*scale*3)));
+            auto previous=plane.point((x+4.5f)*scale,(y-3.5f)*scale);
+            for(unsigned sample=1;sample<=samples;++sample) {
+                const float t=float(sample)/samples,angle=t*PI*.5f;
+                const float a=cx-lx*r*cosf(angle)+fx*r*sinf(angle);
+                const float b=cy-ly*r*cosf(angle)+fy*r*sinf(angle);
+                const auto point=plane.point((a+4.5f)*scale,(b-3.5f)*scale);
+                CRGB color=texture.getFlowColor(uint8_t(unsigned(255*(travelled+r*t)/33)));
+                if(brightness<255) color.nscale8(brightness);
+                drawSdfLine3D(previous.x,previous.y,previous.z,point.x,point.y,point.z,0,color,false,true);
+                previous=point;++segments;
+            }
+            x+=r*(fx+lx);y+=r*(fy+ly);travelled+=r;
+        }
+        return segments;
+    }
+
+    // Reusable ribbon strip, sampled along its centerline. Each cross stroke
+    // spans the supplied half-width vector; core SDF lines provide feathering.
+    template<class CenterAt>
+    inline void drawRibbon3D(CenterAt centerAt, Point3 halfWidth, unsigned samples,
+                             const TextureState &texture, uint8_t colorOffset) {
+        samples=max(2u,samples);
+        for (unsigned i=0;i<=samples;++i) {
+            const float t=float(i)/samples;
+            const auto p=centerAt(t);
+            const CRGB color=texture.getFlowColor(uint8_t(unsigned(colorOffset)+unsigned(t*96)));
+            drawSdfLine3D(p.x-halfWidth.x,p.y-halfWidth.y,p.z-halfWidth.z,
+                          p.x+halfWidth.x,p.y+halfWidth.y,p.z+halfWidth.z,.24f,color,false,true);
         }
     }
 

@@ -169,3 +169,7 @@ ASAN_OPTIONS=detect_leaks=0 "$work/receiver_disabled_test"
 
 # The production Julia body and ordered selector run on both canvas sizes.
 python3 tests/julia_test.py
+
+# Production fractals, recursive mice, Fibonacci impressions, ribbon/arm
+# comparisons, duration control, and clock wrap on both supported canvases.
+python3 tests/fractal_test.py

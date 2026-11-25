@@ -324,6 +324,384 @@ public:
         JuliaRenderer::animateJulia(durationMs, speedMs, cycleColors, varyC);
     }
 
+    enum class FractalLook { Cavern, Sculpture, RecursiveCube };
+
+    struct FractalSettings {
+        uint32_t frameMs = 40;        // Target 25fps; never add a full delay after a slow draw.
+        uint32_t colorCycleMs = 24000; // One continuous rainbow lap, independent of geometry.
+        float cavernSpeed = 3.0f;     // Speed up all cavern motion and its palette cycle together.
+        float cavernTravelRate = 0.10f; // Radians/s on a closed three-axis sampling path.
+        float sculptureTumbleRate = 4.0f; // Common tumble phase in degrees/s.
+        uint32_t scaffoldScaleMs = 12000; // One scale-to-scale handoff.
+        uint32_t scaffoldInitialHoldMs = 5000; // Legacy scale/tumble comparison only; mice start immediately.
+        uint32_t scaffoldColorMs = 18000; // Independent rainbow lap for scaffolds.
+    };
+
+    // One director for sampled fractal fields. Reuse the core
+    // coverage/transforms and TextureState color cycling, with no privileged
+    // viewing face. Julia is independent; the original bulb is off the deck.
+    static void animateFractalVolume(uint32_t durationMs, FractalLook look,
+                                     const FractalSettings &settings) {
+        const bool cavern = look == FractalLook::Cavern;
+        const bool scaffold = look == FractalLook::RecursiveCube;
+        const bool holdInitialPose = scaffold;
+        const float sceneRate = cavern ? constrain(settings.cavernSpeed, 0.05f, 8.0f) : 1.0f;
+        const char *name = cavern ? "Fractal Cavern" :
+                           look == FractalLook::RecursiveCube ? "Recursive Cube" : "Fractal Sculpture";
+        const float halfSpan = max(1.0f, min(RNDR_CX, min(RNDR_CY, RNDR_CZ)));
+        const float unitsPerVoxel = (cavern ? 0.45f : (scaffold ? 1.0f : 1.20f)) / halfSpan;
+        // Linear Flow supplies the same cycling color sampler to both fields.
+        // Orbit/position contours choose the material index, not brightness.
+        const uint32_t colorPeriod = scaffold ? settings.scaffoldColorMs : settings.colorCycleMs;
+        const float colorRate = 1280.0f * sceneRate / max(uint32_t(1), colorPeriod);
+        TextureState texture(MODE_LINEAR_FLOW, RainbowColors_p, colorRate);
+        const uint32_t started = millis();
+        uint32_t lastFrame = started, lastReport = started;
+        Serial.printf("%s | Rainbow | cycle=%lums | target=%lums | %s=%.2f\n", name,
+                      (unsigned long)lroundf(colorPeriod / sceneRate), (unsigned long)settings.frameMs,
+                      cavern ? "translation X peak vox/s" : "tumble phase degrees/s",
+                      double(cavern ? 0.25f * settings.cavernTravelRate * sceneRate / unitsPerVoxel
+                                    : settings.sculptureTumbleRate));
+        if (scaffold) Serial.printf("Recursive Cube | scale cycle=%lums | continuous scale handoff\n",
+                                    (unsigned long)settings.scaffoldScaleMs);
+        while (TestDemo::routineTimeRemaining(uint32_t(millis() - started), durationMs)) {
+            const uint32_t now = millis();
+            const uint32_t elapsed = uint32_t(now - started);
+            // Pause the geometry clock, not the frame loop or rainbow. Subtract
+            // the hold afterward so motion starts continuously from this pose.
+            const uint32_t geometryElapsed = holdInitialPose
+                ? (elapsed > settings.scaffoldInitialHoldMs ? elapsed - settings.scaffoldInitialHoldMs : 0)
+                : elapsed;
+            const float seconds = float(geometryElapsed) * (0.001f * sceneRate);
+            texture.advance(uint32_t(now - lastFrame));
+            lastFrame = now;
+            const float path = seconds * settings.cavernTravelRate;
+            const GeometryEngine::Point3 origin = cavern ? GeometryEngine::Point3{
+                0.25f * sinf(path + 0.4f), 0.25f * sinf(path * 0.83f + 1.2f),
+                0.25f * sinf(path * 0.71f + 2.4f)} : GeometryEngine::Point3{0, 0, 0};
+            const float tumblePhase = seconds * (cavern ? 1.0f : settings.sculptureTumbleRate);
+            const GeometryEngine::TumbleRotation rotation(GeometryEngine::tumbleAngles(tumblePhase, 1.0f));
+            const float foldScale = 2.8f + (cavern ? 0.025f * sinf(seconds * 0.07f) : 0.0f);
+            const float scaleCycle = float(geometryElapsed % max(uint32_t(1), settings.scaffoldScaleMs)) /
+                                     max(uint32_t(1), settings.scaffoldScaleMs);
+            const GeometryEngine::RecursiveScaffoldField scaffoldField(
+                scaleCycle, unitsPerVoxel);
+            clearAll();
+            unsigned elements;
+                elements = GeometryEngine::rasterFractalVolume(unitsPerVoxel, cavern ? 0.40f : (scaffold ? 0.50f : 0.65f),
+                    [&](GeometryEngine::Point3 point) -> GeometryEngine::FractalSample {
+                        auto p = rotation.apply(point);
+                        p.x += origin.x;
+                        p.y += origin.y;
+                        p.z += origin.z;
+                        if (scaffold) return scaffoldField(p);
+                        return cavern ? GeometryEngine::mandelboxField(p, foldScale)
+                                      : GeometryEngine::mandelbulbField(p);
+                    },
+                    [&](const GeometryEngine::FractalSample &sample, GeometryEngine::Point3 point) {
+                        const int contour = int(lroundf(sample.orbitTrap * 144.0f +
+                                                      point.x * 48.0f + point.y * 37.0f + point.z * 29.0f));
+                        return texture.getFlowColor(uint8_t(contour));
+                    });
+            const uint32_t drawMs = uint32_t(millis() - now);
+            showCube();
+            if (uint32_t(now - lastReport) >= 1000) {
+                lastReport = now;
+                Serial.printf("%s | %s=%u/%u draw=%lums frame=%lums\n", name,
+                              "lit", elements,
+                              unsigned(RNDR_X * RNDR_Y * RNDR_Z), (unsigned long)drawMs,
+                              (unsigned long)uint32_t(millis() - now));
+            }
+            const uint32_t spent = uint32_t(millis() - now);
+            if (spent < settings.frameMs) delay(settings.frameMs - spent);
+            else yield();
+        }
+    }
+
+    static void animateFractalCavern(uint32_t durationMs) {
+        animateFractalVolume(durationMs, FractalLook::Cavern, FractalSettings{});
+    }
+
+    static void animateFractalSculpture(uint32_t durationMs) {
+        animateFractalVolume(durationMs, FractalLook::Sculpture, FractalSettings{});
+    }
+
+    struct RecursiveMouseSettings {
+        uint32_t frameMs=40;
+        uint32_t colorCycleMs=18000;
+        float outerSpeed=36.0f;
+        float centerSpeedMultiplier=3.0f;
+        float tailLengthMultiplier=3.0f; // 1.5x the preceding 2x-Wild-Mouse trail.
+
+        float speedAt(float travel,GeometryEngine::Point3 span) const {
+            const auto p=GeometryEngine::RecursiveCubePath::point(travel,span);
+            // Cubical depth: zero on every outer face, one at the center.
+            // Reflection leaves this value unchanged, so all eight mice can
+            // share a clock while accelerating through the hidden interior.
+            const float r=max(fabsf(2*p.x/max(.001f,span.x)-1),
+                max(fabsf(2*p.y/max(.001f,span.y)-1),fabsf(2*p.z/max(.001f,span.z)-1)));
+            const float depth=constrain(1-r,0.0f,1.0f);
+            return outerSpeed*(1+(max(1.0f,centerSpeedMultiplier)-1)*depth);
+        }
+        float advance(float travel,GeometryEngine::Point3 span,uint32_t deltaMs) const {
+            // Small midpoint steps make spatial acceleration independent of
+            // render cadence. Never recompute elapsed*speed, which would jump
+            // the head when its local speed changes.
+            while(deltaMs) {
+                const uint32_t step=min(uint32_t(5),deltaMs);
+                const float seconds=step*.001f;
+                const float midpoint=travel+.5f*seconds*speedAt(travel,span);
+                travel+=seconds*speedAt(midpoint,span);
+                deltaMs-=step;
+            }
+            return travel;
+        }
+    };
+
+    static void animateRecursiveCube(uint32_t durationMs) {
+        const RecursiveMouseSettings settings;
+        const uint32_t started = millis();
+        uint32_t lastFrame = started;
+        const float halfSpan = max(1.0f, min(RNDR_CX, min(RNDR_CY, RNDR_CZ)));
+        const GeometryEngine::Point3 span{2*halfSpan, 2*halfSpan, 2*halfSpan};
+        const GeometryEngine::Point3 offset{RNDR_CX-halfSpan, RNDR_CY-halfSpan, RNDR_CZ-halfSpan};
+        // Wild Mouse's base is RNDR_X*3 positions, capped at 64. Use three
+        // times its spatial span, independent of the local head speed.
+        constexpr unsigned tailPositions = RNDR_X*3 < 64 ? RNDR_X*3 : 64;
+        const float tailLength = settings.tailLengthMultiplier*float(tailPositions-1);
+        const unsigned tailSamples = unsigned(ceilf(tailLength*2));
+        TextureState texture(MODE_LINEAR_FLOW, RainbowColors_p, 1280.0f/settings.colorCycleMs);
+        float travel=0;
+        Serial.printf("Recursive Cube | 8 synchronized mice | outer=%.1f center-limit=%.1f vox/s | tail=%.1f vox | levels=%u | no hold\n",
+                      double(settings.outerSpeed),double(settings.outerSpeed*settings.centerSpeedMultiplier),
+                      double(tailLength),GeometryEngine::RecursiveCubePath::levelsForSpan(span));
+        while (TestDemo::routineTimeRemaining(uint32_t(millis()-started), durationMs)) {
+            const uint32_t now=millis();
+            const uint32_t deltaMs=uint32_t(now-lastFrame);
+            texture.advance(deltaMs);lastFrame=now;
+            clearAll();
+            travel=settings.advance(travel,span,deltaMs);
+            for(unsigned mouse=0;mouse<8;++mouse) for(unsigned age=0;age<=tailSamples;++age) {
+                const float behind=tailLength*age/tailSamples;
+                if(behind>travel) break;
+                auto p=GeometryEngine::RecursiveCubePath::point(travel-behind,span);
+                if(mouse&1) p.x=span.x-p.x;
+                if(mouse&2) p.y=span.y-p.y;
+                if(mouse&4) p.z=span.z-p.z;
+                p.x+=offset.x;p.y+=offset.y;p.z+=offset.z;
+                CRGB color=texture.getFlowColor(uint8_t(mouse*32));
+                color.nscale8(uint8_t(255-240*age/tailSamples));
+                GeometryEngine::drawCrispVoxel(p,color);
+            }
+            showCube();
+            const uint32_t spent = uint32_t(millis()-now);
+            if (spent < settings.frameMs) delay(settings.frameMs-spent);
+            else yield();
+        }
+    }
+
+
+    struct FibonacciSweepSettings {
+        uint32_t frameMs=40;
+        uint32_t sweepMs=8000;
+        uint32_t edgeHoldMs=400;
+        uint32_t colorCycleMs=18000;
+        float degreesPerPlane=45;
+        unsigned scaffoldTrailPlanes=4;
+        unsigned spiralTrailPlanes=8;
+    };
+
+    struct FibonacciDirectionCycle {
+        uint8_t faces[4]={0,1,2,3};
+        unsigned cursor=4;
+        uint8_t last=255;
+        uint8_t nextFace() {
+            if(cursor==4) {
+                for(unsigned i=3;i>0;--i) {
+                    const unsigned j=random8(i+1);
+                    const uint8_t saved=faces[i];faces[i]=faces[j];faces[j]=saved;
+                }
+                if(faces[0]==last) {
+                    const unsigned j=1+random8(3);
+                    const uint8_t saved=faces[0];faces[0]=faces[j];faces[j]=saved;
+                }
+                cursor=0;
+            }
+            last=faces[cursor++];return last;
+        }
+    };
+
+    // One leader crosses the cube, leaving stationary fading impressions on
+    // planes it has actually passed. Moving delayed copies would re-enter the
+    // starting face repeatedly and look like the pattern was restarting.
+    static void animateFibonacciSweep(uint32_t durationMs,bool spiral,
+                                       const FibonacciSweepSettings &settings) {
+        const uint32_t started=millis();
+        uint32_t lastFrame=started,lastSweep=0;
+        FibonacciDirectionCycle directions;
+        unsigned face=directions.nextFace();
+        TextureState texture(MODE_LINEAR_FLOW,RainbowColors_p,1280.0f/max(uint32_t(1),settings.colorCycleMs));
+        const uint32_t sweepMs=max(uint32_t(1),settings.sweepMs);
+        const uint32_t hold=min(settings.edgeHoldMs,(sweepMs-1)/2);
+        while(TestDemo::routineTimeRemaining(uint32_t(millis()-started),durationMs)) {
+            const uint32_t now=millis(),elapsed=uint32_t(now-started),sweep=elapsed/sweepMs;
+            const bool newSweep=sweep!=lastSweep;
+            if(newSweep) { face=directions.nextFace();lastSweep=sweep; }
+            if(elapsed==0 || newSweep) {
+                const char *faceNames[]={"-X","+X","-Y","+Y"};
+                Serial.printf("%s | from=%s | sweep=%lums | turn=%.1f degrees/plane | trail=%u planes including head | cycling Rainbow\n",
+                    spiral ? "Fibonacci Spiral" : "Fibonacci Scaffold",faceNames[face],
+                    (unsigned long)sweepMs,double(settings.degreesPerPlane),
+                    spiral ? settings.spiralTrailPlanes : settings.scaffoldTrailPlanes);
+            }
+            texture.advance(uint32_t(now-lastFrame));lastFrame=now;
+            const unsigned axis=face/2;
+            const float normalHalf=axis==0 ? RNDR_CX : axis==1 ? RNDR_CY : RNDR_CZ;
+            const float halfU=axis==0 ? RNDR_CY : RNDR_CX;
+            const float halfV=axis==2 ? RNDR_CY : RNDR_CZ;
+            const float progress=constrain((float(elapsed%sweepMs)-hold)/(sweepMs-2*hold),0.0f,1.0f);
+            const float distance=2*normalHalf*progress;
+            const unsigned trailPlanes=max(1u,spiral ? settings.spiralTrailPlanes : settings.scaffoldTrailPlanes);
+            auto drawAt=[&](float position,uint8_t brightness) {
+                const float depth=(face&1 ? 1.0f : -1.0f)*(normalHalf-position);
+                const float angle=position*settings.degreesPerPlane*(PI/180);
+                const float c=cosf(angle),s=sinf(angle);
+                GeometryEngine::PlaneFrame3D plane;
+                plane.center={RNDR_CX,RNDR_CY,RNDR_CZ};
+                if(axis==0) { plane.center.x+=depth;plane.u={0,c,s};plane.v={0,-s,c}; }
+                else { plane.center.y+=depth;plane.u={c,0,s};plane.v={-s,0,c}; }
+                if(spiral) GeometryEngine::drawFibonacciSpiral3D(plane,halfU,halfV,texture,brightness);
+                else GeometryEngine::drawGoldenScaffoldPlane(plane,halfU,halfV,texture,brightness);
+            };
+            clearAll();
+            const int passedPlane=int(floorf(distance));
+            const int firstPlane=max(0,passedPlane-int(trailPlanes)+1);
+            for(int plane=firstPlane;plane<=passedPlane;++plane) {
+                const float age=distance-plane;
+                const uint8_t brightness=uint8_t(255*constrain(1-age/trailPlanes,0.0f,1.0f));
+                if(brightness) drawAt(float(plane),brightness);
+            }
+            // The only moving pattern is the leader. At an integer plane it
+            // coincides with its impression; strongest-hue blending prevents
+            // duplicate brightness. Material color cycling remains continuous.
+            drawAt(distance,255);
+            showCube();
+            const uint32_t spent=uint32_t(millis()-now);
+            if(spent<settings.frameMs) delay(settings.frameMs-spent);else yield();
+        }
+    }
+
+    static void animateFibonacci(uint32_t durationMs) {
+        // Choose once at entry; retain the selected pattern for every sweep.
+        const bool spiral=random8(2)!=0;
+        animateFibonacciSweep(durationMs,spiral,FibonacciSweepSettings{});
+    }
+
+    enum class PrimeStudy { CoprimeWeave, PrimeSymmetry };
+    struct PrimeStudySettings {
+        uint32_t frameMs=TestDemo::ArmComparison::frameMs;
+        uint32_t colorCycleMs=TestDemo::ArmComparison::colorCycleMs;
+        float ribbonHalfWidthFraction=.22f;
+        float ribbonSpeedMultiplier=2.0f;
+        float ribbonTumblePhaseRate=TestDemo::ArmComparison::tumblePhaseRate;
+        float primeTumblePhaseRate=TestDemo::ArmComparison::tumblePhaseRate;
+        float primeArmSpeedMultiplier=4.0f; // +300% arm motion; independent of shared tumble.
+    };
+
+    // Geometric auditions, not particle simulations. One bounded frame loop
+    // handles timing/colors; existing geometry helpers own all voxel coverage.
+    static void animatePrimeStudy(uint32_t durationMs, PrimeStudy study,
+                                   const PrimeStudySettings &settings) {
+        const uint32_t started=millis();
+        uint32_t lastFrame=started;
+        const float reach=max(1.0f,min(RNDR_CX,min(RNDR_CY,RNDR_CZ)));
+        const GeometryEngine::Point3 center{RNDR_CX,RNDR_CY,RNDR_CZ};
+        TextureState texture(MODE_LINEAR_FLOW,RainbowColors_p,1280.0f/max(uint32_t(1),settings.colorCycleMs));
+        const char *name=study==PrimeStudy::CoprimeWeave ? "Coprime Weave" : "Prime Symmetry";
+        Serial.printf("%s | cycling Rainbow | target=%lums | color cycle=%lums\n",name,
+                      (unsigned long)settings.frameMs,(unsigned long)settings.colorCycleMs);
+        if (study==PrimeStudy::CoprimeWeave)
+            Serial.printf("Coprime Weave | motion=%.1fx | pivot=cube center | tumble phase=%.1f deg/s\n",
+                          double(settings.ribbonSpeedMultiplier),double(settings.ribbonTumblePhaseRate));
+        else Serial.printf("Prime Symmetry | arms=3/5/7 | arm speed=%.1fx | shared slow tumble\n",
+                           double(settings.primeArmSpeedMultiplier));
+        while (TestDemo::routineTimeRemaining(uint32_t(millis()-started),durationMs)) {
+            const uint32_t now=millis(),elapsed=uint32_t(now-started);
+            texture.advance(uint32_t(now-lastFrame));lastFrame=now;
+            clearAll();
+            const float periods[]={5,7,11};
+            if (study==PrimeStudy::CoprimeWeave) {
+                // Rotate the whole local weave around the cube center. The
+                // width vectors rotate with the centerlines, preserving each
+                // ribbon's cross section and their relative arrangement.
+                const GeometryEngine::TumbleRotation rotation(GeometryEngine::tumbleAngles(
+                    float(elapsed)*.001f*settings.ribbonTumblePhaseRate,1.0f));
+                for (unsigned ribbon=0;ribbon<3;++ribbon) {
+                    const uint32_t period=max(uint32_t(1),uint32_t(periods[ribbon]*1000 /
+                        max(.01f,settings.ribbonSpeedMultiplier)));
+                    const float phase=TWO_PI*float(elapsed % period)/period;
+                    GeometryEngine::Point3 width{0,0,0};
+                    const float halfWidth=reach*settings.ribbonHalfWidthFraction;
+                    if (ribbon==0) width.z=halfWidth;
+                    else if (ribbon==1) width.x=halfWidth;
+                    else width.y=halfWidth;
+                    width=rotation.apply(width);
+                    GeometryEngine::drawRibbon3D([&](float t) -> GeometryEngine::Point3 {
+                        const float along=(2*t-1)*reach;
+                        const float bend=reach*.68f*sinf(TWO_PI*t+phase);
+                        const float drift=reach*.38f*sinf(PI*t+phase);
+                        const auto p=rotation.apply(ribbon==0 ? GeometryEngine::Point3{along,bend,drift} :
+                            ribbon==1 ? GeometryEngine::Point3{drift,along,bend} : GeometryEngine::Point3{bend,drift,along});
+                        return {center.x+p.x,center.y+p.y,center.z+p.z};
+                    },width,unsigned(ceilf(reach*8)),texture,uint8_t(ribbon*85));
+                }
+            } else {
+                // Distinct radial orders occupy three orthogonal planes. Slow
+                // shared tumble changes the view without replacing arm motion.
+                const GeometryEngine::TumbleRotation rotation(
+                    GeometryEngine::tumbleAngles(float(elapsed)*.001f*settings.primeTumblePhaseRate,1.0f));
+                // Match Pinwheel's circumscribed radius. An inscribed radius
+                // leaves diagonal arms buried inside the cube as it tumbles.
+                const float outerReach=.5f*sqrtf(float(RNDR_X)*RNDR_X+float(RNDR_Y)*RNDR_Y+float(RNDR_Z)*RNDR_Z);
+                const float innerReach=.13f*reach;
+                const unsigned arms[]={3,5,7};
+                for (unsigned figure=0;figure<3;++figure) {
+                    const uint32_t spinPeriod=max(uint32_t(1),uint32_t(periods[figure]*2000 /
+                        max(.01f,settings.primeArmSpeedMultiplier)));
+                    const float phase=TWO_PI*float(elapsed % spinPeriod)/spinPeriod;
+                    for (unsigned arm=0;arm<arms[figure];++arm) {
+                        const unsigned samples=unsigned(ceilf(outerReach*3));
+                        GeometryEngine::Point3 previous{0,0,0};
+                        for (unsigned sample=0;sample<=samples;++sample) {
+                            const float t=float(sample)/samples;
+                            const float angle=phase+TWO_PI*arm/arms[figure]+.45f*t*sinf(phase);
+                            const float r=innerReach+(outerReach-innerReach)*t;
+                            const float u=r*cosf(angle),v=r*sinf(angle);
+                            auto point=rotation.apply(figure==0 ? GeometryEngine::Point3{u,v,0} :
+                                figure==1 ? GeometryEngine::Point3{0,u,v} : GeometryEngine::Point3{v,0,u});
+                            if (sample) {
+                                const CRGB color=texture.getFlowColor(uint8_t(figure*85+t*42));
+                                GeometryEngine::drawSdfLine3D(center.x+previous.x,center.y+previous.y,center.z+previous.z,
+                                    center.x+point.x,center.y+point.y,center.z+point.z,.24f,color,false,true);
+                            }
+                            previous=point;
+                        }
+                    }
+                }
+            }
+            showCube();
+            const uint32_t spent=uint32_t(millis()-now);
+            if (spent<settings.frameMs) delay(settings.frameMs-spent); else yield();
+        }
+    }
+
+    static void animateCoprimeWeave(uint32_t durationMs) {
+        animatePrimeStudy(durationMs,PrimeStudy::CoprimeWeave,PrimeStudySettings{});
+    }
+    static void animatePrimeSymmetry(uint32_t durationMs) {
+        animatePrimeStudy(durationMs,PrimeStudy::PrimeSymmetry,PrimeStudySettings{});
+    }
+
     // ==========================================
     // PURE OVERLOADS (Intent Inference)
     // ==========================================

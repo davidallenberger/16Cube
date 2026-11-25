@@ -11,6 +11,7 @@ struct TextureState {
  const TextureState *cylinderCaps = nullptr;
  TextureState(ShaderMode sm,int pal,float=1.0f,uint8_t=64,bool=true):mode(sm),palette(pal){}
  CRGB getColor(int,int,int) const {return CRGB(255,255,255);}
+ CRGB getFlowColor(uint8_t index) const {return ColorFromPalette(palette,uint8_t(index+phase),255,LINEARBLEND);}
  void advance(uint32_t delta){phase+=delta;}
 };
 

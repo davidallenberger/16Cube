@@ -530,6 +530,12 @@ struct TextureState {
         }
     }
 
+    // Material-defined contours can share the same full-brightness palette
+    // sampling as coordinate shaders, with an independently advancing phase.
+    inline CRGB getFlowColor(uint8_t contourIndex) const {
+        return ColorFromPalette(palette, uint8_t(contourIndex + phase), 255, LINEARBLEND);
+    }
+
     inline CRGB getColor(uint8_t x, uint8_t y, uint8_t z) const {
         if (mode == MODE_SOLID)  return palette[0];
 
@@ -548,7 +554,7 @@ struct TextureState {
         }
         if (mode == MODE_UNIFORM_CYCLE) return ColorFromPalette(palette, phase / 2, 255, LINEARBLEND);
         if (mode == MODE_SPATIAL_GRADIENT) return ColorFromPalette(palette, (x * 11 + y * 7 + z * 13), 255, LINEARBLEND);
-        if (mode == MODE_LINEAR_FLOW) return ColorFromPalette(palette, (x * 11 + y * 7 + z * 13) + phase, 255, LINEARBLEND);
+        if (mode == MODE_LINEAR_FLOW) return getFlowColor(uint8_t(x * 11 + y * 7 + z * 13));
         
         if (mode == MODE_NOISE_FIELD) {
             uint8_t rawNoise = inoise8(x * scale >> 2, y * scale >> 2, (z * scale >> 2) + phase);
